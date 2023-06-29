@@ -43,7 +43,6 @@ tr.exportTo('tr.ui.tracks', function() {
       this.cpuUsageSeries_ = undefined;
     },
 
-    // Given a tr.Model, it creates a cpu usage series and a graph.
     initialize(model) {
       if (model !== undefined) {
         this.cpuUsageSeries_ = model.device.cpuUsageSeries;

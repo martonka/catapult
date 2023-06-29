@@ -190,46 +190,6 @@ tr.exportTo('tr.ui.e.kudu_tracing', function() {
   const RecordSelectionDialog = tr.ui.b.define('div');
 
   const DEFAULT_PRESETS = [
-    {title: 'Web developer',
-      categoryFilter: ['blink', 'cc', 'netlog', 'renderer.scheduler',
-        'sequence_manager', 'toplevel', 'v8']},
-    {title: 'Input latency',
-      categoryFilter: ['benchmark', 'input', 'evdev', 'renderer.scheduler',
-        'sequence_manager', 'toplevel']},
-    {title: 'Rendering',
-      categoryFilter: ['benchmark', 'blink', 'cc', 'gpu', 'toplevel', 'viz']},
-    {title: 'UI Rendering',
-      categoryFilter: ['benchmark', 'cc', 'gpu', 'input', 'toplevel', 'ui',
-        'views', 'viz']},
-    {title: 'Javascript and rendering',
-      categoryFilter: ['blink', 'cc', 'gpu', 'renderer.scheduler',
-        'sequence_manager', 'v8', 'toplevel', 'viz']},
-    {title: 'Frame Viewer',
-      categoryFilter: ['blink', 'cc', 'gpu', 'renderer.scheduler',
-        'sequence_manager', 'v8', 'toplevel',
-        'disabled-by-default-blink.invalidation',
-        'disabled-by-default-cc.debug',
-        'disabled-by-default-cc.debug.picture',
-        'disabled-by-default-cc.debug.display_items']},
-    {title: 'Chrome developer (overall)',
-      categoryFilter: ['benchmark', 'toplevel', 'ipc', 'base', 'ui', 'v8',
-        'renderer', 'blink', 'blink_gc', 'mojom', 'latency', 'latencyInfo',
-        'renderer_host', 'cc', 'memory', 'dwrite', 'fonts', 'browser',
-        'ServiceWorker', 'disabled-by-default-v8.gc',
-        'disabled-by-default-file', 'disabled-by-default-blink_gc',
-        'disabled-by-default-lifecycles',
-        'disabled-by-default-renderer.scheduler',
-        'disabled-by-default-system_stats', 'disabled-by-default-cpu_profiler',
-        'passwords', 'sql', 'disabled-by-default-user_action_samples',
-        'startup', 'disk_cache']},
-    {title: 'Chrome developer (navigation)',
-      categoryFilter: ['benchmark', 'toplevel', 'ipc', 'base', 'browser',
-        'navigation', 'omnibox', 'ui', 'shutdown', 'safe_browsing', 'Java',
-        'EarlyJava', 'loading', 'startup', 'mojom', 'renderer_host',
-        'disabled-by-default-system_stats', 'disabled-by-default-cpu_profiler',
-        'dwrite', 'fonts', 'ServiceWorker', 'passwords',
-        'disabled-by-default-file', 'sql',
-        'disabled-by-default-user_action_samples', 'disk_cache']},
     {title: 'Manually select settings',
       categoryFilter: []}
   ];
@@ -284,28 +244,16 @@ tr.exportTo('tr.ui.e.kudu_tracing', function() {
           'recordSelectionDialog.tracingRecordMode',
           DEFAULT_RECORD_MODE, RECORDING_MODES);
 
-      this.systemTracingBn_ = tr.ui.b.createCheckBox(
-          undefined, undefined,
-          'recordSelectionDialog.useSystemTracing', DEFAULT_SYSTEM_TRACING,
-          'System tracing');
       this.samplingTracingBn_ = tr.ui.b.createCheckBox(
           undefined, undefined,
           'recordSelectionDialog.useSampling', DEFAULT_SAMPLING_TRACING,
           'State sampling');
-      this.useProtobufBn_ = tr.ui.b.createCheckBox(
-          undefined, undefined,
-          'recordSelectionDialog.useProtobuf', DEFAULT_USE_PROTOBUF,
-          'Use protobuf');
       this.tracingModesContainerEl_ = Polymer.dom(this).querySelector(
           '.tracing-modes');
       Polymer.dom(this.tracingModesContainerEl_).appendChild(
           this.tracingRecordModeSltr_);
       Polymer.dom(this.tracingModesContainerEl_).appendChild(
-          this.systemTracingBn_);
-      Polymer.dom(this.tracingModesContainerEl_).appendChild(
           this.samplingTracingBn_);
-      Polymer.dom(this.tracingModesContainerEl_).appendChild(
-          this.useProtobufBn_);
 
       this.enabledCategoriesContainerEl_ =
           Polymer.dom(this).querySelector(
@@ -333,15 +281,6 @@ tr.exportTo('tr.ui.e.kudu_tracing', function() {
       this.addEventListener('visible-change', this.onVisibleChange_.bind(this));
     },
 
-    set supportsSystemTracing(s) {
-      if (s) {
-        this.systemTracingBn_.style.display = undefined;
-      } else {
-        this.systemTracingBn_.style.display = 'none';
-        this.useSystemTracing = false;
-      }
-    },
-
     get tracingRecordMode() {
       return this.tracingRecordModeSltr_.selectedValue;
     },
@@ -349,25 +288,11 @@ tr.exportTo('tr.ui.e.kudu_tracing', function() {
       this.tracingRecordMode_ = value;
     },
 
-    get useSystemTracing() {
-      return this.systemTracingBn_.checked;
-    },
-    set useSystemTracing(value) {
-      this.systemTracingBn_.checked = !!value;
-    },
-
     get useSampling() {
       return this.samplingTracingBn_.checked;
     },
     set useSampling(value) {
       this.samplingTracingBn_.checked = !!value;
-    },
-
-    get useProtobuf() {
-      return this.useProtobufBn_.checked;
-    },
-    set useProtobuf(value) {
-      this.useProtobufBn_.checked = !!value;
     },
 
     set categories(c) {

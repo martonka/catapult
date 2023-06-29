@@ -70,6 +70,15 @@ tr.exportTo('tr.ui.e.kudu_tracing', function() {
     // Step 2: Do the actual tracing dialog.
     let progressDlg;
     let bufferPercentFullDiv;
+
+    function convertToOldFilter(included, excluded) {
+      filter = structuredClone(included)
+      for(e in excluded) {
+        filter.push('-' + excluded[e])
+      }
+      return filter.join(',')
+    }
+
     function startTracing() {
       progressDlg = new tr.ui.b.Overlay();
       Polymer.dom(progressDlg).textContent = 'Recording...';
@@ -87,11 +96,10 @@ tr.exportTo('tr.ui.e.kudu_tracing', function() {
 
       const categories = selectionDlg.includedAndExcludedCategories();
       const recordingOptions = {
-        included_categories: categories.included,
-        excluded_categories: categories.excluded,
-        enable_systrace: selectionDlg.useSystemTracing,
-        record_mode: selectionDlg.tracingRecordMode,
-        stream_format: selectionDlg.useProtobuf ? 'protobuf' : 'json',
+        tracingRecordMode: selectionDlg.tracingRecordMode,
+        categoryFilter: convertToOldFilter(categories.included, categories.excluded),
+        useSystemTracing: selectionDlg.useSystemTracing,
+        useSampling: selectionDlg.useSampling
       };
       if (categories.included.indexOf(
           'disabled-by-default-memory-infra') !== -1) {

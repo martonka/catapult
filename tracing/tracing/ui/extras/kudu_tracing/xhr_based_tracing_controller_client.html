@@ -15,27 +15,25 @@ found in the LICENSE file.
 tr.exportTo('tr.ui.e.kudu_tracing', function() {
   const Base64 = tr.b.Base64;
 
-  function beginXhr(method, path, data) {
-    if (data === undefined) data = null;
-
+  function beginXhr(method, path, isBinary) {
     return new Promise(function(resolve, reject) {
       const req = new XMLHttpRequest();
-      if (method !== 'POST' && data !== null) {
-        throw new Error('Non-POST should have data==null');
-      }
       req.open(method, path, true);
+      if (isBinary) {
+        req.responseType = 'arraybuffer';
+      }
       req.onreadystatechange = function(e) {
         if (req.readyState === 4) {
           window.setTimeout(function() {
-            if (req.status === 200 && req.responseText !== '##ERROR##') {
-              resolve(req.responseText);
+            if (req.status === 200 && (isBinary || req.responseText != '##ERROR##')) {
+              resolve(isBinary ? req.response : req.responseText);
             } else {
               reject(new Error('Error occured at ' + path));
             }
           }, 0);
         }
       };
-      req.send(data);
+      req.send();
     });
   }
 
@@ -50,15 +48,15 @@ tr.exportTo('tr.ui.e.kudu_tracing', function() {
     beginMonitoring(monitoringOptions) {
       const monitoringOptionsB64 = Base64.btoa(JSON.stringify(
           monitoringOptions));
-      return beginXhr('GET', '/json/begin_monitoring?' + monitoringOptionsB64);
+      return beginXhr('GET', '/tracing/json/begin_monitoring?' + monitoringOptionsB64);
     },
 
     endMonitoring() {
-      return beginXhr('GET', '/json/end_monitoring');
+      return beginXhr('GET', '/tracing/json/end_monitoring');
     },
 
     captureMonitoring() {
-      return beginXhr('GET', '/json/capture_monitoring_compressed').then(
+      return beginXhr('GET', '/tracing/json/capture_monitoring_compressed').then(
           function(data) {
             const decodedSize = Base64.getDecodedBufferLength(data);
             const buffer = new ArrayBuffer(decodedSize);
@@ -69,14 +67,14 @@ tr.exportTo('tr.ui.e.kudu_tracing', function() {
     },
 
     getMonitoringStatus() {
-      return beginXhr('GET', '/json/get_monitoring_status').then(
+      return beginXhr('GET', '/tracing/json/get_monitoring_status').then(
           function(monitoringOptionsB64) {
             return JSON.parse(Base64.atob(monitoringOptionsB64));
           });
     },
 
     getCategories() {
-      return beginXhr('GET', '/json/categories').then(
+      return beginXhr('GET', '/tracing/json/categories').then(
           function(json) {
             return JSON.parse(json);
           });
@@ -84,21 +82,18 @@ tr.exportTo('tr.ui.e.kudu_tracing', function() {
 
     beginRecording(recordingOptions) {
       const recordingOptionsB64 = Base64.btoa(JSON.stringify(recordingOptions));
-      return beginXhr('GET', '/json/begin_recording?' +
+      return beginXhr('GET', '/tracing/json/begin_recording?' +
                       recordingOptionsB64);
     },
 
     beginGetBufferPercentFull() {
-      return beginXhr('GET', '/json/get_buffer_percent_full');
+      return beginXhr('GET', '/tracing/json/get_buffer_percent_full');
     },
 
     endRecording() {
-      return beginXhr('GET', '/json/end_recording_compressed').then(
+      return beginXhr('GET', '/tracing/json/end_recording_compressed', true).then(
           function(data) {
-            const decodedSize = Base64.getDecodedBufferLength(data);
-            const buffer = new ArrayBuffer(decodedSize);
-            Base64.DecodeToTypedArray(data, new DataView(buffer));
-            return buffer;
+            return data;
           }
       );
     },
