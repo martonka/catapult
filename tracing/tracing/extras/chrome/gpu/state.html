@@ -12,7 +12,7 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.e.gpu', function() {
-  var ObjectSnapshot = tr.model.ObjectSnapshot;
+  const ObjectSnapshot = tr.model.ObjectSnapshot;
 
   /**
    * @constructor
@@ -24,13 +24,14 @@ tr.exportTo('tr.e.gpu', function() {
   StateSnapshot.prototype = {
     __proto__: ObjectSnapshot.prototype,
 
-    preInitialize: function() {
+    preInitialize() {
       this.screenshot_ = undefined;
     },
 
-    initialize: function() {
-      if (this.args.screenshot)
+    initialize() {
+      if (this.args.screenshot) {
         this.screenshot_ = this.args.screenshot;
+      }
     },
 
     /**
@@ -42,11 +43,11 @@ tr.exportTo('tr.e.gpu', function() {
   };
 
   ObjectSnapshot.subTypes.register(
-    StateSnapshot,
-    {typeName: 'gpu::State'});
+      StateSnapshot,
+      {typeName: 'gpu::State'});
 
   return {
-    StateSnapshot: StateSnapshot
+    StateSnapshot,
   };
 });
 </script>

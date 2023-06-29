@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry.internal import app
 
 
@@ -19,7 +20,7 @@ class AndroidApp(app.App):
     self._app_backend.Start()
 
   @property
-  def ui(self):
+  def ui(self): # pylint: disable=invalid-name
     """Returns an AppUi object to interact with the app's UI.
 
     See devil.android.app_ui for the documentation of the API provided.
@@ -28,15 +29,3 @@ class AndroidApp(app.App):
 
   def Close(self):
     self._app_backend.Close()
-
-  def GetProcesses(self):
-    """Returns the current set of processes belonging to this app."""
-    return self._app_backend.GetProcesses()
-
-  def GetProcess(self, subprocess_name):
-    """Returns the process with the specified subprocess name."""
-    return self._app_backend.GetProcess(subprocess_name)
-
-  def GetWebViews(self):
-    """Returns the set of all WebViews belonging to all processes of the app."""
-    return self._app_backend.GetWebViews()

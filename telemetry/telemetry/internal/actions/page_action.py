@@ -2,31 +2,40 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import re
+from __future__ import absolute_import
+import six
 
 from py_trace_event import trace_event
 
 from telemetry import decorators
-
+from telemetry.util import js_template
 
 GESTURE_SOURCE_DEFAULT = 'DEFAULT'
 GESTURE_SOURCE_MOUSE = 'MOUSE'
 GESTURE_SOURCE_TOUCH = 'TOUCH'
-SUPPORTED_GESTURE_SOURCES = (GESTURE_SOURCE_DEFAULT,
-                             GESTURE_SOURCE_MOUSE,
+SUPPORTED_GESTURE_SOURCES = (GESTURE_SOURCE_DEFAULT, GESTURE_SOURCE_MOUSE,
                              GESTURE_SOURCE_TOUCH)
+DEFAULT_TIMEOUT = 60
+
 
 class PageActionNotSupported(Exception):
   pass
+
 
 class PageActionFailed(Exception):
   pass
 
 
-class PageAction(object):
+class PageAction(six.with_metaclass(trace_event.TracedMetaClass, object)):
   """Represents an action that a user might try to perform to a page."""
 
-  __metaclass__ = trace_event.TracedMetaClass
+  def __init__(self, timeout=DEFAULT_TIMEOUT):
+    """Initialization function.
+
+    Args:
+      timeout: number of seconds to wait for the action to finish.
+    """
+    self.timeout = timeout
 
   def WillRunAction(self, tab):
     """Override to do action-specific setup before
@@ -39,9 +48,47 @@ class PageAction(object):
   def CleanUp(self, tab):
     pass
 
+  def __str__(self):
+    return self.__class__.__name__
+
+
+class ElementPageAction(PageAction):
+  """A PageAction which acts on DOM elements"""
+
+  def __init__(self, selector=None, text=None, element_function=None,
+               timeout=DEFAULT_TIMEOUT):
+    super(ElementPageAction, self).__init__(timeout)
+    self._selector = selector
+    self._text = text
+    self._element_function = element_function
+
+  def RunAction(self, tab):
+    raise NotImplementedError()
+
+  def HasElementSelector(self):
+    return (self._selector is not None or
+            self._text is not None or
+            self._element_function is not None)
+
+  def EvaluateCallback(self, tab, code, **kwargs):
+    return EvaluateCallbackWithElement(
+        tab, code, selector=self._selector, text=self._text,
+        element_function=self._element_function, **kwargs)
+
+  def __str__(self):
+    query_string = ''
+    if self._selector is not None:
+      query_string = self._selector
+    if self._text is not None:
+      query_string = 'text=%s' % self._text
+    if self._element_function:
+      query_string = 'element_function=%s' % self._element_function
+    return '%s(%s)' % (self.__class__.__name__, query_string)
+
+
 def EvaluateCallbackWithElement(
     tab, callback_js, selector=None, text=None, element_function=None,
-    wait=False, timeout_in_seconds=60):
+    wait=False, timeout_in_seconds=DEFAULT_TIMEOUT, user_gesture=False):
   """Evaluates the JavaScript callback with the given element.
 
   The element may be selected via selector, text, or element_function.
@@ -70,21 +117,28 @@ def EvaluateCallbackWithElement(
         '(function() { return foo.element; })()'.
     wait: Whether to wait for the return value to be true.
     timeout_in_seconds: The timeout for wait (if waiting).
+    user_gesture: Whether execution should be treated as initiated by user
+        in the UI. Code that plays media or requests fullscreen may not take
+        effects without user_gesture set to True.
   """
   count = 0
   info_msg = ''
   if element_function is not None:
     count = count + 1
-    info_msg = 'using element_function "%s"' % re.escape(element_function)
+    info_msg = js_template.Render(
+        'using element_function: {{ @code }}', code=element_function)
   if selector is not None:
     count = count + 1
-    info_msg = 'using selector "%s"' % _EscapeSelector(selector)
-    element_function = 'document.querySelector(\'%s\')' % _EscapeSelector(
-        selector)
+    info_msg = js_template.Render(
+        'using selector {{ selector }}', selector=selector)
+    element_function = js_template.Render(
+        'document.querySelector({{ selector }})', selector=selector)
   if text is not None:
     count = count + 1
-    info_msg = 'using exact text match "%s"' % re.escape(text)
-    element_function = '''
+    info_msg = js_template.Render(
+        'using exact text match {{ text }}', text=text)
+    element_function = js_template.Render(
+        """
         (function() {
           function _findElement(element, text) {
             if (element.innerHTML == text) {
@@ -100,28 +154,30 @@ def EvaluateCallbackWithElement(
             }
             return null;
           }
-          return _findElement(document, '%s');
-        })()''' % text
+          return _findElement(document, {{ text }});
+        })()""",
+        text=text)
 
   if count != 1:
     raise PageActionFailed(
         'Must specify 1 way to retrieve element, but %s was specified.' % count)
 
-  code = '''
+  code = js_template.Render(
+      """
       (function() {
-        var element = %s;
-        var callback = %s;
-        return callback(element, '%s');
-      })()''' % (element_function, callback_js, info_msg)
+        var element = {{ @element_function }};
+        var callback = {{ @callback_js }};
+        return callback(element, {{ info_msg }});
+      })()""",
+      element_function=element_function,
+      callback_js=callback_js,
+      info_msg=info_msg)
 
   if wait:
-    tab.WaitForJavaScriptExpression(code, timeout_in_seconds)
+    tab.WaitForJavaScriptCondition(code, timeout=timeout_in_seconds)
     return True
   else:
-    return tab.EvaluateJavaScript(code)
-
-def _EscapeSelector(selector):
-  return selector.replace('\'', '\\\'')
+    return tab.EvaluateJavaScript(code, user_gesture=user_gesture)
 
 
 @decorators.Cache
@@ -135,7 +191,8 @@ def IsGestureSourceTypeSupported(tab, gesture_source_type):
     return (tab.browser.platform.GetOSName() != 'mac' or
             gesture_source_type.lower() != 'touch')
 
-  return tab.EvaluateJavaScript("""
+  return tab.EvaluateJavaScript(
+      """
       chrome.gpuBenchmarking.gestureSourceTypeSupported(
-          chrome.gpuBenchmarking.%s_INPUT)"""
-      % (gesture_source_type.upper()))
+          chrome.gpuBenchmarking.{{ @gesture_source_type }}_INPUT)""",
+      gesture_source_type=gesture_source_type.upper())

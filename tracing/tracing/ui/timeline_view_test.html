@@ -15,64 +15,68 @@ found in the LICENSE file.
 'use strict';
 
 tr.b.unittest.testSuite(function() {
-  var Task = tr.b.Task;
+  const Task = tr.b.Task;
 
   function setupTimeline() {
-    var container = document.createElement('track-view-container');
+    const container = document.createElement('track-view-container');
     container.id = 'track_view_container';
 
-    var view = document.createElement('tr-ui-timeline-view');
+    const view = document.createElement('tr-ui-timeline-view');
     Polymer.dom(view).appendChild(container);
     view.trackViewContainer_ = container;
     return view;
   }
 
-  var createFullyPopulatedModel = function(opt_withError, opt_withMetadata) {
-    var withError = opt_withError !== undefined ? opt_withError : true;
-    var withMetadata = opt_withMetadata !== undefined ?
-        opt_withMetadata : true;
+  const createFullyPopulatedModel = function(opt_withError, opt_withMetadata) {
+    const withError = opt_withError !== undefined ? opt_withError : true;
+    const withMetadata = opt_withMetadata !== undefined ?
+      opt_withMetadata : true;
 
-    var numTests = 50;
-    var testIndex = 0;
-    var startTime = 0;
+    const numTests = 50;
+    let testIndex = 0;
+    const startTime = 0;
 
-    var model = new tr.Model();
-    var io = new tr.importer.ImportOptions();
-    io.showImportWarnings = false;
+    const model = new tr.Model();
+    const io = new tr.importer.ImportOptions();
     model.importOptions = io;
 
+    const cpu = model.kernel.getOrCreateCpu(0);
+    cpu.getOrCreateCounter('Category Name', 'Counter Name Here');
+    cpu.createSubSlices();
+
     for (testIndex = 0; testIndex < numTests; ++testIndex) {
-      var process = model.getOrCreateProcess(10000 + testIndex);
-      if (testIndex % 2 == 0) {
-        var thread = process.getOrCreateThread('Thread Name Here');
+      const process = model.getOrCreateProcess(10000 + testIndex);
+      if (testIndex % 2 === 0) {
+        const thread = process.getOrCreateThread('Thread Name Here');
         thread.sliceGroup.pushSlice(new tr.model.ThreadSlice(
             'foo', 'a', 0, startTime, {}, 1));
         thread.sliceGroup.pushSlice(new tr.model.ThreadSlice(
             'bar', 'b', 0, startTime + 23, {}, 10));
       } else {
-        var thread = process.getOrCreateThread('Name');
+        const thread = process.getOrCreateThread('Name');
         thread.sliceGroup.pushSlice(new tr.model.ThreadSlice(
             'foo', 'a', 0, startTime + 4, {}, 11));
         thread.sliceGroup.pushSlice(new tr.model.ThreadSlice(
             'bar', 'b', 0, startTime + 22, {}, 14));
       }
     }
-    var p1000 = model.getOrCreateProcess(1000);
-    var objects = p1000.objects;
+    const p1000 = model.getOrCreateProcess(1000);
+    const objects = p1000.objects;
     objects.idWasCreated('0x1000', 'tr.e.cc', 'LayerTreeHostImpl', 10);
     objects.addSnapshot('0x1000', 'tr.e.cc', 'LayerTreeHostImpl', 10,
-                        'snapshot-1');
+        'snapshot-1');
     objects.addSnapshot('0x1000', 'tr.e.cc', 'LayerTreeHostImpl', 25,
-                        'snapshot-2');
+        'snapshot-2');
     objects.addSnapshot('0x1000', 'tr.e.cc', 'LayerTreeHostImpl', 40,
-                        'snapshot-3');
+        'snapshot-3');
     objects.idWasDeleted('0x1000', 'tr.e.cc', 'LayerTreeHostImpl', 45);
     model.updateCategories_();
 
     // Add a known problematic piece of data to test the import errors UI.
     model.importWarning({
       type: 'test_error',
-      message: 'Synthetic Import Error'
+      message: 'Synthetic Import Error',
+      showToUser: true,
     });
     model.updateBounds();
 
@@ -84,77 +88,132 @@ tr.b.unittest.testSuite(function() {
     return model;
   };
 
-  var visibleTracks = function(trackButtons) {
+  const visibleTracks = function(trackButtons) {
     return trackButtons.reduce(function(numVisible, button) {
-      var style = button.parentElement.style;
-      var visible = (style.display.indexOf('none') === -1);
+      const style = button.parentElement.style;
+      const visible = (style.display.indexOf('none') === -1);
       return visible ? numVisible + 1 : numVisible;
     }, 0);
   };
 
-  var modelsEquivalent = function(lhs, rhs) {
-    if (lhs.length !== rhs.length)
-      return false;
+  const modelsEquivalent = function(lhs, rhs) {
+    if (lhs.length !== rhs.length) return false;
+
     return lhs.every(function(lhsItem, index) {
-      var rhsItem = rhs[index];
+      const rhsItem = rhs[index];
       return rhsItem.regexpText === lhsItem.regexpText &&
           rhsItem.isOn === lhsItem.isOn;
     });
   };
 
-  test('instantiate', function() {
-    var model11 = createFullyPopulatedModel(true, true);
+  test('instantiate', async function() {
+    const model11 = createFullyPopulatedModel(true, true);
 
-    var view = setupTimeline();
+    const view = setupTimeline();
     view.style.height = '400px';
     view.style.border = '1px solid black';
     view.model = model11;
 
-    var simpleButton1 = document.createElement('tr-ui-b-toolbar-button');
+    const simpleButton1 = document.createElement('tr-ui-b-toolbar-button');
     Polymer.dom(simpleButton1).textContent = 'M';
     Polymer.dom(view.leftControls).appendChild(simpleButton1);
 
-    var simpleButton2 = document.createElement('tr-ui-b-toolbar-button');
+    const simpleButton2 = document.createElement('tr-ui-b-toolbar-button');
     Polymer.dom(simpleButton2).textContent = 'am button';
     Polymer.dom(view.leftControls).appendChild(simpleButton2);
 
     this.addHTMLOutput(view);
+    await view.builtPromise;
   });
 
-  test('changeModelToSomethingDifferent', function() {
-    var model00 = createFullyPopulatedModel(false, false);
-    var model11 = createFullyPopulatedModel(true, true);
+  test('changeModelToSomethingDifferent', async function() {
+    const model00 = createFullyPopulatedModel(false, false);
+    const model11 = createFullyPopulatedModel(true, true);
 
-    var view = setupTimeline();
+    const view = setupTimeline();
     view.style.height = '400px';
     view.model = model00;
     view.model = undefined;
     view.model = model11;
     view.model = model00;
+
+    this.addHTMLOutput(view);
+    await view.builtPromise;
   });
 
-  test('setModelToSameThingAgain', function() {
-    var model = createFullyPopulatedModel(false, false);
+  test('setModelToSameThingAgain', async function() {
+    const model = createFullyPopulatedModel(false, false);
 
-    // Create a view with am model.
-    var view = setupTimeline();
+    // Create a view with a model.
+    const view = setupTimeline();
+    this.addHTMLOutput(view);
     view.style.height = '400px';
     view.model = model;
-    var sc = view.brushingStateController;
+    const sc = view.brushingStateController;
 
     // Mutate the model and update the view.
-    var t123 = model.getOrCreateProcess(123).getOrCreateThread(123);
+    const t123 = model.getOrCreateProcess(123).getOrCreateThread(123);
     t123.sliceGroup.pushSlice(tr.c.TestUtils.newSliceEx(
         {title: 'somethingUnusual', start: 0, duration: 5}));
     view.model = model;
 
+    await view.builtPromise;
+
     // Verify that the new bits of the model show up in the view.
-    var selection = new tr.model.EventSet();
-    var filter = new tr.c.TitleOrCategoryFilter('somethingUnusual');
-    var filterTask = sc.addAllEventsMatchingFilterToSelectionAsTask(
+    const selection = new tr.model.EventSet();
+    const filter = new tr.c.TitleOrCategoryFilter('somethingUnusual');
+    const filterTask = sc.addAllEventsMatchingFilterToSelectionAsTask(
         filter, selection);
     Task.RunSynchronously(filterTask);
-    assert.equal(selection.length, 1);
+    assert.strictEqual(selection.length, 1);
+  });
+
+  test('setModelBeforeAttached', async function() {
+    const view = document.createElement('tr-ui-timeline-view');
+    view.style.height = '400px';
+    view.model = createFullyPopulatedModel(false, false);
+
+    const container = document.createElement('track-view-container');
+    container.id = 'track_view_container';
+    Polymer.dom(view).appendChild(container);
+    this.addHTMLOutput(view);
+    await view.builtPromise;
+  });
+
+  test('filterProcessesUI', async function() {
+    const view = document.createElement('tr-ui-timeline-view');
+    view.style.height = '400px';
+    view.model = createFullyPopulatedModel(false, false);
+
+    const container = document.createElement('track-view-container');
+    container.id = 'track_view_container';
+    Polymer.dom(view).appendChild(container);
+    this.addHTMLOutput(view);
+    await view.builtPromise;
+
+    const procFilter = Polymer.dom(view.processFilter_);
+    const checkboxes = procFilter.querySelectorAll('input[type=checkbox]');
+    assert.lengthOf(checkboxes, 52);
+
+    const trackView =
+      view.trackViewContainer_.querySelector('tr-ui-timeline-track-view');
+    const countVisibleTracks = () => trackView.processViews.filter(
+        view => view.visible).length;
+    assert.strictEqual(checkboxes.length, trackView.processViews.length);
+    assert.strictEqual(countVisibleTracks(), 52);
+    assert.isTrue(trackView.processViews[0].visible);
+
+    checkboxes[0].click();
+    assert.strictEqual(countVisibleTracks(), 51);
+    assert.isFalse(trackView.processViews[0].visible);
+    assert.isTrue(trackView.processViews[1].visible);
+    assert.isAbove(trackView.processViews[1].tracks_.length, 0);
+
+    // Hide a track. Validate that the checkbox updated state correctly.
+    trackView.processViews[1].visible = false;
+    assert.isFalse(trackView.processViews[1].visible);
+    assert.isFalse(checkboxes[1].checked);
+    assert.strictEqual(trackView.processViews[1].tracks_.length, 0);
   });
 });
 </script>

@@ -12,9 +12,9 @@ found in the LICENSE file.
   <template>
     <style>
     :host {
-      -webkit-flex: 1 1 auto;
-      -webkit-flex-direction: row;
-      display: -webkit-flex;
+      flex: 1 1 auto;
+      flex-direction: row;
+      display: flex;
       width: 700px;
     }
     .column {
@@ -32,9 +32,9 @@ found in the LICENSE file.
       margin-top: 10px;
     }
     .pair {
-      -webkit-flex: 1 1 auto;
-      -webkit-flex-direction: row;
-      display: -webkit-flex;
+      flex: 1 1 auto;
+      flex-direction: row;
+      display: flex;
     }
     .command {
       font-family: monospace;
@@ -233,12 +233,13 @@ found in the LICENSE file.
 Polymer({
   is: 'tr-ui-timeline-view-help-overlay',
 
-  ready: function() {
-    var mod = tr.isMac ? 'cmd ' : 'ctrl';
-    var spans = Polymer.dom(this.root).querySelectorAll(
-      'span.mod');
-    for (var i = 0; i < spans.length; i++)
+  ready() {
+    const mod = tr.isMac ? 'cmd ' : 'ctrl';
+    const spans = Polymer.dom(this.root).querySelectorAll(
+        'span.mod');
+    for (let i = 0; i < spans.length; i++) {
       Polymer.dom(spans[i]).textContent = mod;
+    }
   }
 });
 </script>

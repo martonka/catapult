@@ -65,10 +65,6 @@ class ArgumentParser(argparse.ArgumentParser):
                               action='append',
                               help=('Globs of tests to run in isolation '
                                     '(serially).'))
-            self.add_argument('--skip', metavar='glob', default=[],
-                              action='append',
-                              help=('Globs of test names to skip ('
-                                    'defaults to %(default)s).'))
             self.add_argument('--suffixes', metavar='glob', default=[],
                               action='append',
                               help=('Globs of test filenames to look for ('
@@ -85,7 +81,7 @@ class ArgumentParser(argparse.ArgumentParser):
                               default=[],
                               help=('Directories to include when running and '
                                     'reporting coverage (defaults to '
-                                    '--top-level-dir plus --path)'))
+                                    '--top-level-dirs plus --path)'))
             self.add_argument('--coverage-omit', action='append',
                               default=[],
                               help=('Globs to omit when reporting coverage '
@@ -102,6 +98,8 @@ class ArgumentParser(argparse.ArgumentParser):
             self.add_argument('--metadata', action='append', default=[],
                               help=('Optional key=value metadata that will '
                                     'be included in the results.'))
+            self.add_argument('--repository-absolute-path', default='', action='store',
+                              help=('Specifies the absolute path of the repository.'))
             self.add_argument('--test-results-server',
                               help=('If specified, uploads the full results '
                                     'to this server.'))
@@ -109,14 +107,28 @@ class ArgumentParser(argparse.ArgumentParser):
                               help=('Name of test type to include in the '
                                     'uploaded data (e.g., '
                                     '"telemetry_unittests").'))
-            self.add_argument('--write-full-results-to', metavar='FILENAME',
+            self.add_argument('--write-full-results-to',
+                              '--isolated-script-test-output',
+                              type=str,
+                              metavar='FILENAME',
                               action='store',
                               help=('If specified, writes the full results to '
                                     'that path.'))
+            self.add_argument('--isolated-script-test-perf-output',
+                              type=str,
+                              metavar='FILENAME',
+                              action='store',
+                              help='(ignored/unsupported)')
             self.add_argument('--write-trace-to', metavar='FILENAME',
                               action='store',
                               help=('If specified, writes the trace to '
                                     'that path.'))
+            self.add_argument('--disable-resultsink',
+                              action='store_true',
+                              default=False,
+                              help=('Explicitly disable ResultSink integration '
+                                    'instead of automatically determining '
+                                    'based off LUCI_CONTEXT.'))
             self.add_argument('tests', nargs='*', default=[],
                               help=argparse.SUPPRESS)
 
@@ -135,6 +147,14 @@ class ArgumentParser(argparse.ArgumentParser):
                               default=False,
                               help=('Runs as quietly as possible '
                                     '(only prints errors).'))
+            self.add_argument('-r', '--repeat',
+                              '--isolated-script-test-repeat',
+                              default=1, type=int,
+                              help='The number of times to repeat running each '
+                                    'test. Note that if the tests are A, B, C '
+                                    'and repeat is 2, the execution order would'
+                                    ' be A B C [possible retries] A B C '
+                                    '[possible retries].')
             self.add_argument('-s', '--status-format',
                               default=self._host.getenv('NINJA_STATUS',
                                                         DEFAULT_STATUS_FORMAT),
@@ -144,6 +164,20 @@ class ArgumentParser(argparse.ArgumentParser):
             self.add_argument('-v', '--verbose', action='count', default=0,
                               help=('Prints more stuff (can specify multiple '
                                     'times for more output).'))
+            self.add_argument('-x', '--tag',
+                              dest='tags', default=[], action='append',
+                              help=('test tags (conditions) that apply to '
+                                    'this run (can specify multiple times'))
+            self.add_argument('-i', '--ignore-tag',
+                              dest='ignored_tags', default=[], action='append',
+                              help=('test tags (conditions) to treat as '
+                                    'ignored for the purposes of tag '
+                                    'validation.'))
+            self.add_argument('-X', '--expectations-file',
+                              dest='expectations_files',
+                              default=[], action='append',
+                              help=('test expectations file (can specify '
+                                    'multiple times'))
             self.add_argument('--passthrough', action='store_true',
                               default=False,
                               help='Prints all output while running.')
@@ -155,8 +189,19 @@ class ArgumentParser(argparse.ArgumentParser):
             self.add_argument('--shard-index', default=0, type=int,
                               help=('Shard index (0..total_shards-1) of this '
                                     'test run.'))
-            self.add_argument('--retry-limit', type=int, default=0,
+            self.add_argument('--retry-limit',
+                              '--isolated-script-test-launcher-retry-limit',
+                              type=int, default=0,
                               help='Retries each failure up to N times.')
+            self.add_argument('--retry-only-retry-on-failure-tests',
+                              action='store_true',
+                              help=('Retries are only for tests that have the'
+                                    ' RetryOnFailure tag in the test'
+                                    ' expectations file'))
+            self.add_argument('--typ-max-failures',
+                              type=int, default=None,
+                              help=('Maximum number of failures that can occur '
+                                    'before exiting the suite early.'))
             self.add_argument('--terminal-width', type=int,
                               default=self._host.terminal_width(),
                               help=argparse.SUPPRESS)
@@ -166,14 +211,39 @@ class ArgumentParser(argparse.ArgumentParser):
             self.add_argument('--no-overwrite', action='store_false',
                               dest='overwrite', default=None,
                               help=argparse.SUPPRESS)
+            self.add_argument('--test-name-prefix', default='', action='store',
+                              help=('Specifies the prefix that will be removed'
+                                    ' from test names'))
+            self.add_argument('--isolated-outdir',
+                              type=str,
+                              metavar='PATH',
+                              help='directory to write output to (ignored)')
 
         if discovery or running:
             self.add_argument('-P', '--path', action='append', default=[],
                               help=('Adds dir to sys.path (can specify '
                                     'multiple times).'))
-            self.add_argument('--top-level-dir', default=None,
+            self.add_argument('--top-level-dir', action='store', default=None,
+                              help=argparse.SUPPRESS)
+            self.add_argument('--top-level-dirs', action='append', default=[],
                               help=('Sets the top directory of project '
                                     '(used when running subdirs).'))
+            self.add_argument('--skip', metavar='glob', default=[],
+                              action='append',
+                              help=('Globs of test names to skip ('
+                                    'defaults to %(default)s).'))
+            self.add_argument(
+                '--test-filter',
+                '--isolated-script-test-filter',
+                type=str, default='', action='store',
+                help='Pass a double-colon-separated ("::") list of exact test '
+                'names or globs, to run just that subset of tests. fnmatch will '
+                'be used to match globs to test names')
+            self.add_argument(
+                '--partial-match-filter', type=str, default=[], action='append',
+                help='Pass a string and Typ will run tests whose names '
+                     'partially match the passed string')
+
 
     def parse_args(self, args=None, namespace=None):
         try:
@@ -280,6 +350,8 @@ class ArgumentParser(argparse.ArgumentParser):
             v = d[k]
             argname = _argname_from_key(k)
             action = self._action_for_key(k)
+            if not action:
+                continue
             action_str = _action_str(action)
             if k == 'tests':
                 tests = v
@@ -310,8 +382,9 @@ class ArgumentParser(argparse.ArgumentParser):
             if action.dest == key:
                 return action
 
-        assert False, ('Could not find an action for %s'  # pragma: no cover
-                       % key)
+        # Assume foreign argument: something used by the embedder of typ, for
+        # example.
+        return None
 
 
 def _action_str(action):

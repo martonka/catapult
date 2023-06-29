@@ -10,11 +10,14 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.e.measure', function() {
-  var AsyncSlice = tr.model.AsyncSlice;
+  const AsyncSlice = tr.model.AsyncSlice;
+
+  // Split on first : with an optional `/` + base64 suffix
+  const MEASURE_NAME_REGEX = /([^\/:]+):(.*?)(?:\/([A-Za-z0-9+/]+=?=?))?$/;
 
   function MeasureAsyncSlice() {
     this.groupTitle_ = 'Ungrouped Measure';
-    var matched = /([^\/:]+):([^\/:]+)\/?(.*)/.exec(arguments[1]);
+    const matched = MEASURE_NAME_REGEX.exec(arguments[1]);
     if (matched !== null) {
       arguments[1] = matched[2];
       this.groupTitle_ = matched[1];
@@ -39,13 +42,14 @@ tr.exportTo('tr.e.measure', function() {
   };
 
   AsyncSlice.subTypes.register(
-    MeasureAsyncSlice,
-    {
-      categoryParts: ['blink.user_timing']
-    });
+      MeasureAsyncSlice,
+      {
+        categoryParts: ['blink.user_timing']
+      });
 
   return {
-    MeasureAsyncSlice: MeasureAsyncSlice
+    MEASURE_NAME_REGEX,
+    MeasureAsyncSlice,
   };
 });
 </script>

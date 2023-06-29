@@ -1,4 +1,19 @@
 #!/usr/bin/env python
+#
+# Copyright 2015 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Library for handling batch HTTP requests for apitools."""
 
 import collections
@@ -13,6 +28,7 @@ import uuid
 import six
 from six.moves import http_client
 from six.moves import urllib_parse
+from six.moves import range  # pylint: disable=redefined-builtin
 
 from apitools.base.py import exceptions
 from apitools.base.py import http_wrapper
@@ -41,6 +57,7 @@ class RequestResponseAndHandler(collections.namedtuple(
 
 
 class BatchApiRequest(object):
+    """Batches multiple api requests into a single request."""
 
     class ApiCall(object):
 
@@ -106,7 +123,7 @@ class BatchApiRequest(object):
             return response_code not in self.__retryable_codes
 
         def HandleResponse(self, http_response, exception):
-            """Handles an incoming http response to the request in http_request.
+            """Handles incoming http response to the request in http_request.
 
             This is intended to be used as a callback function for
             BatchHttpRequest.Add.
@@ -123,16 +140,19 @@ class BatchApiRequest(object):
                 self.__response = self.__service.ProcessHttpResponse(
                     self.__method_config, self.__http_response)
 
-    def __init__(self, batch_url=None, retryable_codes=None):
+    def __init__(self, batch_url=None, retryable_codes=None,
+                 response_encoding=None):
         """Initialize a batch API request object.
 
         Args:
           batch_url: Base URL for batch API calls.
           retryable_codes: A list of integer HTTP codes that can be retried.
+          response_encoding: The encoding type of response content.
         """
         self.api_requests = []
         self.retryable_codes = retryable_codes or []
         self.batch_url = batch_url or 'https://www.googleapis.com/batch'
+        self.response_encoding = response_encoding
 
     def Add(self, service, method, request, global_params=None):
         """Add a request to the batch.
@@ -164,7 +184,8 @@ class BatchApiRequest(object):
             http_request, self.retryable_codes, service, method_config)
         self.api_requests.append(api_request)
 
-    def Execute(self, http, sleep_between_polls=5, max_retries=5):
+    def Execute(self, http, sleep_between_polls=5, max_retries=5,
+                max_batch_size=None, batch_request_callback=None):
         """Execute all of the requests in the batch.
 
         Args:
@@ -174,33 +195,45 @@ class BatchApiRequest(object):
           max_retries: Max retries. Any requests that have not succeeded by
               this number of retries simply report the last response or
               exception, whatever it happened to be.
+          max_batch_size: int, if specified requests will be split in batches
+              of given size.
+          batch_request_callback: function of (http_response, exception) passed
+              to BatchHttpRequest which will be run on any given results.
 
         Returns:
           List of ApiCalls.
         """
         requests = [request for request in self.api_requests
                     if not request.terminal_state]
+        batch_size = max_batch_size or len(requests)
 
         for attempt in range(max_retries):
             if attempt:
                 time.sleep(sleep_between_polls)
 
-            # Create a batch_http_request object and populate it with
-            # incomplete requests.
-            batch_http_request = BatchHttpRequest(batch_url=self.batch_url)
-            for request in requests:
-                batch_http_request.Add(
-                    request.http_request, request.HandleResponse)
-            batch_http_request.Execute(http)
+            for i in range(0, len(requests), batch_size):
+                # Create a batch_http_request object and populate it with
+                # incomplete requests.
+                batch_http_request = BatchHttpRequest(
+                    batch_url=self.batch_url,
+                    callback=batch_request_callback,
+                    response_encoding=self.response_encoding
+                )
+                for request in itertools.islice(requests,
+                                                i, i + batch_size):
+                    batch_http_request.Add(
+                        request.http_request, request.HandleResponse)
+                batch_http_request.Execute(http)
+
+                if hasattr(http.request, 'credentials'):
+                    if any(request.authorization_failed
+                           for request in itertools.islice(requests,
+                                                           i, i + batch_size)):
+                        http.request.credentials.refresh(http)
 
             # Collect retryable requests.
             requests = [request for request in self.api_requests if not
                         request.terminal_state]
-
-            if hasattr(http.request, 'credentials'):
-                if any(request.authorization_failed for request in requests):
-                    http.request.credentials.refresh(http)
-
             if not requests:
                 break
 
@@ -211,7 +244,7 @@ class BatchHttpRequest(object):
 
     """Batches multiple http_wrapper.Request objects into a single request."""
 
-    def __init__(self, batch_url, callback=None):
+    def __init__(self, batch_url, callback=None, response_encoding=None):
         """Constructor for a BatchHttpRequest.
 
         Args:
@@ -222,6 +255,7 @@ class BatchHttpRequest(object):
               apiclient.errors.HttpError exception object if an HTTP error
               occurred while processing the request, or None if no error
               occurred.
+          response_encoding: The encoding type of response content.
         """
         # Endpoint to which these requests are sent.
         self.__batch_url = batch_url
@@ -229,6 +263,9 @@ class BatchHttpRequest(object):
         # Global callback to be called for each individual response in the
         # batch.
         self.__callback = callback
+
+        # Response content will be decoded if this is provided.
+        self.__response_encoding = response_encoding
 
         # List of requests, responses and handlers.
         self.__request_response_handlers = {}
@@ -291,10 +328,12 @@ class BatchHttpRequest(object):
         # Construct status line
         parsed = urllib_parse.urlsplit(request.url)
         request_line = urllib_parse.urlunsplit(
-            (None, None, parsed.path, parsed.query, None))
+            ('', '', parsed.path, parsed.query, ''))
+        if not isinstance(request_line, six.text_type):
+            request_line = request_line.decode('utf-8')
         status_line = u' '.join((
             request.http_method,
-            request_line.decode('utf-8'),
+            request_line,
             u'HTTP/1.1\n'
         ))
         major, minor = request.headers.get(
@@ -415,8 +454,12 @@ class BatchHttpRequest(object):
         # Prepend with a content-type header so Parser can handle it.
         header = 'content-type: %s\r\n\r\n' % response.info['content-type']
 
+        content = response.content
+        if isinstance(content, bytes) and self.__response_encoding:
+            content = response.content.decode(self.__response_encoding)
+
         parser = email_parser.Parser()
-        mime_response = parser.parsestr(header + response.content)
+        mime_response = parser.parsestr(header + content)
 
         if not mime_response.is_multipart():
             raise exceptions.BatchError(
@@ -428,6 +471,7 @@ class BatchHttpRequest(object):
 
             # Disable protected access because namedtuple._replace(...)
             # is not actually meant to be protected.
+            # pylint: disable=protected-access
             self.__request_response_handlers[request_id] = (
                 self.__request_response_handlers[request_id]._replace(
                     response=response))

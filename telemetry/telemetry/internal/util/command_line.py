@@ -2,10 +2,11 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import argparse
 import optparse
 
-from telemetry.internal.util import camel_case
+from py_utils import camel_case
 
 
 class ArgumentHandlerMixIn(object):

@@ -1,11 +1,13 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Provides a web interface for loading graph data from the production server.
 
 This is meant to be used on a dev server only.
 """
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import base64
 import json
@@ -17,9 +19,9 @@ from google.appengine.api import urlfetch
 from google.appengine.ext import ndb
 from google.appengine.ext.ndb import model
 
-from dashboard import datastore_hooks
-from dashboard import request_handler
 from dashboard import update_test_suites
+from dashboard.common import datastore_hooks
+from dashboard.common import request_handler
 
 _DEV_APP_ID = 'dev~' + app_identity.get_application_id()
 
@@ -32,8 +34,9 @@ class LoadFromProdHandler(request_handler.RequestHandler):
   def get(self):
     if 'Development' not in os.environ['SERVER_SOFTWARE']:
       self.RenderHtml('result.html', {
-          'errors': [
-              'This should not be run in production, only on dev server.']})
+          'errors':
+              ['This should not be run in production, only on dev server.']
+      })
       return
     self.RenderHtml('load_from_prod.html', {})
 
@@ -41,12 +44,15 @@ class LoadFromProdHandler(request_handler.RequestHandler):
     """Loads the requested data from the production server."""
     if 'Development' not in os.environ['SERVER_SOFTWARE']:
       self.RenderHtml('result.html', {
-          'errors': [
-              'This should not be run in production, only on dev server.']})
+          'errors':
+              ['This should not be run in production, only on dev server.']
+      })
       return
 
     sheriff = self.request.get('sheriff')
     test_path = self.request.get('test_path')
+    raw_json = self.request.get('raw_json')
+    protos = None
     if test_path:
       num_points = self.request.get('num_points')
       end_rev = self.request.get('end_rev')
@@ -61,17 +67,23 @@ class LoadFromProdHandler(request_handler.RequestHandler):
       url = ('%s?sheriff=%s&num_alerts=%s&num_points=%s' %
              (_PROD_DUMP_GRAPH_JSON_URL, urllib.quote(sheriff_name), num_alerts,
               num_points))
+    elif raw_json:
+      protos = json.loads(raw_json)
     else:
       self.RenderHtml('result.html', {
-          'errors': ['Need to specify a test_path or sheriff.']})
+          'errors': ['Need to specify a test_path, sheriff or json data file.']
+      })
       return
 
-    # This takes a while.
-    response = urlfetch.fetch(url, deadline=60)
-    if response.status_code != 200:
-      self.RenderHtml('result.html', {'errors': ['Could not fetch %s' % url]})
-      return
-    protos = json.loads(response.content)
+    if not protos:
+      # This takes a while.
+      response = urlfetch.fetch(url, deadline=60)
+      if response.status_code != 200:
+        msg_template = 'Could not fetch %s (Status: %s)'
+        err_msg = msg_template % (url, response.status_code)
+        self.RenderHtml('result.html', {'errors': [err_msg]})
+        return
+      protos = json.loads(response.content)
 
     kinds = ['Master', 'Bot', 'TestMetadata', 'Row', 'Sheriff', 'Anomaly']
     entities = {k: [] for k in kinds}
@@ -98,10 +110,8 @@ class LoadFromProdHandler(request_handler.RequestHandler):
 
     num_entities = sum(len(entities[kind]) for kind in kinds)
     self.RenderHtml('result.html', {
-        'results': [
-            {
-                'name': 'Added data',
-                'value': '%d entities' % num_entities
-            }
-        ]
+        'results': [{
+            'name': 'Added data',
+            'value': '%d entities' % num_entities
+        }]
     })

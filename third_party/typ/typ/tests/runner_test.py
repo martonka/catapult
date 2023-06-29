@@ -19,8 +19,10 @@ import unittest
 from textwrap import dedent as d
 
 
-from typ import Host, Runner, TestCase, TestSet, TestInput
+from typ import Host, Runner, Stats, TestCase, TestSet, TestInput
 from typ import WinMultiprocessing
+from typ import runner as runner_module
+from typ.fakes import host_fake
 
 
 def _setup_process(child, context):  # pylint: disable=W0613
@@ -33,8 +35,79 @@ def _teardown_process(child, context):  # pylint: disable=W0613
 def _teardown_throws(child, context):  # pylint: disable=W0613
     raise Exception("exception in teardown")
 
+class MockTestCase(unittest.TestCase):
+
+    def test_pass(self):
+        pass
+
+
+class MockArgs(object):
+
+    def __init__(
+        self, test_name_prefix='', skip_globs=None,
+        isolate_globs=None,test_filter='', all=False):
+        cls = MockTestCase('test_pass').__class__
+        self.test_name_prefix = (
+            test_name_prefix or '%s.%s.' % (cls.__module__, cls.__name__))
+        self.skip = skip_globs or []
+        self.isolate = isolate_globs or []
+        self.tests = []
+        self.all = all
+        self.test_filter = test_filter
+
+
+def _PrefixDoesMatch(runner):
+    test_set = TestSet(runner.args.test_name_prefix)
+    runner.default_classifier(test_set, MockTestCase('test_pass'))
+    return test_set
+
 
 class RunnerTests(TestCase):
+
+    def _PrefixDoesNotMatch(self, runner):
+        test_set = TestSet(runner.args.test_name_prefix)
+        with self.assertRaises(AssertionError) as context:
+            runner.default_classifier(test_set, MockTestCase('test_pass'))
+        self.assertIn(
+            'The test prefix passed at the command line does not match the prefix '
+            'of all the tests generated', str(context.exception))
+
+    def test_test_filter_arg(self):
+        runner = Runner()
+        runner.args = MockArgs(test_filter='test_pass')
+        test_set = _PrefixDoesMatch(runner)
+        self.assertEqual(len(test_set.parallel_tests), 1)
+
+    def test_test_filter_arg_causes_assertion(self):
+        runner = Runner()
+        runner.args = MockArgs(test_name_prefix='DontMatch')
+        self._PrefixDoesNotMatch(runner)
+
+    def test_skip_arg(self):
+        runner = Runner()
+        runner.args = MockArgs(skip_globs=['test_pas*'], test_filter='test_pass')
+        test_set = _PrefixDoesMatch(runner)
+        self.assertEqual(len(test_set.tests_to_skip), 1)
+
+    def test_skip_arg_causes_assertion(self):
+        runner = Runner()
+        runner.args = MockArgs(
+            test_name_prefix='DontMatch', skip_globs=['test_pas*'])
+        self._PrefixDoesNotMatch(runner)
+
+    def test_isolate_arg(self):
+        runner = Runner()
+        runner.args = MockArgs(isolate_globs=['test_pas*'], test_filter='test_pass')
+        test_set = _PrefixDoesMatch(runner)
+        self.assertEqual(len(test_set.isolated_tests), 1)
+
+    def test_isolate_arg_causes_assertion(self):
+        runner = Runner()
+        runner.args = MockArgs(
+            test_name_prefix='DontMatch', isolate_globs=['test_pas*'],
+            test_filter='test_pass')
+        self._PrefixDoesNotMatch(runner)
+
     def test_context(self):
         r = Runner()
         r.args.tests = ['typ.tests.runner_test.ContextTests']
@@ -68,6 +141,31 @@ class RunnerTests(TestCase):
         ret = r.main([], tests=['typ.tests.runner_test.ContextTests'])
         self.assertEqual(ret, 0)
 
+    def test_max_failures_fail_if_equal(self):
+      r = Runner()
+      r.args.tests = ['typ.tests.runner_test.FailureTests']
+      r.args.jobs = 1
+      r.args.typ_max_failures = 1
+      r.context = True
+      with self.assertRaises(RuntimeError):
+        r.run()
+
+    def test_max_failures_pass_if_under(self):
+      r = Runner()
+      r.args.tests = ['typ.tests.runner_test.ContextTests', 'typ.tests.runner_test.FAilureTests']
+      r.args.jobs = 1
+      r.args.typ_max_failures = 2
+      r.context = True
+      r.run()
+
+    def test_max_failures_ignored_if_unset(self):
+      r = Runner()
+      r.args.tests = ['typ.tests.runner_test.FailureTests']
+      r.args.jobs = 1
+      r.args.typ_max_failures = None
+      r.context = True
+      r.run()
+
 
 class TestSetTests(TestCase):
     # This class exists to test the failures that can come up if you
@@ -75,7 +173,7 @@ class TestSetTests(TestCase):
     # would normally be caught there can occur later during test execution.
 
     def test_missing_name(self):
-        test_set = TestSet()
+        test_set = TestSet(MockArgs())
         test_set.parallel_tests = [TestInput('nonexistent test')]
         r = Runner()
         r.args.jobs = 1
@@ -94,12 +192,14 @@ class TestSetTests(TestCase):
                 def load_tests(_, _2, _3):
                     assert False
                 """))
-            test_set = TestSet()
+            test_set = TestSet(MockArgs())
             test_set.parallel_tests = [TestInput('load_test.BaseTest.test_x')]
             r = Runner()
             r.args.jobs = 1
-            ret, _, _ = r.run(test_set)
+            ret, _, trace = r.run(test_set)
             self.assertEqual(ret, 1)
+            self.assertIn('BaseTest',
+                          trace['traceEvents'][0]['args']['err'])
         finally:
             h.chdir(orig_wd)
             if tmpdir:
@@ -130,6 +230,10 @@ class TestWinMultiprocessing(TestCase):
             if tmpdir:
                 h.rmtree(tmpdir)
 
+        # Ignore the new logging added for timing.
+        if out.startswith('Start running tests'):
+            out = '\n'.join(out.split('\n')[1:])
+
         return ret, out, err
 
     def test_bad_value(self):
@@ -144,8 +248,8 @@ class TestWinMultiprocessing(TestCase):
             result = self.call([],
                                win_multiprocessing=WinMultiprocessing.ignore)
             ret, out, err = result
-            self.assertEqual(ret, 1)
-            self.assertEqual(out, 'No tests to run.\n')
+            self.assertEqual(ret, 0)
+            self.assertEqual(out, '0 tests passed, 0 skipped, 0 failures.\n')
             self.assertEqual(err, '')
 
     def test_real_unimportable_main(self):
@@ -202,14 +306,14 @@ class TestWinMultiprocessing(TestCase):
 
     def test_single_job(self):
         ret, out, err = self.call(['-j', '1'], platform='win32')
-        self.assertEqual(ret, 1)
-        self.assertIn('No tests to run.', out)
+        self.assertEqual(ret, 0)
+        self.assertEqual('0 tests passed, 0 skipped, 0 failures.\n', out )
         self.assertEqual(err, '')
 
     def test_spawn(self):
         ret, out, err = self.call([])
-        self.assertEqual(ret, 1)
-        self.assertIn('No tests to run.', out)
+        self.assertEqual(ret, 0)
+        self.assertEqual('0 tests passed, 0 skipped, 0 failures.\n', out)
         self.assertEqual(err, '')
 
 
@@ -219,3 +323,11 @@ class ContextTests(TestCase):
         # RunnerTests.test_context, above. It is not interesting on its own.
         if self.context:
             self.assertEquals(self.context['foo'], 'bar')
+
+
+class FailureTests(TestCase):
+    def test_failure(self):
+        # Intended to be called from tests above.
+        if self.context:
+            self.fail()
+

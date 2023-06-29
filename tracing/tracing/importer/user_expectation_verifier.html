@@ -12,69 +12,100 @@ found in the LICENSE file.
 'use strict';
 tr.exportTo('tr.importer', function() {
   function compareEvents(x, y) {
-    if (x.start !== y.start)
-      return x.start - y.start;
+    if (x.start !== y.start) return x.start - y.start;
     return x.guid - y.guid;
   }
 
-  function UserExpectationVerifier() {
-    this.customizeModelCallback_ = undefined;
-    this.expectedIRs_ = undefined;
-  }
+  class UserExpectationVerifier {
+    constructor() {
+      this.customizeModelCallback_ = undefined;
+      this.expectedUEs_ = undefined;
+      this.expectedSegments_ = undefined;
+    }
 
-  UserExpectationVerifier.prototype = {
     set customizeModelCallback(cmc) {
       this.customizeModelCallback_ = cmc;
-    },
+    }
 
-    // |irs| must be sorted by start time.
-    set expectedIRs(irs) {
-      this.expectedIRs_ = irs;
-    },
+    /**
+     * @param {!Array.<!Object>} ues must be sorted by start time.
+     */
+    set expectedUEs(ues) {
+      this.expectedUEs_ = ues;
+    }
 
-    verify: function() {
-      var model = tr.e.chrome.ChromeTestUtils.newChromeModel(
+    get expectedUEs() {
+      return this.expectedUEs_;
+    }
+
+    /**
+     * @param {!Array.<!Object>} segments must be sorted by start time.
+     */
+    set expectedSegments(segments) {
+      this.expectedSegments_ = segments;
+    }
+
+    verify() {
+      const model = tr.e.chrome.ChromeTestUtils.newChromeModel(
           this.customizeModelCallback_);
 
-      var failure = undefined;
+      let failure = undefined;
       try {
-        var i = 0;
-        assert.lengthOf(model.userModel.expectations,
-            this.expectedIRs_.length);
-        var actualUEIterator = model.userModel.expectations[Symbol.iterator]();
-        for (var expectedIR of this.expectedIRs_) {
-          var actualUE = actualUEIterator.next();
-          assert.equal(false, actualUE.done);
-          var at = 'IRs[' + (i++) + '].';
-          assert.equal(expectedIR.title, actualUE.value.title, at + 'title');
-          if (expectedIR.name !== undefined)
-            assert.equal(expectedIR.name, actualUE.value.name, at + 'name');
-          assert.equal(expectedIR.start, actualUE.value.start, at + 'start');
-          assert.equal(expectedIR.end, actualUE.value.end, at + 'end');
-          assert.equal(expectedIR.eventCount,
-              actualUE.value.associatedEvents.length, at + 'eventCount');
-          if (actualUE instanceof tr.model.um.ResponseExpectation) {
-            assert.equal(expectedIR.isAnimationBegin || false,
-                actualUEs.isAnimationBegin, at + 'isAnimationBegin');
-          }
-        }
-      } catch (caught) {
-        failure = caught;
-        for (var i = 0; i < model.userModel.expectations.length; ++i) {
-          console.debug(i, model.userModel.expectations[i]);
-        }
+        this.verifyExpectations_([...model.userModel.expectations]);
+        this.verifySegments_(model.userModel.segments);
+      } catch (e) {
+        failure = e;
       }
 
-      var debug = !tr.isHeadless && (
-          location.search.split('&').indexOf('debug') >= 0);
-      if (!failure && !debug)
-        return;
-
-      if (failure)
-        throw failure;
+      if (failure) throw failure;
     }
-  };
 
-  return {UserExpectationVerifier: UserExpectationVerifier};
+    verifyExpectations_(expectations) {
+      assert.lengthOf(expectations, this.expectedUEs.length);
+      for (let i = 0; i < this.expectedUEs.length; ++i) {
+        this.verifyExpectation_(
+            this.expectedUEs[i], expectations[i], `UEs[${i}]`);
+      }
+    }
+
+    verifySegments_(segments) {
+      assert.lengthOf(segments, this.expectedSegments_.length);
+      for (let i = 0; i < this.expectedSegments_.length; ++i) {
+        this.verifySegment_(
+            this.expectedSegments_[i], segments[i], `segments[${i}].`);
+      }
+    }
+
+    verifyExpectation_(expected, actual, at) {
+      assert.strictEqual(expected.title, actual.title, at + 'title');
+      if (expected.name !== undefined) {
+        assert.strictEqual(expected.name, actual.name, at + 'name');
+      }
+      assert.strictEqual(expected.start, actual.start, at + 'start');
+      assert.strictEqual(expected.end, actual.end, at + 'end');
+      assert.strictEqual(expected.eventCount,
+          actual.associatedEvents.length, at + 'eventCount');
+      if (actual instanceof tr.model.um.ResponseExpectation) {
+        assert.strictEqual(expected.isAnimationBegin || false,
+            actual.isAnimationBegin, at + 'isAnimationBegin');
+      }
+    }
+
+    verifySegment_(expected, actual, at) {
+      assert.strictEqual(expected.start, actual.start, at + 'start');
+      assert.strictEqual(expected.end, actual.end, at + 'end');
+      assert.lengthOf(actual.expectations, expected.expectations.length,
+          at + 'expectations.length');
+      for (let i = 0; i < expected.expectations.length; ++i) {
+        this.verifyExpectation_(
+            expected.expectations[i], actual.expectations[i],
+            at + `expectations[${i}].`);
+      }
+    }
+  }
+
+  return {
+    UserExpectationVerifier,
+  };
 });
 </script>

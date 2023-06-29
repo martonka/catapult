@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import os
 
 from telemetry.core import util
@@ -9,14 +10,14 @@ from telemetry.core import util
 BASE_PROFILE_TYPES = ['clean', 'default']
 
 PROFILE_TYPE_MAPPING = {
-  'typical_user': 'content_scripts1',
-  'power_user': 'extension_webrequest',
+    'typical_user': 'content_scripts1',
+    'power_user': 'extension_webrequest',
 }
 
 def GetProfileTypes():
   """Returns a list of all command line options that can be specified for
   profile type."""
-  return BASE_PROFILE_TYPES + PROFILE_TYPE_MAPPING.keys()
+  return BASE_PROFILE_TYPES + list(PROFILE_TYPE_MAPPING.keys())
 
 def GetProfileDir(profile_type):
   """Given a |profile_type| (as returned by GetProfileTypes()), return the

@@ -8,6 +8,7 @@
  * @fileoverview Boostrap for loading javascript/html files using d8_runner.
  */
 (function(global, v8arguments) {
+  global.global = global;
 
   global.isVinn = true;
 
@@ -132,8 +133,6 @@
         exists: function(fileName) {
           try {
             // Try a dummy read to check whether file_path exists.
-            // TODO(nednguyen): find a more efficient way to check whether
-            // some file path exists in d8.
             readbuffer(fileName);
             return true;
           } catch (err) {

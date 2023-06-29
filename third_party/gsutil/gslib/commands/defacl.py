@@ -15,8 +15,11 @@
 """Implementation of default object acl command for Google Cloud Storage."""
 
 from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import division
+from __future__ import unicode_literals
 
-from gslib import aclhelpers
+from gslib import metrics
 from gslib.cloud_api import AccessDeniedException
 from gslib.cloud_api import BadRequestException
 from gslib.cloud_api import Preconditions
@@ -29,11 +32,12 @@ from gslib.cs_api_map import ApiSelector
 from gslib.exception import CommandException
 from gslib.help_provider import CreateHelpText
 from gslib.storage_url import StorageUrlFromString
+from gslib.storage_url import UrlsAreForSingleProvider
 from gslib.third_party.storage_apitools import storage_v1_messages as apitools_messages
-from gslib.translation_helper import PRIVATE_DEFAULT_OBJ_ACL
-from gslib.util import NO_MAX
-from gslib.util import Retry
-from gslib.util import UrlsAreForSingleProvider
+from gslib.utils import acl_helper
+from gslib.utils.constants import NO_MAX
+from gslib.utils.retry_util import Retry
+from gslib.utils.translation_helper import PRIVATE_DEFAULT_OBJ_ACL
 
 _SET_SYNOPSIS = """
   gsutil defacl set file-or-canned_acl_name url...
@@ -55,9 +59,11 @@ _SET_DESCRIPTION = """
   bucket, unless an ACL for that object is separately specified during upload.
 
   Similar to the "acl set" command, the file-or-canned_acl_name names either a
-  canned ACL or the path to a file that contains ACL text. (See "gsutil
-  help acl" for examples of editing and setting ACLs via the
-  acl command.)
+  canned ACL or the path to a file that contains ACL text. See "gsutil help
+  acl" for examples of editing and setting ACLs via the acl command. See
+  `Predefined ACLs
+  <https://cloud.google.com/storage/docs/access-control/lists#predefined-acl>`_
+  for a list of canned ACLs.
 
   Setting a default object ACL on a bucket provides a convenient way to ensure
   newly uploaded objects have a specific ACL. If you don't set the bucket's
@@ -118,18 +124,18 @@ _CH_DESCRIPTION = """
 <B>CH OPTIONS</B>
   The "ch" sub-command has the following options
 
-    -d          Remove all roles associated with the matching entity.
+  -d          Remove all roles associated with the matching entity.
 
-    -f          Normally gsutil stops at the first error. The -f option causes
-                it to continue when it encounters errors. With this option the
-                gsutil exit status will be 0 even if some ACLs couldn't be
-                changed.
+  -f          Normally gsutil stops at the first error. The -f option causes
+              it to continue when it encounters errors. With this option the
+              gsutil exit status will be 0 even if some ACLs couldn't be
+              changed.
 
-    -g          Add or modify a group entity's role.
+  -g          Add or modify a group entity's role.
 
-    -p          Add or modify a project viewers/editors/owners role.
+  -p          Add or modify a project viewers/editors/owners role.
 
-    -u          Add or modify a user entity's role.
+  -u          Add or modify a user entity's role.
 """
 
 _SYNOPSIS = (_SET_SYNOPSIS + _GET_SYNOPSIS.lstrip('\n') +
@@ -167,24 +173,22 @@ class DefAclCommand(Command):
               CommandArgument.MakeFileURLOrCannedACLArgument(),
               CommandArgument.MakeZeroOrMoreCloudBucketURLsArgument()
           ],
-          'get': [
-              CommandArgument.MakeNCloudBucketURLsArgument(1)
-          ],
-          'ch': [
-              CommandArgument.MakeZeroOrMoreCloudBucketURLsArgument()
-          ],
-      }
+          'get': [CommandArgument.MakeNCloudBucketURLsArgument(1)],
+          'ch': [CommandArgument.MakeZeroOrMoreCloudBucketURLsArgument()],
+      },
   )
   # Help specification. See help_provider.py for documentation.
   help_spec = Command.HelpSpec(
       help_name='defacl',
-      help_name_aliases=[
-          'default acl', 'setdefacl', 'getdefacl', 'chdefacl'],
+      help_name_aliases=['default acl', 'setdefacl', 'getdefacl', 'chdefacl'],
       help_type='command_help',
       help_one_line_summary='Get, set, or change default ACL on buckets',
       help_text=_DETAILED_HELP_TEXT,
       subcommand_help_text={
-          'get': _get_help_text, 'set': _set_help_text, 'ch': _ch_help_text},
+          'get': _get_help_text,
+          'set': _set_help_text,
+          'ch': _ch_help_text,
+      },
   )
 
   def _CalculateUrlsStartArg(self):
@@ -221,20 +225,19 @@ class DefAclCommand(Command):
       for o, a in self.sub_opts:
         if o == '-g':
           self.changes.append(
-              aclhelpers.AclChange(a, scope_type=aclhelpers.ChangeType.GROUP))
+              acl_helper.AclChange(a, scope_type=acl_helper.ChangeType.GROUP))
         if o == '-u':
           self.changes.append(
-              aclhelpers.AclChange(a, scope_type=aclhelpers.ChangeType.USER))
+              acl_helper.AclChange(a, scope_type=acl_helper.ChangeType.USER))
         if o == '-p':
           self.changes.append(
-              aclhelpers.AclChange(a, scope_type=aclhelpers.ChangeType.PROJECT))
+              acl_helper.AclChange(a, scope_type=acl_helper.ChangeType.PROJECT))
         if o == '-d':
-          self.changes.append(aclhelpers.AclDel(a))
+          self.changes.append(acl_helper.AclDel(a))
 
     if not self.changes:
-      raise CommandException(
-          'Please specify at least one access change '
-          'with the -g, -u, or -d flags')
+      raise CommandException('Please specify at least one access change '
+                             'with the -g, -u, or -d flags')
 
     if (not UrlsAreForSingleProvider(self.args) or
         StorageUrlFromString(self.args[0]).scheme != 'gs'):
@@ -257,7 +260,8 @@ class DefAclCommand(Command):
   def ApplyAclChanges(self, url):
     """Applies the changes in self.changes to the provided URL."""
     bucket = self.gsutil_api.GetBucket(
-        url.bucket_name, provider=url.scheme,
+        url.bucket_name,
+        provider=url.scheme,
         fields=['defaultObjectAcl', 'metageneration'])
 
     # Default object ACLs can be blank if the ACL was set to private, or
@@ -266,11 +270,7 @@ class DefAclCommand(Command):
     # permission they'll get an AccessDeniedException.
     current_acl = bucket.defaultObjectAcl
 
-    modification_count = 0
-    for change in self.changes:
-      modification_count += change.Execute(
-          url, current_acl, 'defacl', self.logger)
-    if modification_count == 0:
+    if self._ApplyAclChangesAndReturnChangeCount(url, current_acl) == 0:
       self.logger.info('No changes to %s', url)
       return
 
@@ -282,9 +282,12 @@ class DefAclCommand(Command):
     try:
       preconditions = Preconditions(meta_gen_match=bucket.metageneration)
       bucket_metadata = apitools_messages.Bucket(defaultObjectAcl=current_acl)
-      self.gsutil_api.PatchBucket(url.bucket_name, bucket_metadata,
+      self.gsutil_api.PatchBucket(url.bucket_name,
+                                  bucket_metadata,
                                   preconditions=preconditions,
-                                  provider=url.scheme, fields=['id'])
+                                  provider=url.scheme,
+                                  fields=['id'])
+      self.logger.info('Updated default ACL on %s', url)
     except BadRequestException as e:
       # Don't retry on bad requests, e.g. invalid email address.
       raise CommandException('Received bad request from server: %s' % str(e))
@@ -293,7 +296,12 @@ class DefAclCommand(Command):
       raise CommandException('Failed to set acl for %s. Please ensure you have '
                              'OWNER-role access to this resource.' % url)
 
-    self.logger.info('Updated default ACL on %s', url)
+  def _ApplyAclChangesAndReturnChangeCount(self, storage_url, defacl_message):
+    modification_count = 0
+    for change in self.changes:
+      modification_count += change.Execute(storage_url, defacl_message,
+                                           'defacl', self.logger)
+    return modification_count
 
   def RunCommand(self):
     """Command entry point for the defacl command."""
@@ -311,5 +319,9 @@ class DefAclCommand(Command):
       raise CommandException(('Invalid subcommand "%s" for the %s command.\n'
                               'See "gsutil help defacl".') %
                              (action_subcommand, self.command_name))
+    # Commands with both suboptions and subcommands need to reparse for
+    # suboptions, so we log again.
+    metrics.LogCommandParams(subcommands=[action_subcommand],
+                             sub_opts=self.sub_opts)
     func()
     return 0

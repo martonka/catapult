@@ -10,6 +10,8 @@ on a point on a graph. It shows more detailed information about the point that
 was just clicked.
 -->
 
+<link rel="import" href="/components/iron-icon/iron-icon.html">
+<link rel="import" href="/components/iron-icons/iron-icons.html">
 <link rel="import" href="/components/paper-card/paper-card.html">
 
 <link rel="import" href="/dashboard/elements/alert-remove-box.html">
@@ -32,6 +34,18 @@ was just clicked.
       overflow-y: auto;
       max-height: 250px;
     }
+
+    #close-button {
+      float: right;
+    }
+
+    iron-icon: {
+      color: black;
+    }
+
+    iron-icon:active {
+      color: #f09300;
+    }
   </style>
 
   <template>
@@ -50,9 +64,6 @@ was just clicked.
           }
         </style>
 
-        <!-- TODO(qyearsley): Either (1) Display alert details on mouse-over as
-             well as click (The alerts attribute is only set currently on click,
-             not on hover) OR (2) Display alert details in the triage dialog. -->
         <div class="card-content">
           <template is="dom-repeat" items="{{alerts}}">
             <div class="important">
@@ -79,7 +90,11 @@ was just clicked.
           <template is="dom-if" if="{{bugId}}">
             <div>
               <span hidden$={{alertInvalidOrIgnored}}>Bug ID:
-                <b><a target="_blank" href="http://crbug.com/{{bugId}}">{{bugId}}</a></b>
+                <b>
+                  <a target="_blank" href="http://crbug.com/{{projectId}}/{{bugId}}">
+                    {{projectId}}:{{bugId}}
+                  </a>
+                </b>
               </span>
 
               <span hidden$="{{bugNotInvalid(bugId)}}">Invalid alert</span>
@@ -104,8 +119,11 @@ was just clicked.
           </div>
 
           <div>
+            <span class="annotation-link"><a href="/group_report?rev={{pointId}}" target="_blank">See all performance changes at {{pointId}}</a></span><br /><br />
             <template is="dom-repeat" items={{links}}>
-              <span class="annotation-link"><a href="{{item.url}}" target="_blank">{{item.text}}</a></span><br />
+              <span class="annotation-link"><a href="{{item.url}}" target="_blank">{{item.text}}</a>
+              <iron-icon icon="content-copy" title="Copy link" on-click="onCopyToClipboard"></iron-icon>
+              </span><br />
             </template>
           </div>
         </div>
@@ -113,125 +131,157 @@ was just clicked.
         <div class="card-actions">
           <bisect-button dialog-confirm xsrf-token="{{xsrfToken}}"
                          bug-id="{{bugId}}"
-                         bisect-info="{{bisectInfo}}"></bisect-button>
+                         project-id="{{projectId}}"
+                         bisect-info="{{bisectInfo}}"
+                         alerts="[[alerts]]"></bisect-button>
           <trace-button dialog-confirm xsrf-token="{{xsrfToken}}"
                         bug-id="{{bugId}}"
                         trace-info="{{bisectInfo}}"></trace-button>
+          <paper-button id="close-button" raised dismissive on-click="close">Close</paper-button>
         </div>
 
       </paper-card>
     </dialog-container>
   </template>
-  <script>
-    'use strict';
-    Polymer({
-      is: 'chart-tooltip',
-      properties: {
-        alerts: {
-          notify: true,
-          observer: 'alertsChanged'
-        },
-        bugId: {
-          value: null,
-          notify: true
-        },
-        hideStddev: {
-          type: Boolean,
-          value: true
-        },
-        hideStdioUri: {
-          type: Boolean,
-          value: true
-        },
-        links: { notify: true },
-        pointId: { notify: true },
-        revisions: {
-          type: Array,
-          value: function() {
-            return [];
-          },
-          notify: true
-        },
-        stddev: { value: null },
-        stdioUri: { value: null },
-        testPath: {
-          notify: true,
-          observer: 'testPathChanged'
-        },
-        traceName: { value: null },
-        value: {
-          value: null,
-          notify: true
-        },
-        xsrfToken: { notify: true }
-      },
-
-      testPathChanged: function() {
-        if (this.testPath) {
-          var parts = this.testPath.split('/');
-          this.seriesName = parts.pop();
-          this.parentPath = parts.join('/');
-        }
-      },
-
-      /**
-       * Shows the CL descriptions for the given revision range.
-       */
-      onRevisionRangeClick: function(event, detail) {
-        window.open(
-            event.currentTarget.href, 'changelog', 'width=1000,height=1000');
-        event.preventDefault();
-      },
-
-      /**
-       * Updates the display of the triage-dialog.
-       * This method is called whenever the value of this.alerts changes,
-       * e.g. by chart-container when an alert is triaged.
-       */
-      alertsChanged: function() {
-        // The triage-dialog should be shown when there is some non-triaged
-        // alert, and hidden otherwise.
-        if (this.alerts && this.alerts.length) {
-          this.$.triage.show();
-        } else {
-          this.$.triage.close();
-        }
-      },
-
-      /**
-       * Fires a 'triaged' event, which should be caught in chart-container.
-       */
-      onUntriaged: function(event, detail) {
-        this.fire('triaged', {
-          'alerts': this.triagedAlerts,
-          'bugid': null
-        });
-      },
-
-      open: function() {
-        var old_left = this.$.container.offsetLeft;
-        var old_top = this.$.container.offsetTop;
-        openAtPosition(old_top, old_left);
-      },
-
-      close: function() {
-        if (this.$.container.opened)
-          this.$.container.close();
-      },
-
-      openAtPosition: function(top, left) {
-        this.$.container.updatePositionFromCoords(top, left);
-        if (!this.$.container.opened) {
-          this.$.container.open();
-        }
-      },
-
-      bugNotInvalid: function(bugId) {
-        return bugId != -1;
-      },
-      bugNotIgnored: function(bugId) {
-        return bugId != -2;
-      }
-    });
-  </script>
 </dom-module>
+<script>
+'use strict';
+Polymer({
+  is: 'chart-tooltip',
+  properties: {
+    alerts: {
+      notify: true,
+      observer: 'alertsChanged'
+    },
+    bugId: {
+      value: null,
+      notify: true
+    },
+    projectId: {
+      type: String,
+      value: ''
+    },
+    hideStddev: {
+      type: Boolean,
+      value: true
+    },
+    hideStdioUri: {
+      type: Boolean,
+      value: true
+    },
+    links: { notify: true },
+    pointId: { notify: true },
+    revisions: {
+      type: Array,
+      value() {
+        return [];
+      },
+      notify: true
+    },
+    stddev: { value: null },
+    stdioUri: { value: null },
+    testPath: {
+      notify: true,
+      observer: 'testPathChanged'
+    },
+    traceName: { value: null },
+    value: {
+      value: null,
+      notify: true
+    },
+    xsrfToken: { notify: true }
+  },
+
+  testPathChanged() {
+    if (this.testPath) {
+      const parts = this.testPath.split('/');
+      this.seriesName = parts.pop();
+      this.parentPath = parts.join('/');
+    }
+  },
+
+  /**
+    * Shows the CL descriptions for the given revision range.
+    */
+  onRevisionRangeClick(event, detail) {
+    window.open(
+        event.currentTarget.href, 'changelog', 'width=1000,height=1000');
+    event.preventDefault();
+  },
+
+  copyTextToClipboard(text) {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    document.body.appendChild(textArea);
+    textArea.select();
+    let successful = false;
+    try {
+      successful = document.execCommand('copy');
+    } catch (e) {
+      successful = false;
+    }
+    document.body.removeChild(textArea);
+    return successful;
+  },
+
+  onCopyToClipboard(event) {
+    const link = event.model.item.url;
+    const success = this.copyTextToClipboard(link);
+    if (!success) {
+      window.prompt('Could not copy automatically, select and copy', link);
+    }
+  },
+
+  /**
+    * Updates the display of the triage-dialog.
+    * This method is called whenever the value of this.alerts changes,
+    * e.g. by chart-container when an alert is triaged.
+    */
+  alertsChanged() {
+    // The triage-dialog should be shown when there is some non-triaged
+    // alert, and hidden otherwise.
+    if (this.alerts && this.alerts.length) {
+      this.$.triage.show();
+    } else {
+      this.$.triage.close();
+    }
+  },
+
+  /**
+    * Fires a 'triaged' event, which should be caught in chart-container.
+    */
+  onUntriaged(event, detail) {
+    this.fire('triaged', {
+      'alerts': this.triagedAlerts,
+      'bugid': null,
+      'projectid': null
+    });
+  },
+
+  open() {
+    const oldLeft = this.$.container.offsetLeft;
+    const oldTop = this.$.container.offsetTop;
+    openAtPosition(oldTop, oldLeft);
+  },
+
+  close() {
+    if (this.$.container.opened) {
+      this.$.container.close();
+    }
+  },
+
+  openAtPosition(top, left) {
+    this.$.container.updatePositionFromCoords(top, left);
+    if (!this.$.container.opened) {
+      this.$.container.open();
+    }
+  },
+
+  bugNotInvalid(bugId) {
+    return bugId != -1;
+  },
+  bugNotIgnored(bugId) {
+    return bugId != -2;
+  }
+});
+</script>

@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry.core import exceptions
 from telemetry.internal.actions import media_action
 from telemetry.internal.actions import page_action
@@ -9,14 +10,13 @@ from telemetry.internal.actions import utils
 
 
 class LoadMediaAction(media_action.MediaAction):
-  """ For calling load() on media elements and waiting for an event to fire.
+  """For calling load() on media elements and waiting for an event to fire.
   """
 
   def __init__(self, selector=None, timeout_in_seconds=0,
                event_to_await='canplaythrough'):
-    super(LoadMediaAction, self).__init__()
+    super(LoadMediaAction, self).__init__(timeout=timeout_in_seconds)
     self._selector = selector or ''
-    self._timeout_in_seconds = timeout_in_seconds
     self._event_to_await = event_to_await
 
   def WillRunAction(self, tab):
@@ -26,12 +26,16 @@ class LoadMediaAction(media_action.MediaAction):
 
   def RunAction(self, tab):
     try:
-      tab.ExecuteJavaScript('window.__loadMediaAndAwait("%s", "%s");'
-                            % (self._selector, self._event_to_await))
-      if self._timeout_in_seconds > 0:
+      tab.ExecuteJavaScript(
+          'window.__loadMediaAndAwait({{ selector }}, {{ event }});',
+          selector=self._selector, event=self._event_to_await)
+      if self.timeout > 0:
         self.WaitForEvent(tab, self._selector, self._event_to_await,
-                          self._timeout_in_seconds)
+                          self.timeout)
     except exceptions.EvaluateException:
       raise page_action.PageActionFailed('Failed waiting for event "%s" on '
                                          'elements with selector = %s.' %
                                          (self._event_to_await, self._selector))
+
+  def __str__(self):
+    return "%s(%s)" % (self.__class__.__name__, self._selector)

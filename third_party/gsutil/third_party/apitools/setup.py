@@ -29,33 +29,27 @@ except ImportError:
 # Python version and OS.
 REQUIRED_PACKAGES = [
     'httplib2>=0.8',
-    'oauth2client>=1.4.8',
-    'protorpc>=0.9.1',
-    'six>=1.9.0',
+    'fasteners>=0.14',
+    'oauth2client>=1.4.12',
+    'six>=1.12.0',
     ]
 
 CLI_PACKAGES = [
-    'google-apputils>=0.4.0',
-    'python-gflags>=2.0',
+    'python-gflags>=3.0.6',
 ]
 
 TESTING_PACKAGES = [
-    'google-apputils>=0.4.0',
     'unittest2>=0.5.1',
     'mock>=1.0.1',
 ]
 
 CONSOLE_SCRIPTS = [
-    'gen_client = apitools.gen.gen_client:run_main',
-    'oauth2l = apitools.scripts.oauth2l:run_main [cli]',
+    'gen_client = apitools.gen.gen_client:main',
 ]
 
 py_version = platform.python_version()
 
-if py_version < '2.7':
-    REQUIRED_PACKAGES.append('argparse>=1.2.1')
-
-_APITOOLS_VERSION = '0.4.10'
+_APITOOLS_VERSION = '0.5.30'
 
 with open('README.rst') as fileobj:
     README = fileobj.read()
@@ -65,14 +59,12 @@ setuptools.setup(
     version=_APITOOLS_VERSION,
     description='client libraries for humans',
     long_description=README,
-    url='http://github.com/craigcitro/apitools',
+    url='http://github.com/google/apitools',
     author='Craig Citro',
     author_email='craigcitro@google.com',
     # Contained modules and scripts.
-    packages=setuptools.find_packages(),
-    entry_points={
-        'console_scripts': CONSOLE_SCRIPTS,
-        },
+    packages=setuptools.find_packages(include=['apitools']),
+    entry_points={'console_scripts': CONSOLE_SCRIPTS},
     install_requires=REQUIRED_PACKAGES,
     tests_require=REQUIRED_PACKAGES + CLI_PACKAGES + TESTING_PACKAGES,
     extras_require={
@@ -83,6 +75,15 @@ setuptools.setup(
     include_package_data=True,
     package_data={
         'apitools.data': ['*'],
+    },
+    exclude_package_data={
+        '': [
+            '*_test.py',
+            '*/testing/*',
+            '*/testdata/*',
+            'base/protorpclite/test_util.py',
+            'gen/test_utils.py',
+        ],
     },
     # PyPI package information.
     classifiers=[

@@ -12,7 +12,6 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.model', function() {
-
   function XMarkerAnnotation(timestamp) {
     tr.model.Annotation.apply(this, arguments);
 
@@ -22,12 +21,12 @@ tr.exportTo('tr.model', function() {
 
   XMarkerAnnotation.fromDict = function(dict) {
     return new XMarkerAnnotation(dict.args.timestamp);
-  }
+  };
 
   XMarkerAnnotation.prototype = {
     __proto__: tr.model.Annotation.prototype,
 
-    toDict: function() {
+    toDict() {
       return {
         typeName: 'xmarker',
         args: {
@@ -36,7 +35,7 @@ tr.exportTo('tr.model', function() {
       };
     },
 
-    createView_: function(viewport) {
+    createView_(viewport) {
       return new tr.ui.annotations.XMarkerAnnotationView(viewport, this);
     }
   };
@@ -45,7 +44,7 @@ tr.exportTo('tr.model', function() {
       XMarkerAnnotation, {typeName: 'xmarker'});
 
   return {
-    XMarkerAnnotation: XMarkerAnnotation
+    XMarkerAnnotation,
   };
 });
 </script>

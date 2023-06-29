@@ -2,13 +2,14 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry.internal.platform import tracing_agent
-from telemetry.timeline import trace_data
+from tracing.trace_data import trace_data
 
 
 class DisplayTracingAgent(tracing_agent.TracingAgent):
-  def __init__(self, platform_backend):
-    super(DisplayTracingAgent, self).__init__(platform_backend)
+  def __init__(self, platform_backend, config):
+    super(DisplayTracingAgent, self).__init__(platform_backend, config)
 
   @classmethod
   def IsSupported(cls, platform_backend):
@@ -28,5 +29,5 @@ class DisplayTracingAgent(tracing_agent.TracingAgent):
     # TODO: Move stopping to StopAgentTracing.
     del timeout
     surface_flinger_trace_data = self._platform_backend.StopDisplayTracing()
-    trace_data_builder.AddEventsTo(
-          trace_data.SURFACE_FLINGER_PART, surface_flinger_trace_data)
+    trace_data_builder.AddTraceFor(
+        trace_data.CHROME_TRACE_PART, surface_flinger_trace_data)

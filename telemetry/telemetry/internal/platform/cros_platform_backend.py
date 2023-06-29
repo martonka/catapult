@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import logging
 
 from telemetry import decorators
@@ -11,8 +12,6 @@ from telemetry.core import util
 from telemetry.internal.forwarders import cros_forwarder
 from telemetry.internal.platform import cros_device
 from telemetry.internal.platform import linux_based_platform_backend
-from telemetry.internal.platform.power_monitor import cros_power_monitor
-from telemetry.internal.util import ps_util
 
 
 class CrosPlatformBackend(
@@ -25,7 +24,9 @@ class CrosPlatformBackend(
       self._cri.TryLogin()
     else:
       self._cri = cros_interface.CrOSInterface()
-    self._powermonitor = cros_power_monitor.CrosPowerMonitor(self)
+
+  def GetDeviceId(self):
+    return self._cri.hostname
 
   @classmethod
   def IsPlatformBackendForHost(cls):
@@ -44,16 +45,17 @@ class CrosPlatformBackend(
   def cri(self):
     return self._cri
 
-  @property
-  def forwarder_factory(self):
-    if not self._forwarder_factory:
-      self._forwarder_factory = cros_forwarder.CrOsForwarderFactory(self._cri)
-    return self._forwarder_factory
+  def _CreateForwarderFactory(self):
+    return cros_forwarder.CrOsForwarderFactory(self._cri)
 
   def GetRemotePort(self, port):
     if self._cri.local:
       return port
     return self._cri.GetRemotePort()
+
+  def IsRemoteDevice(self):
+    # Check if CrOS device is remote.
+    return self._cri and not self._cri.local
 
   def IsThermallyThrottled(self):
     raise NotImplementedError()
@@ -70,43 +72,22 @@ class CrosPlatformBackend(
                     (str(args), stderr))
     return stdout
 
+  def StartCommand(self, args, cwd=None, quiet=False, connect_timeout=None):
+    if not isinstance(args, list):
+      args = [args]
+    return self._cri.StartCmdOnDevice(args, cwd, quiet, connect_timeout)
+
+  def GetFile(self, filename, destfile=None):
+    return self._cri.GetFile(filename, destfile)
+
   def GetFileContents(self, filename):
     try:
       return self.RunCommand(['cat', filename])
     except AssertionError:
       return ''
 
-  def GetPsOutput(self, columns, pid=None):
-    return ps_util.GetPsOutputWithPlatformBackend(self, columns, pid)
-
-  @staticmethod
-  def ParseCStateSample(sample):
-    sample_stats = {}
-    for cpu in sample:
-      values = sample[cpu].splitlines()
-      # There are three values per state after excluding the single time value.
-      num_states = (len(values) - 1) / 3
-      names = values[:num_states]
-      times = values[num_states:2 * num_states]
-      latencies = values[2 * num_states:]
-      # The last line in the sample contains the time.
-      cstates = {'C0': int(values[-1]) * 10 ** 6}
-      for i, state in enumerate(names):
-        if names[i] == 'POLL' and not int(latencies[i]):
-          # C0 state. Kernel stats aren't right, so calculate by
-          # subtracting all other states from total time (using epoch
-          # timer since we calculate differences in the end anyway).
-          # NOTE: Only x86 lists C0 under cpuidle, ARM does not.
-          continue
-        cstates['C0'] -= int(times[i])
-        if names[i] == '<null>':
-          # Kernel race condition that can happen while a new C-state gets
-          # added (e.g. AC->battery). Don't know the 'name' of the state
-          # yet, but its 'time' would be 0 anyway.
-          continue
-        cstates[state] = int(times[i])
-      sample_stats[cpu] = cstates
-    return sample_stats
+  def PushContents(self, text, remote_filename):
+    return self._cri.PushContents(text, remote_filename)
 
   def GetDeviceTypeName(self):
     return self._cri.GetDeviceTypeName()
@@ -121,16 +102,8 @@ class CrosPlatformBackend(
   def GetOSVersionName(self):
     return ''  # TODO: Implement this.
 
-  def GetChildPids(self, pid):
-    """Returns a list of child pids of |pid|."""
-    all_process_info = self._cri.ListProcesses()
-    processes = [(curr_pid, curr_ppid, curr_state)
-                 for curr_pid, _, curr_ppid, curr_state in all_process_info]
-    return ps_util.GetChildPids(processes, pid)
-
-  def GetCommandLine(self, pid):
-    procs = self._cri.ListProcesses()
-    return next((proc[1] for proc in procs if proc[0] == pid), None)
+  def GetOSVersionDetailString(self):
+    return ''  # TODO(kbr): Implement this.
 
   def CanFlushIndividualFilesFromSystemCache(self):
     return True
@@ -144,15 +117,6 @@ class CrosPlatformBackend(
     self.RunCommand(['chmod', '+x', flush_command])
     self.RunCommand([flush_command, '--recurse', directory])
 
-  def CanMonitorPower(self):
-    return self._powermonitor.CanMonitorPower()
-
-  def StartMonitoringPower(self, browser):
-    self._powermonitor.StartMonitoringPower(browser)
-
-  def StopMonitoringPower(self):
-    return self._powermonitor.StopMonitoringPower()
-
   def PathExists(self, path, timeout=None, retries=None):
     if timeout or retries:
       logging.warning(
@@ -160,8 +124,18 @@ class CrosPlatformBackend(
     return self._cri.FileExistsOnDevice(path)
 
   def CanTakeScreenshot(self):
-    # crbug.com/609001: screenshots don't work on VMs.
-    return not self.cri.IsRunningOnVM()
+    return True
 
   def TakeScreenshot(self, file_path):
     return self._cri.TakeScreenshot(file_path)
+
+  def GetTypExpectationsTags(self):
+    tags = super(CrosPlatformBackend, self).GetTypExpectationsTags()
+    tags.append('desktop')
+    if self.cri.local:
+      tags.append('chromeos-local')
+    else:
+      tags.append('chromeos-remote')
+    if self.cri.GetBoard():
+      tags.append('chromeos-board-%s' % self.cri.GetBoard())
+    return tags

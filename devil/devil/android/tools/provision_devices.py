@@ -3,7 +3,6 @@
 # Copyright (c) 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Provisions Android devices with settings required for bots.
 
 Usage:
@@ -27,30 +26,34 @@ import _strptime  # pylint: disable=unused-import
 
 if __name__ == '__main__':
   sys.path.append(
-      os.path.abspath(os.path.join(os.path.dirname(__file__),
-                                   '..', '..', '..')))
+      os.path.abspath(
+          os.path.join(os.path.dirname(__file__), '..', '..', '..')))
 
-from devil import devil_env
 from devil.android import battery_utils
-from devil.android import device_blacklist
+from devil.android import device_denylist
 from devil.android import device_errors
 from devil.android import device_temp_file
 from devil.android import device_utils
 from devil.android import settings
-from devil.android.constants import chrome
 from devil.android.sdk import adb_wrapper
+from devil.android.sdk import intent
 from devil.android.sdk import keyevent
+from devil.android.sdk import shared_prefs
 from devil.android.sdk import version_codes
 from devil.android.tools import script_common
 from devil.constants import exit_codes
-from devil.utils import run_tests_helper
+from devil.utils import logging_common
 from devil.utils import timeout_retry
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_WEBVIEW_PATHS = ['/system/app/webview', '/system/app/WebViewGoogle']
+_SYSTEM_APP_DIRECTORIES = ['/system/app/', '/system/priv-app/']
+_SYSTEM_WEBVIEW_NAMES = ['webview', 'WebViewGoogle']
 _CHROME_PACKAGE_REGEX = re.compile('.*chrom.*')
 _TOMBSTONE_REGEX = re.compile('tombstone.*')
+_STANDALONE_VR_DEVICES = [
+    'vega',  # Lenovo Mirage Solo
+]
 
 
 class _DEFAULT_TIMEOUTS(object):
@@ -62,43 +65,51 @@ class _DEFAULT_TIMEOUTS(object):
 
 
 class ProvisionStep(object):
-
   def __init__(self, cmd, reboot=False):
     self.cmd = cmd
     self.reboot = reboot
 
 
-def ProvisionDevices(
-    devices,
-    blacklist_file,
-    adb_key_files=None,
-    disable_location=False,
-    disable_mock_location=False,
-    disable_network=False,
-    disable_system_chrome=False,
-    emulators=False,
-    enable_java_debug=False,
-    max_battery_temp=None,
-    min_battery_level=None,
-    output_device_blacklist=None,
-    reboot_timeout=None,
-    remove_system_webview=False,
-    wipe=True):
-  blacklist = (device_blacklist.Blacklist(blacklist_file)
-               if blacklist_file
-               else None)
-  devices = script_common.GetDevices(devices, blacklist)
-  devices = [d for d in devices
-             if not emulators or d.adb.is_emulator]
+def ProvisionDevices(devices,
+                     denylist_file,
+                     adb_key_files=None,
+                     disable_location=False,
+                     disable_mock_location=False,
+                     disable_network=False,
+                     disable_system_chrome=False,
+                     emulators=False,
+                     enable_java_debug=False,
+                     max_battery_temp=None,
+                     min_battery_level=None,
+                     output_device_denylist=None,
+                     reboot_timeout=None,
+                     remove_system_webview=False,
+                     system_app_remove_list=None,
+                     system_package_remove_list=None,
+                     wipe=True):
+  denylist = (device_denylist.Denylist(denylist_file)
+              if denylist_file else None)
+  system_app_remove_list = system_app_remove_list or []
+  system_package_remove_list = system_package_remove_list or []
+  try:
+    devices = script_common.GetDevices(devices, denylist)
+  except device_errors.NoDevicesError:
+    logging.error('No available devices to provision.')
+    if denylist:
+      logging.error('Local device denylist: %s', denylist.Read())
+    raise
+  devices = [d for d in devices if not emulators or d.is_emulator]
   parallel_devices = device_utils.DeviceUtils.parallel(devices)
 
   steps = []
   if wipe:
     steps += [ProvisionStep(lambda d: Wipe(d, adb_key_files), reboot=True)]
-  steps += [ProvisionStep(
-      lambda d: SetProperties(d, enable_java_debug, disable_location,
-                              disable_mock_location),
-      reboot=not emulators)]
+  steps += [
+      ProvisionStep(
+          lambda d: SetProperties(d, enable_java_debug, disable_location,
+                                  disable_mock_location),
+          reboot=not emulators)
+  ]
 
   if disable_network:
     steps.append(ProvisionStep(DisableNetwork))
@@ -107,31 +118,38 @@ def ProvisionDevices(
     steps.append(ProvisionStep(DisableSystemChrome))
 
   if max_battery_temp:
-    steps.append(ProvisionStep(
-        lambda d: WaitForTemperature(d, max_battery_temp)))
+    steps.append(
+        ProvisionStep(lambda d: WaitForBatteryTemperature(d, max_battery_temp)))
 
   if min_battery_level:
-    steps.append(ProvisionStep(
-        lambda d: WaitForCharge(d, min_battery_level)))
+    steps.append(ProvisionStep(lambda d: WaitForCharge(d, min_battery_level)))
 
   if remove_system_webview:
-    steps.append(ProvisionStep(RemoveSystemWebView))
+    system_app_remove_list.extend(_SYSTEM_WEBVIEW_NAMES)
 
+  if system_app_remove_list or system_package_remove_list:
+    steps.append(
+        ProvisionStep(lambda d: RemoveSystemApps(d, system_app_remove_list,
+                                                 system_package_remove_list)))
+
+  steps.append(ProvisionStep(RebootDevice))
   steps.append(ProvisionStep(SetDate))
+  steps.append(ProvisionStep(LogDeviceProperties))
   steps.append(ProvisionStep(CheckExternalStorage))
+  steps.append(ProvisionStep(StandaloneVrDeviceSetup))
 
-  parallel_devices.pMap(ProvisionDevice, steps, blacklist, reboot_timeout)
+  parallel_devices.pMap(ProvisionDevice, steps, denylist, reboot_timeout)
 
-  blacklisted_devices = blacklist.Read() if blacklist else []
-  if output_device_blacklist:
-    with open(output_device_blacklist, 'w') as f:
-      json.dump(blacklisted_devices, f)
-  if all(d in blacklisted_devices for d in devices):
+  denylisted_devices = denylist.Read() if denylist else []
+  if output_device_denylist:
+    with open(output_device_denylist, 'w') as f:
+      json.dump(denylisted_devices, f)
+  if all(d in denylisted_devices for d in devices):
     raise device_errors.NoDevicesError
   return 0
 
 
-def ProvisionDevice(device, steps, blacklist, reboot_timeout=None):
+def ProvisionDevice(device, steps, denylist, reboot_timeout=None):
   try:
     if not reboot_timeout:
       if device.build_version_sdk >= version_codes.LOLLIPOP:
@@ -151,26 +169,30 @@ def ProvisionDevice(device, steps, blacklist, reboot_timeout=None):
         device.adb.WaitForDevice()
 
   except device_errors.CommandTimeoutError:
-    logger.exception('Timed out waiting for device %s. Adding to blacklist.',
+    logger.exception('Timed out waiting for device %s. Adding to denylist.',
                      str(device))
-    if blacklist:
-      blacklist.Extend([str(device)], reason='provision_timeout')
+    if denylist:
+      denylist.Extend([str(device)], reason='provision_timeout')
 
-  except device_errors.CommandFailedError:
-    logger.exception('Failed to provision device %s. Adding to blacklist.',
+  except (device_errors.CommandFailedError,
+          device_errors.DeviceUnreachableError):
+    logger.exception('Failed to provision device %s. Adding to denylist.',
                      str(device))
-    if blacklist:
-      blacklist.Extend([str(device)], reason='provision_failure')
+    if denylist:
+      denylist.Extend([str(device)], reason='provision_failure')
 
 
 def Wipe(device, adb_key_files=None):
-  if (device.IsUserBuild() or
-      device.build_version_sdk >= version_codes.MARSHMALLOW):
+  if (device.IsUserBuild()
+      or device.build_version_sdk >= version_codes.MARSHMALLOW):
     WipeChromeData(device)
 
-    package = "com.google.android.gms"
+    package = 'com.google.android.gms'
     version_name = device.GetApplicationVersion(package)
-    logger.info("Version name for %s is %s", package, version_name)
+    if version_name:
+      logger.info('Version name for %s is %s', package, version_name)
+    else:
+      logger.info('Package %s is not installed', package)
   else:
     WipeDevice(device, adb_key_files)
 
@@ -194,15 +216,16 @@ def WipeChromeData(device):
   """
   try:
     if device.IsUserBuild():
-      _UninstallIfMatch(device, _CHROME_PACKAGE_REGEX,
-                        chrome.PACKAGE_INFO['chrome_stable'].package)
-      device.RunShellCommand('rm -rf %s/*' % device.GetExternalStoragePath(),
-                             check_return=True)
-      device.RunShellCommand('rm -rf /data/local/tmp/*', check_return=True)
+      _UninstallIfMatch(device, _CHROME_PACKAGE_REGEX)
+      device.RunShellCommand(
+          'rm -rf %s/*' % device.GetExternalStoragePath(),
+          shell=True,
+          check_return=True)
+      device.RunShellCommand(
+          'rm -rf /data/local/tmp/*', shell=True, check_return=True)
     else:
       device.EnableRoot()
-      _UninstallIfMatch(device, _CHROME_PACKAGE_REGEX,
-                        chrome.PACKAGE_INFO['chrome_stable'].package)
+      _UninstallIfMatch(device, _CHROME_PACKAGE_REGEX)
       _WipeUnderDirIfMatch(device, '/data/app-lib/', _CHROME_PACKAGE_REGEX)
       _WipeUnderDirIfMatch(device, '/data/tombstones/', _TOMBSTONE_REGEX)
 
@@ -210,23 +233,27 @@ def WipeChromeData(device):
       _WipeFileOrDir(device, '/data/local/chrome-command-line')
       _WipeFileOrDir(device, '/data/local/.config/')
       _WipeFileOrDir(device, '/data/local/tmp/')
-      device.RunShellCommand('rm -rf %s/*' % device.GetExternalStoragePath(),
-                             check_return=True)
+      device.RunShellCommand(
+          'rm -rf %s/*' % device.GetExternalStoragePath(),
+          shell=True,
+          check_return=True)
   except device_errors.CommandFailedError:
     logger.exception('Possible failure while wiping the device. '
                      'Attempting to continue.')
 
 
-def _UninstallIfMatch(device, pattern, app_to_keep):
-  installed_packages = device.RunShellCommand(['pm', 'list', 'packages'])
+def _UninstallIfMatch(device, pattern):
+  installed_packages = device.RunShellCommand(['pm', 'list', 'packages'],
+                                              check_return=True)
   installed_system_packages = [
-      pkg.split(':')[1] for pkg in device.RunShellCommand(['pm', 'list',
-                                                           'packages', '-s'])]
+      pkg.split(':')[1]
+      for pkg in device.RunShellCommand(['pm', 'list', 'packages', '-s'],
+                                        check_return=True)
+  ]
   for package_output in installed_packages:
     package = package_output.split(":")[1]
-    if pattern.match(package) and not package == app_to_keep:
-      if not device.IsUserBuild() or package not in installed_system_packages:
-        device.Uninstall(package)
+    if pattern.match(package) and package not in installed_system_packages:
+      device.Uninstall(package)
 
 
 def _WipeUnderDirIfMatch(device, path, pattern):
@@ -256,10 +283,9 @@ def WipeDevice(device, adb_key_files):
     device.EnableRoot()
     device_authorized = device.FileExists(adb_wrapper.ADB_KEYS_FILE)
     if device_authorized:
-      adb_keys = device.ReadFile(adb_wrapper.ADB_KEYS_FILE,
-                                 as_root=True).splitlines()
-    device.RunShellCommand(['wipe', 'data'],
-                           as_root=True, check_return=True)
+      adb_keys = device.ReadFile(
+          adb_wrapper.ADB_KEYS_FILE, as_root=True).splitlines()
+    device.RunShellCommand(['wipe', 'data'], as_root=True, check_return=True)
     device.adb.WaitForDevice()
 
     if device_authorized:
@@ -280,12 +306,15 @@ def WipeDevice(device, adb_key_files):
 def _WriteAdbKeysFile(device, adb_keys_string):
   dir_path = posixpath.dirname(adb_wrapper.ADB_KEYS_FILE)
   device.RunShellCommand(['mkdir', '-p', dir_path],
-                         as_root=True, check_return=True)
+                         as_root=True,
+                         check_return=True)
   device.RunShellCommand(['restorecon', dir_path],
-                         as_root=True, check_return=True)
+                         as_root=True,
+                         check_return=True)
   device.WriteFile(adb_wrapper.ADB_KEYS_FILE, adb_keys_string, as_root=True)
   device.RunShellCommand(['restorecon', adb_wrapper.ADB_KEYS_FILE],
-                         as_root=True, check_return=True)
+                         as_root=True,
+                         check_return=True)
 
 
 def SetProperties(device, enable_java_debug, disable_location,
@@ -299,21 +328,20 @@ def SetProperties(device, enable_java_debug, disable_location,
     _ConfigureLocalProperties(device, enable_java_debug)
   else:
     logger.warning('Cannot configure properties in user builds.')
-  settings.ConfigureContentSettings(
-      device, settings.DETERMINISTIC_DEVICE_SETTINGS)
+  settings.ConfigureContentSettings(device,
+                                    settings.DETERMINISTIC_DEVICE_SETTINGS)
   if disable_location:
-    settings.ConfigureContentSettings(
-        device, settings.DISABLE_LOCATION_SETTINGS)
+    settings.ConfigureContentSettings(device,
+                                      settings.DISABLE_LOCATION_SETTINGS)
   else:
-    settings.ConfigureContentSettings(
-        device, settings.ENABLE_LOCATION_SETTINGS)
+    settings.ConfigureContentSettings(device, settings.ENABLE_LOCATION_SETTINGS)
 
   if disable_mock_location:
-    settings.ConfigureContentSettings(
-        device, settings.DISABLE_MOCK_LOCATION_SETTINGS)
+    settings.ConfigureContentSettings(device,
+                                      settings.DISABLE_MOCK_LOCATION_SETTINGS)
   else:
-    settings.ConfigureContentSettings(
-        device, settings.ENABLE_MOCK_LOCATION_SETTINGS)
+    settings.ConfigureContentSettings(device,
+                                      settings.ENABLE_MOCK_LOCATION_SETTINGS)
 
   settings.SetLockScreenSettings(device)
 
@@ -322,42 +350,70 @@ def SetProperties(device, enable_java_debug, disable_location,
 
 
 def DisableNetwork(device):
-  settings.ConfigureContentSettings(
-      device, settings.NETWORK_DISABLED_SETTINGS)
+  settings.ConfigureContentSettings(device, settings.NETWORK_DISABLED_SETTINGS)
   if device.build_version_sdk >= version_codes.MARSHMALLOW:
     # Ensure that NFC is also switched off.
     device.RunShellCommand(['svc', 'nfc', 'disable'],
-                           as_root=True, check_return=True)
+                           as_root=True,
+                           check_return=True)
 
 
 def DisableSystemChrome(device):
   # The system chrome version on the device interferes with some tests.
   device.RunShellCommand(['pm', 'disable', 'com.android.chrome'],
+                         as_root=True,
                          check_return=True)
 
 
-def RemoveSystemWebView(device):
-  if any(device.PathExists(p) for p in _SYSTEM_WEBVIEW_PATHS):
-    logger.info('System WebView exists and needs to be removed')
-    if device.HasRoot():
-      # Disabled Marshmallow's Verity security feature
+def _FindSystemPackagePaths(device, system_package_list):
+  found_paths = []
+  for system_package in system_package_list:
+    found_paths.extend(device.GetApplicationPaths(system_package))
+  return [p for p in found_paths if p.startswith('/system/')]
+
+
+def _FindSystemAppPaths(device, system_app_list):
+  found_paths = []
+  for system_app in system_app_list:
+    for directory in _SYSTEM_APP_DIRECTORIES:
+      path = os.path.join(directory, system_app)
+      if device.PathExists(path):
+        found_paths.append(path)
+  return found_paths
+
+
+def RemoveSystemApps(device, system_app_remove_list,
+                     system_package_remove_list):
+  """Attempts to remove the provided system apps from the given device.
+
+  Arguments:
+    device: The device to remove the system apps from.
+    system_app_remove_list: A list of app names to remove, e.g.
+        ['WebViewGoogle', 'GoogleVrCore']
+    system_package_remove_list: A list of app packages to remove, e.g.
+        ['com.google.android.webview']
+  """
+  device.EnableRoot()
+  if device.HasRoot():
+    system_app_paths = (
+        _FindSystemAppPaths(device, system_app_remove_list) +
+        _FindSystemPackagePaths(device, system_package_remove_list))
+    if system_app_paths:
+      # Disable Marshmallow's Verity security feature
       if device.build_version_sdk >= version_codes.MARSHMALLOW:
+        logger.info('Disabling Verity on %s', device.serial)
         device.adb.DisableVerity()
         device.Reboot()
         device.WaitUntilFullyBooted()
         device.EnableRoot()
 
-      # This is required, e.g., to replace the system webview on a device.
       device.adb.Remount()
       device.RunShellCommand(['stop'], check_return=True)
-      device.RunShellCommand(['rm', '-rf'] + _SYSTEM_WEBVIEW_PATHS,
-                             check_return=True)
+      device.RemovePath(system_app_paths, force=True, recursive=True)
       device.RunShellCommand(['start'], check_return=True)
-    else:
-      logger.warning('Cannot remove system webview from a non-rooted device')
   else:
-    logger.info('System WebView already removed')
-
+    raise device_errors.CommandFailedError(
+        'Failed to remove system apps from non-rooted device', str(device))
 
 
 def _ConfigureLocalProperties(device, java_debug=True):
@@ -368,19 +424,17 @@ def _ConfigureLocalProperties(device, java_debug=True):
       'ro.test_harness=1',
       'ro.audio.silent=1',
       'ro.setupwizard.mode=DISABLED',
-      ]
+  ]
   if java_debug:
-    local_props.append(
-        '%s=all' % device_utils.DeviceUtils.JAVA_ASSERT_PROPERTY)
+    local_props.append('%s=all' % device_utils.DeviceUtils.JAVA_ASSERT_PROPERTY)
     local_props.append('debug.checkjni=1')
   try:
     device.WriteFile(
-        device.LOCAL_PROPERTIES_PATH,
-        '\n'.join(local_props), as_root=True)
+        device.LOCAL_PROPERTIES_PATH, '\n'.join(local_props), as_root=True)
     # Android will not respect the local props file if it is world writable.
-    device.RunShellCommand(
-        ['chmod', '644', device.LOCAL_PROPERTIES_PATH],
-        as_root=True, check_return=True)
+    device.RunShellCommand(['chmod', '644', device.LOCAL_PROPERTIES_PATH],
+                           as_root=True,
+                           check_return=True)
   except device_errors.CommandFailedError:
     logger.exception('Failed to configure local properties.')
 
@@ -401,7 +455,7 @@ def WaitForCharge(device, min_battery_level):
     battery.ChargeDeviceToLevel(min_battery_level)
 
 
-def WaitForTemperature(device, max_battery_temp):
+def WaitForBatteryTemperature(device, max_battery_temp):
   try:
     battery = battery_utils.BatteryUtils(device)
     battery.LetBatteryCoolToTemperature(max_battery_temp)
@@ -420,6 +474,9 @@ def SetDate(device):
       set_date_command = ['date', '-s']
       get_date_command = ['date']
 
+    # Android version O does not allow to set date without root enabled.
+    device.EnableRoot()
+
     # TODO(jbudorick): This is wrong on pre-M devices -- get/set are
     # dealing in local time, but we're setting based on GMT.
     strgmtime = time.strftime(date_format, time.gmtime())
@@ -428,7 +485,8 @@ def SetDate(device):
 
     get_date_command.append('+"%Y%m%d.%H%M%S"')
     device_time = device.RunShellCommand(
-        get_date_command, as_root=True, single_line=True).replace('"', '')
+        get_date_command, check_return=True, as_root=True,
+        single_line=True).replace('"', '')
     device_time = datetime.datetime.strptime(device_time, "%Y%m%d.%H%M%S")
     correct_time = datetime.datetime.strptime(strgmtime, date_format)
     tdelta = (correct_time - device_time).seconds
@@ -449,14 +507,26 @@ def SetDate(device):
         _set_and_verify_date, wait_period=1, max_tries=2):
       raise device_errors.CommandFailedError(
           'Failed to set date & time.', device_serial=str(device))
+    device.EnableRoot()
+    # The following intent can take a bit to complete when ran shortly after
+    # device boot-up.
+    device.BroadcastIntent(
+        intent.Intent(action='android.intent.action.TIME_SET'), timeout=180)
 
 
 def LogDeviceProperties(device):
-  props = device.RunShellCommand('getprop', check_return=True)
+  props = device.RunShellCommand(['getprop'], check_return=True)
   for prop in props:
     logger.info('  %s', prop)
 
 
+def RebootDevice(device):
+  device.Reboot(False, retries=0)
+  device.adb.WaitForDevice()
+
+
+# TODO(jbudorick): Relocate this either to device_utils or a separate
+# and more intentionally reusable layer on top of device_utils.
 def CheckExternalStorage(device):
   """Checks that storage is writable and if not makes it writable.
 
@@ -470,11 +540,39 @@ def CheckExternalStorage(device):
   except device_errors.CommandFailedError:
     logger.info('External storage not writable. Remounting / as RW')
     device.RunShellCommand(['mount', '-o', 'remount,rw', '/'],
-                           check_return=True, as_root=True)
+                           check_return=True,
+                           as_root=True)
     device.EnableRoot()
     with device_temp_file.DeviceTempFile(
         device.adb, suffix='.sh', dir=device.GetExternalStoragePath()) as f:
       device.WriteFile(f.name, 'test')
+
+
+def StandaloneVrDeviceSetup(device):
+  """Performs any additional setup necessary for standalone Android VR devices.
+
+  Arguments:
+    device: The device to check.
+  """
+  if device.product_name not in _STANDALONE_VR_DEVICES:
+    return
+
+  # Modify VrCore's settings so that any first time setup, etc. is skipped.
+  shared_pref = shared_prefs.SharedPrefs(
+      device,
+      'com.google.vr.vrcore',
+      'VrCoreSettings.xml',
+      use_encrypted_path=True)
+  shared_pref.Load()
+  # Skip first time setup.
+  shared_pref.SetBoolean('DaydreamSetupComplete', True)
+  # Disable the automatic prompt that shows anytime the device detects that a
+  # controller isn't connected.
+  shared_pref.SetBoolean('gConfigFlags:controller_recovery_enabled', False)
+  # Use an automated controller instead of a real one so we get past the
+  # controller pairing screen that's shown on startup.
+  shared_pref.SetBoolean('UseAutomatedController', True)
+  shared_pref.Commit()
 
 
 def main(raw_args):
@@ -489,76 +587,104 @@ def main(raw_args):
 
   parser = argparse.ArgumentParser(
       description='Provision Android devices with settings required for bots.')
+  logging_common.AddLoggingArguments(parser)
+  script_common.AddDeviceArguments(parser)
+  script_common.AddEnvironmentArguments(parser)
   parser.add_argument(
-      '-d', '--device', metavar='SERIAL', action='append', dest='devices',
-      help='the serial number of the device to be provisioned '
-           '(the default is to provision all devices attached)')
-  parser.add_argument(
-      '--adb-path',
-      help='Absolute path to the adb binary to use.')
-  parser.add_argument('--blacklist-file', help='Device blacklist JSON file.')
-  parser.add_argument(
-      '--skip-wipe', action='store_true', default=False,
-      help="don't wipe device data during provisioning")
-  parser.add_argument(
-      '--reboot-timeout', metavar='SECS', type=int,
-      help='when wiping the device, max number of seconds to'
-           ' wait after each reboot '
-           '(default: %s)' % _DEFAULT_TIMEOUTS.HELP_TEXT)
-  parser.add_argument(
-      '--min-battery-level', type=int, metavar='NUM',
-      help='wait for the device to reach this minimum battery'
-           ' level before trying to continue')
-  parser.add_argument(
-      '--disable-location', action='store_true',
-      help='disable Google location services on devices')
-  parser.add_argument(
-      '--disable-mock-location', action='store_true', default=False,
-      help='Set ALLOW_MOCK_LOCATION to false')
-  parser.add_argument(
-      '--disable-network', action='store_true',
-      help='disable network access on devices')
-  parser.add_argument(
-      '--disable-java-debug', action='store_false',
-      dest='enable_java_debug', default=True,
-      help='disable Java property asserts and JNI checking')
-  parser.add_argument(
-      '--disable-system-chrome', action='store_true',
-      help='Disable the system chrome from devices.')
-  parser.add_argument(
-      '--remove-system-webview', action='store_true',
-      help='Remove the system webview from devices.')
-  parser.add_argument(
-      '--adb-key-files', type=str, nargs='+',
+      '--adb-key-files',
+      type=str,
+      nargs='+',
       help='list of adb keys to push to device')
   parser.add_argument(
-      '-v', '--verbose', action='count', default=1,
-      help='Log more information.')
+      '--disable-location',
+      action='store_true',
+      help='disable Google location services on devices')
   parser.add_argument(
-      '--max-battery-temp', type=int, metavar='NUM',
+      '--disable-mock-location',
+      action='store_true',
+      default=False,
+      help='Set ALLOW_MOCK_LOCATION to false')
+  parser.add_argument(
+      '--disable-network',
+      action='store_true',
+      help='disable network access on devices')
+  parser.add_argument(
+      '--disable-java-debug',
+      action='store_false',
+      dest='enable_java_debug',
+      default=True,
+      help='disable Java property asserts and JNI checking')
+  parser.add_argument(
+      '--disable-system-chrome',
+      action='store_true',
+      help='DEPRECATED: use --remove-system-packages com.android.google '
+      'Disable the system chrome from devices.')
+  parser.add_argument(
+      '--emulators',
+      action='store_true',
+      help='provision only emulators and ignore usb devices '
+      '(this will not wipe emulators)')
+  parser.add_argument(
+      '--max-battery-temp',
+      type=int,
+      metavar='NUM',
       help='Wait for the battery to have this temp or lower.')
   parser.add_argument(
-      '--output-device-blacklist',
-      help='Json file to output the device blacklist.')
+      '--min-battery-level',
+      type=int,
+      metavar='NUM',
+      help='wait for the device to reach this minimum battery'
+      ' level before trying to continue')
+  parser.add_argument('--output-device-denylist',
+                      help='Json file to output the device denylist.')
   parser.add_argument(
-      '--emulators', action='store_true',
-      help='provision only emulators and ignore usb devices')
+      '--reboot-timeout',
+      metavar='SECS',
+      type=int,
+      help='when wiping the device, max number of seconds to'
+      ' wait after each reboot '
+      '(default: %s)' % _DEFAULT_TIMEOUTS.HELP_TEXT)
+  parser.add_argument(
+      '--remove-system-apps',
+      nargs='*',
+      dest='system_app_remove_list',
+      help='DEPRECATED: use --remove-system-packages instead. '
+      'The names of system apps to remove. ')
+  parser.add_argument(
+      '--remove-system-packages',
+      nargs='*',
+      dest='system_package_remove_list',
+      help='The names of system packages to remove.')
+  parser.add_argument(
+      '--remove-system-webview',
+      action='store_true',
+      help='DEPRECATED: use --remove-system-packages '
+      'com.google.android.webview com.android.webview '
+      'Remove the system webview from devices.')
+  parser.add_argument(
+      '--skip-wipe',
+      action='store_true',
+      default=False,
+      help='do not wipe device data during provisioning')
+
+  # No-op arguments for compatibility with build/android/provision_devices.py.
+  # TODO(jbudorick): Remove these once all callers have stopped using them.
+  parser.add_argument(
+      '--chrome-specific-wipe', action='store_true', help=argparse.SUPPRESS)
+  parser.add_argument('--phase', action='append', help=argparse.SUPPRESS)
+  parser.add_argument(
+      '-r', '--auto-reconnect', action='store_true', help=argparse.SUPPRESS)
+  parser.add_argument('-t', '--target', help=argparse.SUPPRESS)
+
   args = parser.parse_args(raw_args)
 
-  run_tests_helper.SetLogLevel(args.verbose)
-
-  devil_dynamic_config = devil_env.EmptyConfig()
-  if args.adb_path:
-    devil_dynamic_config['dependencies'].update(
-        devil_env.LocalConfigItem(
-            'adb', devil_env.GetPlatform(), args.adb_path))
-
-  devil_env.config.Initialize(configs=[devil_dynamic_config])
+  logging_common.InitializeLogging(args)
+  script_common.InitializeEnvironment(args)
 
   try:
     return ProvisionDevices(
         args.devices,
-        args.blacklist_file,
+        args.denylist_file,
         adb_key_files=args.adb_key_files,
         disable_location=args.disable_location,
         disable_mock_location=args.disable_mock_location,
@@ -568,11 +694,14 @@ def main(raw_args):
         enable_java_debug=args.enable_java_debug,
         max_battery_temp=args.max_battery_temp,
         min_battery_level=args.min_battery_level,
-        output_device_blacklist=args.output_device_blacklist,
+        output_device_denylist=args.output_device_denylist,
         reboot_timeout=args.reboot_timeout,
         remove_system_webview=args.remove_system_webview,
-        wipe=not args.skip_wipe)
+        system_app_remove_list=args.system_app_remove_list,
+        system_package_remove_list=args.system_package_remove_list,
+        wipe=not args.skip_wipe and not args.emulators)
   except (device_errors.DeviceUnreachableError, device_errors.NoDevicesError):
+    logging.exception('Unable to provision local devices.')
     return exit_codes.INFRA
 
 

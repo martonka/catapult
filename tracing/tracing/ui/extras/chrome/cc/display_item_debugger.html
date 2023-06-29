@@ -19,84 +19,6 @@ found in the LICENSE file.
 <link rel="import" href="/tracing/ui/extras/chrome/cc/picture_ops_list_view.html">
 
 <template id="tr-ui-e-chrome-cc-display-item-debugger-template">
-  <style>
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger {
-    -webkit-flex: 1 1 auto;
-    display: -webkit-flex;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > left-panel {
-    -webkit-flex-direction: column;
-    display: -webkit-flex;
-    min-width: 300px;
-    overflow-y: auto;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > left-panel >
-        display-item-info {
-    -webkit-flex: 1 1 auto;
-    padding-top: 2px;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > left-panel >
-        display-item-info .title {
-    font-weight: bold;
-    margin-left: 5px;
-    margin-right: 5px;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > left-panel >
-        display-item-info .export {
-    margin: 5px;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > tr-ui-b-drag-handle {
-    -webkit-flex: 0 0 auto;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > right-panel {
-    -webkit-flex: 1 1 auto;
-    display: -webkit-flex;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > left-panel >
-      display-item-info > header {
-    border-bottom: 1px solid #555;
-  }
-
-  /*************************************************/
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > right-panel >
-      tr-ui-e-chrome-cc-picture-ops-list-view.hasPictureOps {
-    display: block;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > right-panel >
-        tr-ui-b-drag-handle.hasPictureOps {
-    display: block;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > right-panel >
-        tr-ui-e-chrome-cc-picture-ops-list-view {
-    display: none;
-    overflow-y: auto;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger > right-panel >
-        tr-ui-b-drag-handle {
-    display: none;
-  }
-
-  * /deep/ tr-ui-e-chrome-cc-display-item-debugger raster-area {
-    -webkit-flex: 1 1 auto;
-    background-color: #ddd;
-    min-height: 200px;
-    min-width: 200px;
-    overflow-y: auto;
-    padding-left: 5px;
-  }
-  </style>
-
   <left-panel>
     <display-item-info>
       <header>
@@ -114,7 +36,11 @@ found in the LICENSE file.
     </display-item-info>
   </left-panel>
   <right-panel>
-    <raster-area><canvas></canvas></raster-area>
+    <raster-area>
+      <canvas-scroller>
+        <canvas></canvas>
+      </canvas-scroller>
+    </raster-area>
   </right-panel>
 </template>
 
@@ -122,7 +48,7 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.ui.e.chrome.cc', function() {
-  var THIS_DOC = document.currentScript.ownerDocument;
+  const THIS_DOC = document.currentScript.ownerDocument;
 
   /**
    * DisplayItemDebugger is a view of a DisplayItemListSnapshot for inspecting
@@ -130,26 +56,48 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
    *
    * @constructor
    */
-  var DisplayItemDebugger = tr.ui.b.define(
+  const DisplayItemDebugger = tr.ui.b.define(
       'tr-ui-e-chrome-cc-display-item-debugger');
 
   DisplayItemDebugger.prototype = {
     __proto__: HTMLDivElement.prototype,
 
-    decorate: function() {
-      var node = tr.ui.b.instantiateTemplate(
+    decorate() {
+      const node = tr.ui.b.instantiateTemplate(
           '#tr-ui-e-chrome-cc-display-item-debugger-template', THIS_DOC);
 
       Polymer.dom(this).appendChild(node);
+      this.style.flexGrow = 1;
+      this.style.flexShrink = 1;
+      this.style.flexBasis = 'auto';
+      this.style.display = 'flex';
+      this.style.minWidth = 0;
 
       this.pictureAsImageData_ = undefined;
       this.zoomScaleValue_ = 1;
 
       this.sizeInfo_ = Polymer.dom(this).querySelector('.size');
       this.rasterArea_ = Polymer.dom(this).querySelector('raster-area');
+      this.rasterArea_.style.flexGrow = 1;
+      this.rasterArea_.style.flexShrink = 1;
+      this.rasterArea_.style.flexBasis = 'auto';
+      this.rasterArea_.style.backgroundColor = '#ddd';
+      this.rasterArea_.style.minHeight = '200px';
+      this.rasterArea_.style.minWidth = '200px';
+      this.rasterArea_.style.paddingLeft = '5px';
+      this.rasterArea_.style.display = 'flex';
+      this.rasterArea_.style.flexDirection = 'column';
       this.rasterCanvas_ =
           Polymer.dom(this.rasterArea_).querySelector('canvas');
       this.rasterCtx_ = this.rasterCanvas_.getContext('2d');
+
+      const canvasScroller = Polymer.dom(this).querySelector('canvas-scroller');
+      canvasScroller.style.flexGrow = 1;
+      canvasScroller.style.flexShrink = 1;
+      canvasScroller.style.flexBasis = 'auto';
+      canvasScroller.style.minWidth = 0;
+      canvasScroller.style.minHeight = 0;
+      canvasScroller.style.overflow = 'auto';
 
       this.trackMouse_();
 
@@ -175,23 +123,52 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.skpExportButton_.addEventListener(
           'click', this.onExportSkPictureClicked_.bind(this));
 
-      var leftPanel = Polymer.dom(this).querySelector('left-panel');
+      const leftPanel = Polymer.dom(this).querySelector('left-panel');
+      leftPanel.style.flexGrow = 0;
+      leftPanel.style.flexShrink = 0;
+      leftPanel.style.flexBasis = 'auto';
+      leftPanel.style.minWidth = '200px';
+      leftPanel.style.overflow = 'auto';
 
-      var middleDragHandle = document.createElement('tr-ui-b-drag-handle');
+      leftPanel.children[0].paddingTop = '2px';
+      leftPanel.children[0].children[0].style.borderBottom = '1px solid #555';
+
+      const leftPanelTitle = leftPanel.querySelector('.title');
+      leftPanelTitle.style.fontWeight = 'bold';
+      leftPanelTitle.style.marginLeft = '5px';
+      leftPanelTitle.style.marginright = '5px';
+
+      for (const div of leftPanel.querySelectorAll('.export')) {
+        div.style.margin = '5px';
+      }
+
+      const middleDragHandle = document.createElement('tr-ui-b-drag-handle');
+      middleDragHandle.style.flexGrow = 0;
+      middleDragHandle.style.flexShrink = 0;
+      middleDragHandle.style.flexBasis = 'auto';
       middleDragHandle.horizontal = false;
       middleDragHandle.target = leftPanel;
 
-      var rightPanel = Polymer.dom(this).querySelector('right-panel');
+      const rightPanel = Polymer.dom(this).querySelector('right-panel');
+      rightPanel.style.display = 'flex';
+      rightPanel.style.flexGrow = 1;
+      rightPanel.style.flexShrink = 1;
+      rightPanel.style.flexBasis = 'auto';
+      rightPanel.style.minWidth = 0;
 
       this.infoBar_ = document.createElement('tr-ui-b-info-bar');
-      Polymer.dom(this.rasterArea_).insertBefore(
-          this.infoBar_, this.rasterCanvas_);
+      Polymer.dom(this.rasterArea_).insertBefore(this.infoBar_, canvasScroller);
 
       Polymer.dom(this).insertBefore(middleDragHandle, rightPanel);
 
       this.picture_ = undefined;
 
       this.pictureOpsListView_ = new tr.ui.e.chrome.cc.PictureOpsListView();
+      this.pictureOpsListView_.style.flexGrow = 0;
+      this.pictureOpsListView_.style.flexShrink = 0;
+      this.pictureOpsListView_.style.flexBasis = 'auto';
+      this.pictureOpsListView_.style.overflow = 'auto';
+      this.pictureOpsListView_.style.minWidth = '100px';
       Polymer.dom(rightPanel).insertBefore(
           this.pictureOpsListView_, this.rasterArea_);
 
@@ -213,7 +190,7 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
 
       this.displayItemListView_.clear();
       this.displayItemList_.items.forEach(function(item) {
-        var listItem = document.createElement(
+        const listItem = document.createElement(
             'tr-ui-e-chrome-cc-display-item-list-item');
         listItem.data = item;
         Polymer.dom(this.displayItemListView_).appendChild(listItem);
@@ -224,17 +201,17 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.picture_ = picture;
 
       // Hide the ops list if we are showing the "main" display item list.
-      var showOpsList = picture && picture !== this.displayItemList_;
+      const showOpsList = picture && picture !== this.displayItemList_;
       this.updateDrawOpsList_(showOpsList);
 
       if (picture) {
-        var size = this.getRasterCanvasSize_();
+        const size = this.getRasterCanvasSize_();
         this.rasterCanvas_.width = size.width;
         this.rasterCanvas_.height = size.height;
       }
 
-      var bounds = this.rasterArea_.getBoundingClientRect();
-      var selectorBounds = this.mouseModeSelector_.getBoundingClientRect();
+      const bounds = this.rasterArea_.getBoundingClientRect();
+      const selectorBounds = this.mouseModeSelector_.getBoundingClientRect();
       this.mouseModeSelector_.pos = {
         x: (bounds.right - selectorBounds.width - 10),
         y: bounds.top
@@ -245,31 +222,31 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.scheduleUpdateContents_();
     },
 
-    getRasterCanvasSize_: function() {
-      var style = window.getComputedStyle(this.rasterArea_);
-      var width = parseInt(style.width);
-      var height = parseInt(style.height);
+    getRasterCanvasSize_() {
+      const style = window.getComputedStyle(this.rasterArea_);
+      let width = parseInt(style.width);
+      let height = parseInt(style.height);
       if (this.picture_) {
         width = Math.max(width, this.picture_.layerRect.width);
         height = Math.max(height, this.picture_.layerRect.height);
       }
 
       return {
-        width: width,
-        height: height
+        width,
+        height
       };
     },
 
-    scheduleUpdateContents_: function() {
-      if (this.updateContentsPending_)
-        return;
+    scheduleUpdateContents_() {
+      if (this.updateContentsPending_) return;
+
       this.updateContentsPending_ = true;
       tr.b.requestAnimationFrameInThisFrameIfPossible(
           this.updateContents_.bind(this)
       );
     },
 
-    updateContents_: function() {
+    updateContents_() {
       this.updateContentsPending_ = false;
 
       if (this.picture_) {
@@ -279,15 +256,14 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       }
 
       // Return if picture hasn't finished rasterizing.
-      if (!this.pictureAsImageData_)
-        return;
+      if (!this.pictureAsImageData_) return;
 
       this.infoBar_.visible = false;
       this.infoBar_.removeAllButtons();
       if (this.pictureAsImageData_.error) {
         this.infoBar_.message = 'Cannot rasterize...';
         this.infoBar_.addButton('More info...', function(e) {
-          var overlay = new tr.ui.b.Overlay();
+          const overlay = new tr.ui.b.Overlay();
           Polymer.dom(overlay).textContent = this.pictureAsImageData_.error;
           overlay.visible = true;
           e.stopPropagation();
@@ -299,27 +275,28 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.drawPicture_();
     },
 
-    drawPicture_: function() {
-      var size = this.getRasterCanvasSize_();
-      if (size.width !== this.rasterCanvas_.width)
+    drawPicture_() {
+      const size = this.getRasterCanvasSize_();
+      if (size.width !== this.rasterCanvas_.width) {
         this.rasterCanvas_.width = size.width;
-      if (size.height !== this.rasterCanvas_.height)
+      }
+      if (size.height !== this.rasterCanvas_.height) {
         this.rasterCanvas_.height = size.height;
+      }
 
       this.rasterCtx_.clearRect(0, 0, size.width, size.height);
 
-      if (!this.picture_ || !this.pictureAsImageData_.imageData)
-        return;
+      if (!this.picture_ || !this.pictureAsImageData_.imageData) return;
 
-      var imgCanvas = this.pictureAsImageData_.asCanvas();
-      var w = imgCanvas.width;
-      var h = imgCanvas.height;
+      const imgCanvas = this.pictureAsImageData_.asCanvas();
+      const w = imgCanvas.width;
+      const h = imgCanvas.height;
       this.rasterCtx_.drawImage(imgCanvas, 0, 0, w, h,
-                                0, 0, w * this.zoomScaleValue_,
-                                h * this.zoomScaleValue_);
+          0, 0, w * this.zoomScaleValue_,
+          h * this.zoomScaleValue_);
     },
 
-    rasterize_: function() {
+    rasterize_() {
       if (this.picture_) {
         this.picture_.rasterize(
             {
@@ -329,51 +306,50 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       }
     },
 
-    onRasterComplete_: function(pictureAsImageData) {
+    onRasterComplete_(pictureAsImageData) {
       this.pictureAsImageData_ = pictureAsImageData;
       this.scheduleUpdateContents_();
     },
 
-    onDisplayItemListSelection_: function(e) {
-      var selected = this.displayItemListView_.selectedElement;
+    onDisplayItemListSelection_(e) {
+      const selected = this.displayItemListView_.selectedElement;
 
       if (!selected) {
         this.picture = this.displayItemList_;
         return;
       }
 
-      var index = Array.prototype.indexOf.call(
+      const index = Array.prototype.indexOf.call(
           this.displayItemListView_.children, selected);
-      var displayItem = this.displayItemList_.items[index];
-      if (displayItem && displayItem.skp64)
+      const displayItem = this.displayItemList_.items[index];
+      if (displayItem && displayItem.skp64) {
         this.picture = new tr.e.cc.Picture(
             displayItem.skp64, this.displayItemList_.layerRect);
-      else
+      } else {
         this.picture = undefined;
+      }
     },
 
-    onDisplayItemInfoClick_: function(e) {
-      if (e && e.target == this.displayItemInfo_) {
+    onDisplayItemInfoClick_(e) {
+      if (e && e.target === this.displayItemInfo_) {
         this.displayItemListView_.selectedElement = undefined;
       }
     },
 
-    updateDrawOpsList_: function(showOpsList) {
+    updateDrawOpsList_(showOpsList) {
       if (showOpsList) {
         this.pictureOpsListView_.picture = this.picture_;
         if (this.pictureOpsListView_.numOps > 0) {
-          Polymer.dom(this.pictureOpsListView_).classList.add('hasPictureOps');
-          Polymer.dom(this.pictureOpsListDragHandle_).classList.add(
-              'hasPictureOps');
+          this.pictureOpsListView_.style.display = 'block';
+          this.pictureOpsListDragHandle_.style.display = 'block';
         }
       } else {
-        Polymer.dom(this.pictureOpsListView_).classList.remove('hasPictureOps');
-        Polymer.dom(this.pictureOpsListDragHandle_).classList.remove(
-            'hasPictureOps');
+        this.pictureOpsListView_.style.display = 'none';
+        this.pictureOpsListDragHandle_.style.display = 'none';
       }
     },
 
-    trackMouse_: function() {
+    trackMouse_() {
       this.mouseModeSelector_ = document.createElement(
           'tr-ui-b-mouse-mode-selector');
       this.mouseModeSelector_.targetElement = this.rasterArea_;
@@ -393,7 +369,7 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
           this.onEndZoom_.bind(this));
     },
 
-    onBeginZoom_: function(e) {
+    onBeginZoom_(e) {
       this.isZooming_ = true;
 
       this.lastMouseViewPos_ = this.extractRelativeMousePosition_(e);
@@ -401,11 +377,10 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       e.preventDefault();
     },
 
-    onUpdateZoom_: function(e) {
-      if (!this.isZooming_)
-        return;
+    onUpdateZoom_(e) {
+      if (!this.isZooming_) return;
 
-      var currentMouseViewPos = this.extractRelativeMousePosition_(e);
+      const currentMouseViewPos = this.extractRelativeMousePosition_(e);
 
       // Take the distance the mouse has moved and we want to zoom at about
       // 1/1000th of that speed. 0.01 feels jumpy. This could possibly be tuned
@@ -419,58 +394,58 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.lastMouseViewPos_ = currentMouseViewPos;
     },
 
-    onEndZoom_: function(e) {
+    onEndZoom_(e) {
       this.lastMouseViewPos_ = undefined;
       this.isZooming_ = false;
       e.preventDefault();
     },
 
-    extractRelativeMousePosition_: function(e) {
+    extractRelativeMousePosition_(e) {
       return {
         x: e.clientX - this.rasterArea_.offsetLeft,
         y: e.clientY - this.rasterArea_.offsetTop
       };
     },
 
-    saveFile_: function(filename, rawData) {
-      if (!rawData)
-        return;
+    saveFile_(filename, rawData) {
+      if (!rawData) return;
 
       // Convert this String into an Uint8Array
-      var length = rawData.length;
-      var arrayBuffer = new ArrayBuffer(length);
-      var uint8Array = new Uint8Array(arrayBuffer);
-      for (var c = 0; c < length; c++)
+      const length = rawData.length;
+      const arrayBuffer = new ArrayBuffer(length);
+      const uint8Array = new Uint8Array(arrayBuffer);
+      for (let c = 0; c < length; c++) {
         uint8Array[c] = rawData.charCodeAt(c);
+      }
 
       // Create a blob URL from the binary array.
-      var blob = new Blob([uint8Array], {type: 'application/octet-binary'});
-      var blobUrl = window.URL.createObjectURL(blob);
+      const blob = new Blob([uint8Array], {type: 'application/octet-binary'});
+      const blobUrl = window.URL.createObjectURL(blob);
 
       // Create a link and click on it.
-      var link = document.createElementNS('http://www.w3.org/1999/xhtml', 'a');
+      const link = document.createElementNS('http://www.w3.org/1999/xhtml', 'a');
       link.href = blobUrl;
       link.download = filename;
-      var event = document.createEvent('MouseEvents');
+      const event = document.createEvent('MouseEvents');
       event.initMouseEvent(
           'click', true, false, window, 0, 0, 0, 0, 0,
           false, false, false, false, 0, null);
       link.dispatchEvent(event);
     },
 
-    onExportDisplayListClicked_: function() {
-      var rawData = JSON.stringify(this.displayItemList_.items);
+    onExportDisplayListClicked_() {
+      const rawData = JSON.stringify(this.displayItemList_.items);
       this.saveFile_(this.displayListFilename_.value, rawData);
     },
 
-    onExportSkPictureClicked_: function() {
-      var rawData = tr.b.Base64.atob(this.picture_.getBase64SkpData());
+    onExportSkPictureClicked_() {
+      const rawData = tr.b.Base64.atob(this.picture_.getBase64SkpData());
       this.saveFile_(this.skpFilename_.value, rawData);
     }
   };
 
   return {
-    DisplayItemDebugger: DisplayItemDebugger
+    DisplayItemDebugger,
   };
 });
 </script>

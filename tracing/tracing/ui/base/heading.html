@@ -7,7 +7,7 @@ found in the LICENSE file.
 
 <link rel='import' href='/tracing/ui/base/constants.html'>
 
-<dom-module id='tr-ui-heading'>
+<dom-module id='tr-ui-b-heading'>
   <template>
     <style>
     :host {
@@ -23,12 +23,11 @@ found in the LICENSE file.
       display: block;
       overflow-x: hidden;
       text-align: left;
-      text-overflow: ellipsis;
       white-space: nowrap;
     }
 
     #arrow {
-      -webkit-flex: 0 0 auto;
+      flex: 0 0 auto;
       font-family: sans-serif;
       margin-left: 5px;
       margin-right: 5px;
@@ -49,13 +48,13 @@ found in the LICENSE file.
 <script>
 'use strict';
 Polymer({
-  is: 'tr-ui-heading',
+  is: 'tr-ui-b-heading',
 
   DOWN_ARROW: String.fromCharCode(0x25BE),
   RIGHT_ARROW: String.fromCharCode(0x25B8),
 
-  ready: function(viewport) {
-    // Minus 6 == 1px border + 5px padding right.
+  ready(viewport) {
+    // Minus 6 === 1px border + 5px padding right.
     this.style.width = (tr.ui.b.constants.HEADING_WIDTH - 6) + 'px';
 
     this.heading_ = '';
@@ -71,16 +70,14 @@ Polymer({
   },
 
   set heading(text) {
-    if (this.heading_ === text)
-      return;
+    if (this.heading_ === text) return;
 
     this.heading_ = text;
     this.updateContents_();
   },
 
   set arrowVisible(val) {
-    if (this.arrowVisible_ === val)
-      return;
+    if (this.arrowVisible_ === val) return;
 
     this.arrowVisible_ = !!val;
     this.updateContents_();
@@ -91,8 +88,7 @@ Polymer({
   },
 
   set selectionGenerator(generator) {
-    if (this.selectionGenerator_ === generator)
-      return;
+    if (this.selectionGenerator_ === generator) return;
 
     this.selectionGenerator_ = generator;
     this.updateContents_();
@@ -103,18 +99,17 @@ Polymer({
   },
 
   set expanded(expanded) {
-    if (this.expanded_ === expanded)
-      return;
+    if (this.expanded_ === expanded) return;
 
     this.expanded_ = !!expanded;
     this.updateContents_();
   },
 
-  onHeadingDivClicked_: function() {
+  onHeadingDivClicked_() {
     this.dispatchEvent(new tr.b.Event('heading-clicked', true));
   },
 
-  updateContents_: function() {
+  updateContents_() {
     if (this.arrowVisible_) {
       this.$.arrow.style.display = '';
     } else {

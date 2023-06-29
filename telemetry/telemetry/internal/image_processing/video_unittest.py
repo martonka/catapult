@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import logging
 import os
 import unittest
@@ -28,15 +29,15 @@ class VideoTest(unittest.TestCase):
 
     vid = os.path.join(util.GetUnittestDataDir(), 'vid.mp4')
     expected_timestamps = [
-      0,
-      763,
-      783,
-      940,
-      1715,
-      1732,
-      1842,
-      1926,
-      ]
+        0,
+        763,
+        783,
+        940,
+        1715,
+        1732,
+        1842,
+        1926,
+    ]
 
     video_obj = video.Video(vid)
 

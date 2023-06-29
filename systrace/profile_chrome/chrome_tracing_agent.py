@@ -5,8 +5,9 @@
 import json
 import optparse
 import os
-import py_utils
 import re
+
+import py_utils
 
 from devil.android import device_errors
 from devil.android.sdk import intent
@@ -14,7 +15,7 @@ from systrace import trace_result
 from systrace import tracing_agents
 
 
-_DEFAULT_CHROME_CATEGORIES = '_DEFAULT_CHROME_CATEGORIES'
+DEFAULT_CHROME_CATEGORIES = '_DEFAULT_CHROME_CATEGORIES'
 _HEAP_PROFILE_MMAP_PROPERTY = 'heapprof.mmap'
 
 
@@ -163,8 +164,7 @@ def add_options(parser):
                          'Chrome\'s default categories. Chrome tracing can be '
                          'disabled with "--categories=\'\'". Use "list" to '
                          'see the available categories.',
-                         metavar='CHROME_CATEGORIES', dest='chrome_categories',
-                         default=_DEFAULT_CHROME_CATEGORIES)
+                         metavar='CHROME_CATEGORIES', dest='chrome_categories')
   chrome_opts.add_option('--trace-cc',
                          help='Deprecated, use --trace-frame-viewer.',
                          action='store_true')
@@ -203,6 +203,9 @@ def _ComputeChromeCategories(config):
   if config.trace_gpu:
     categories.append('disabled-by-default-gpu.debug*')
   if config.trace_flow:
+    categories.append('toplevel.flow')
+    # toplevel.flow was moved out of disabled-by-default, leaving here for
+    # compatibility with older versions of Chrome.
     categories.append('disabled-by-default-toplevel.flow')
   if config.trace_memory:
     categories.append('disabled-by-default-memory')
@@ -210,6 +213,8 @@ def _ComputeChromeCategories(config):
     categories.append('disabled-by-default-blink.scheduler')
     categories.append('disabled-by-default-cc.debug.scheduler')
     categories.append('disabled-by-default-renderer.scheduler')
+    categories.append('disabled-by-default-sequence_manager')
+    categories.append('sequence_manager')
   if config.chrome_categories:
     categories += config.chrome_categories.split(',')
   return categories

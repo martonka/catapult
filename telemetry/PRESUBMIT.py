@@ -9,9 +9,11 @@ def _CommonChecks(input_api, output_api):
   results += input_api.RunTests(input_api.canned_checks.GetPylint(
       input_api, output_api, extra_paths_list=_GetPathsToPrepend(input_api),
       pylintrc='pylintrc'))
-  results += _CheckNoMoreUsageOfDeprecatedCode(
-      input_api, output_api, deprecated_code='GetChromiumSrcDir()',
-      crbug_number=511332)
+  # TODO(https://crbug.com/1026296): Re-add this once the extra use from
+  # https://crrev.com/c/1913187 gets landed.
+  # results += _CheckNoMoreUsageOfDeprecatedCode(
+  #     input_api, output_api, deprecated_code='GetChromiumSrcDir()',
+  #     crbug_number=511332)
   return results
 
 
@@ -38,8 +40,9 @@ def _ValidateDependenciesFile(input_api, output_api, dependencies_path):
         input_api.os_path.join(telemetry_dir, 'json_format'),
         dependencies_path], input_api)
     if return_code:
-      results.append(output_api.PresubmitError(
-           'Validating %s failed:' % dependencies_path, long_text=out))
+      results.append(
+          output_api.PresubmitError(
+              'Validating %s failed:' % dependencies_path, long_text=out))
       break
     out, return_code = _RunArgs([
         input_api.python_executable,
@@ -102,7 +105,6 @@ def _GetPathsToPrepend(input_api):
       input_api.os_path.join(catapult_dir, 'devil'),
       input_api.os_path.join(catapult_dir, 'systrace'),
       input_api.os_path.join(catapult_dir, 'tracing'),
-      input_api.os_path.join(catapult_dir, 'common', 'battor'),
       input_api.os_path.join(catapult_dir, 'common', 'py_trace_event'),
 
       input_api.os_path.join(catapult_dir, 'third_party', 'mock'),
@@ -116,7 +118,7 @@ def _ValidateAllDependenciesFiles(input_api, output_api):
   results = []
   telemetry_dir = input_api.PresubmitLocalPath()
   binary_dependencies = input_api.os_path.join(
-      telemetry_dir, 'telemetry', 'internal', 'binary_dependencies.json')
+      telemetry_dir, 'telemetry', 'binary_dependencies.json')
   telemetry_unittest_dependencies = input_api.os_path.join(
       telemetry_dir, 'telemetry', 'telemetry_unittest_deps.json')
   for path in [binary_dependencies, telemetry_unittest_dependencies]:

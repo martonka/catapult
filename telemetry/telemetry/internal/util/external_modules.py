@@ -2,18 +2,30 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+from __future__ import absolute_import
 import importlib
+import logging
 
-from distutils import version
+from py_utils import modules_util
 
+
+# Map of module names to their required min/max version.
+# DEPRECATED: Do not add new modules to this dict. New external depencencies
+# should be provided via vpython instead. See: crbug.com/777865.
 MODULES = {
-  'cv2': (version.StrictVersion('2.4.8'), version.StrictVersion('3.0.0')),
-  'numpy': (version.StrictVersion('1.6.1'), None),
-  'psutil': (version.StrictVersion('0.5.0'), None),
+    'cv2': ('2.4.8', '3.0.0'),
+    'numpy': ('1.8.0', '1.21.2'),
+    'psutil': ('0.5.0', None),
 }
 
+
 def ImportRequiredModule(module):
-  """Tries to import the desired module.
+  """Tries to import the desired module (DEPRECATED).
+
+  External modules should be provided via vpython and imported using the
+  regular python `import` statement. To ensure a particular module version
+  has been loaded use modules_util.RequireVersion instead.
 
   Returns:
     The module on success, raises error on failure.
@@ -23,34 +35,30 @@ def ImportRequiredModule(module):
   if versions is None:
     raise NotImplementedError('Please teach telemetry about module %s.' %
                               module)
-  min_version, max_version = versions
 
   module = importlib.import_module(module)
-  try:
-    if ((min_version is not None and
-            version.StrictVersion(module.__version__) < min_version) or
-        (max_version is not None and
-            version.StrictVersion(module.__version__) >= max_version)):
-      raise ImportError(('Incorrect {0} version found, expected {1} <= version '
-                         '< {2}, found version {3}').format(
-          module, min_version, max_version, module.__version__))
-  except ValueError as e:
-    # This error is raised when a module returns and incorrectly formatted
-    # version string. ex. '$build 1456a'
-    if 'invalid version number' in str(e):
-      raise ImportError(('Incorrectly formatted {0} version found, expected '
-                         '{1} <= version < {2}, found version {3}').format(
-          module, min_version, max_version, module.__version__))
-    else:
-      raise
+  modules_util.RequireVersion(module, *versions)
   return module
 
+
 def ImportOptionalModule(module):
-  """Tries to import the desired module.
+  """Tries to import the desired module (DEPRECATED).
+
+  External modules should be provided via vpython and imported using the
+  regular python `import` statement. To ensure a particular module version
+  has been loaded use modules_util.RequireVersion instead.
 
   Returns:
     The module if successful, None if not."""
   try:
     return ImportRequiredModule(module)
-  except ImportError:
+  except ImportError as e:
+    # This can happen due to a circular dependency. It is usually not a
+    # failure to import module_name, but a failed import somewhere in
+    # the implementation. It's important to re-raise the error here
+    # instead of failing silently.
+    if 'cannot import name' in str(e):
+      print('Possible circular dependency!')
+      raise
+    logging.warning('Unable to import %s due to: %s', module, e)
     return None

@@ -4,11 +4,13 @@
 
 """Wrappers for gsutil, for basic interaction with Google Cloud Storage."""
 
+from __future__ import absolute_import
 import collections
 import contextlib
 import hashlib
 import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -17,12 +19,12 @@ import tempfile
 import time
 
 import py_utils
+from py_utils import cloud_storage_global_lock  # pylint: disable=unused-import
 from py_utils import lock
 
 # Do a no-op import here so that cloud_storage_global_lock dep is picked up
 # by https://cs.chromium.org/chromium/src/build/android/test_runner.pydeps.
 # TODO(nedn, jbudorick): figure out a way to get rid of this ugly hack.
-from py_utils import cloud_storage_global_lock  # pylint: disable=unused-import
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -41,7 +43,7 @@ BUCKET_ALIASES = collections.OrderedDict((
     ('output', TELEMETRY_OUTPUT),
 ))
 
-BUCKET_ALIAS_NAMES = BUCKET_ALIASES.keys()
+BUCKET_ALIAS_NAMES = list(BUCKET_ALIASES.keys())
 
 
 _GSUTIL_PATH = os.path.join(py_utils.GetCatapultDir(), 'third_party', 'gsutil',
@@ -56,6 +58,9 @@ _CROS_GSUTIL_HOME_WAR = '/home/chromeos-test/'
 # calls that invoke cloud storage network io will throw exceptions.
 DISABLE_CLOUD_STORAGE_IO = 'DISABLE_CLOUD_STORAGE_IO'
 
+# The maximum number of seconds to wait to acquire the pseudo lock for a cloud
+# storage file before raising an exception.
+LOCK_ACQUISITION_TIMEOUT = 10
 
 
 class CloudStorageError(Exception):
@@ -116,6 +121,9 @@ def _EnsureExecutable(gsutil):
     os.chmod(gsutil, st.st_mode | stat.S_IEXEC)
 
 
+def _IsRunningOnSwarming():
+  return os.environ.get('SWARMING_HEADLESS') is not None
+
 def _RunCommand(args):
   # On cros device, as telemetry is running as root, home will be set to /root/,
   # which is not writable. gsutil will attempt to create a download tracker dir
@@ -128,6 +136,8 @@ def _RunCommand(args):
   if py_utils.IsRunningOnCrosDevice():
     gsutil_env = os.environ.copy()
     gsutil_env['HOME'] = _CROS_GSUTIL_HOME_WAR
+  elif _IsRunningOnSwarming():
+    gsutil_env = os.environ.copy()
 
   if os.name == 'nt':
     # If Windows, prepend python. Python scripts aren't directly executable.
@@ -147,21 +157,27 @@ def _RunCommand(args):
   stdout, stderr = gsutil.communicate()
 
   if gsutil.returncode:
-    if stderr.startswith((
-        'You are attempting to access protected data with no configured',
-        'Failure: No handler was ready to authenticate.')):
-      raise CredentialsError()
-    if ('status=403' in stderr or 'status 403' in stderr or
-        '403 Forbidden' in stderr):
-      raise PermissionError()
-    if (stderr.startswith('InvalidUriError') or 'No such object' in stderr or
-        'No URLs matched' in stderr or 'One or more URLs matched no' in stderr):
-      raise NotFoundError(stderr)
-    if '500 Internal Server Error' in stderr:
-      raise ServerError(stderr)
-    raise CloudStorageError(stderr)
+    raise GetErrorObjectForCloudStorageStderr(stderr.decode('utf-8'))
 
-  return stdout
+  return stdout.decode('utf-8')
+
+
+def GetErrorObjectForCloudStorageStderr(stderr):
+  if (stderr.startswith((
+      'You are attempting to access protected data with no configured',
+      'Failure: No handler was ready to authenticate.')) or
+      re.match('.*401.*does not have .* access to .*', stderr)):
+    return CredentialsError()
+  if ('status=403' in stderr or 'status 403' in stderr or
+      '403 Forbidden' in stderr or
+      re.match('.*403.*does not have .* access to .*', stderr)):
+    return PermissionError()
+  if (stderr.startswith('InvalidUriError') or 'No such object' in stderr or
+      'No URLs matched' in stderr or 'One or more URLs matched no' in stderr):
+    return NotFoundError(stderr)
+  if '500 Internal Server Error' in stderr:
+    return ServerError(stderr)
+  return CloudStorageError(stderr)
 
 
 def IsNetworkIOEnabled():
@@ -177,11 +193,65 @@ def IsNetworkIOEnabled():
   return disable_cloud_storage_env_val != '1'
 
 
-def List(bucket):
-  query = 'gs://%s/' % bucket
-  stdout = _RunCommand(['ls', query])
-  return [url[len(query):] for url in stdout.splitlines()]
+def List(bucket, prefix=None):
+  """Returns all paths matching the given prefix in bucket.
 
+  Returned paths are relative to the bucket root.
+  If path is given, 'gsutil ls gs://<bucket>/<path>' will be executed, otherwise
+  'gsutil ls gs://<bucket>' will be executed.
+
+  For more details, see:
+  https://cloud.google.com/storage/docs/gsutil/commands/ls#directory-by-directory,-flat,-and-recursive-listings
+
+  Args:
+    bucket: Name of cloud storage bucket to look at.
+    prefix: Path within the bucket to filter to.
+
+  Returns:
+    A list of files. All returned path are relative to the bucket root
+    directory. For example, List('my-bucket', path='foo/') will returns results
+    of the form ['/foo/123', '/foo/124', ...], as opposed to ['123', '124',
+    ...].
+  """
+  bucket_prefix = 'gs://%s' % bucket
+  if prefix is None:
+    full_path = bucket_prefix
+  else:
+    full_path = '%s/%s' % (bucket_prefix, prefix)
+  stdout = _RunCommand(['ls', full_path])
+  return [url[len(bucket_prefix):] for url in stdout.splitlines()]
+
+
+def ListDirs(bucket, path=''):
+  """Returns only directories matching the given path in bucket.
+
+  Args:
+    bucket: Name of cloud storage bucket to look at.
+    path: Path within the bucket to filter to. Path can include wildcards.
+      path = 'foo*' will return ['mybucket/foo1/', 'mybucket/foo2/, ... ] but
+      not mybucket/foo1/file.txt or mybucket/foo-file.txt.
+
+  Returns:
+    A list of directories. All returned path are relative to the bucket root
+    directory. For example, List('my-bucket', path='foo/') will returns results
+    of the form ['/foo/123', '/foo/124', ...], as opposed to ['123', '124',
+    ...].
+  """
+  bucket_prefix = 'gs://%s' % bucket
+  full_path = '%s/%s' % (bucket_prefix, path)
+  # Note that -d only ensures we don't recurse into subdirectories
+  # unnecessarily. It still lists all non directory files matching the path
+  # following by a blank line. Adding -d here is a performance optimization.
+  stdout = _RunCommand(['ls', '-d', full_path])
+  dirs = []
+  for url in stdout.splitlines():
+    if len(url) == 0:
+      continue
+    # The only way to identify directories is by filtering for trailing slash.
+    # See https://github.com/GoogleCloudPlatform/gsutil/issues/466
+    if url[-1] == '/':
+      dirs.append(url[len(bucket_prefix):])
+  return dirs
 
 def Exists(bucket, remote_path):
   try:
@@ -233,39 +303,91 @@ _CLOUD_STORAGE_GLOBAL_LOCK = os.path.join(
 
 @contextlib.contextmanager
 def _FileLock(base_path):
-  logger.info('Try to lock %s', base_path)
   pseudo_lock_path = '%s.pseudo_lock' % base_path
   _CreateDirectoryIfNecessary(os.path.dirname(pseudo_lock_path))
 
-  # We need to make sure that there is no other process which is acquiring the
-  # lock on |base_path| and has not finished before proceeding further to create
-  # the |pseudo_lock_path|. Otherwise, |pseudo_lock_path| may be deleted by
-  # that other process after we create it in this process.
-  while os.path.exists(pseudo_lock_path):
-    time.sleep(0.1)
+  # Make sure that we guard the creation, acquisition, release, and removal of
+  # the pseudo lock all with the same guard (_CLOUD_STORAGE_GLOBAL_LOCK).
+  # Otherwise, we can get nasty interleavings that result in multiple processes
+  # thinking they have an exclusive lock, like:
+  #
+  # (Process 1) Create and acquire the pseudo lock
+  # (Process 1) Release the pseudo lock
+  # (Process 1) Release the file lock
+  # (Process 2) Open and acquire the existing pseudo lock
+  # (Process 1) Delete the (existing) pseudo lock
+  # (Process 3) Create and acquire a new pseudo lock
+  #
+  # Using the same guard for creation and removal of the pseudo lock guarantees
+  # that all processes are referring to the same lock.
+  pseudo_lock_fd = None
+  pseudo_lock_fd_return = []
+  py_utils.WaitFor(lambda: _AttemptPseudoLockAcquisition(pseudo_lock_path,
+                                                         pseudo_lock_fd_return),
+                   LOCK_ACQUISITION_TIMEOUT)
+  pseudo_lock_fd = pseudo_lock_fd_return[0]
 
-  # Guard the creation & acquiring lock of |pseudo_lock_path| by the global lock
-  # to make sure that there is no race condition on creating the file.
-  with open(_CLOUD_STORAGE_GLOBAL_LOCK) as global_file:
-    with lock.FileLock(global_file, lock.LOCK_EX):
-      logger.info(
-          'Global file lock acquired, try to create pseudo_lock_path: %s',
-          pseudo_lock_path)
-      fd = open(pseudo_lock_path, 'w')
-      lock.AcquireFileLock(fd, lock.LOCK_EX)
   try:
     yield
   finally:
-    lock.ReleaseFileLock(fd)
-    try:
-      fd.close()
-      logger.info('Try to remove pseudo_lock_path: %s', pseudo_lock_path)
-      os.remove(pseudo_lock_path)
-      logger.info('Done locking %s', base_path)
-    except OSError:
-      # We don't care if the pseudo-lock gets removed elsewhere before we have
-      # a chance to do so.
-      pass
+    py_utils.WaitFor(lambda: _AttemptPseudoLockRelease(pseudo_lock_fd),
+                     LOCK_ACQUISITION_TIMEOUT)
+
+def _AttemptPseudoLockAcquisition(pseudo_lock_path, pseudo_lock_fd_return):
+  """Try to acquire the lock and return a boolean indicating whether the attempt
+  was successful. If the attempt was successful, pseudo_lock_fd_return, which
+  should be an empty array, will be modified to contain a single entry: the file
+  descriptor of the (now acquired) lock file.
+
+  This whole operation is guarded with the global cloud storage lock, which
+  prevents race conditions that might otherwise cause multiple processes to
+  believe they hold the same pseudo lock (see _FileLock for more details).
+  """
+  pseudo_lock_fd = None
+  try:
+    with open(_CLOUD_STORAGE_GLOBAL_LOCK) as global_file:
+      with lock.FileLock(global_file, lock.LOCK_EX | lock.LOCK_NB):
+        # Attempt to acquire the lock in a non-blocking manner. If we block,
+        # then we'll cause deadlock because another process will be unable to
+        # acquire the cloud storage global lock in order to release the pseudo
+        # lock.
+        pseudo_lock_fd = open(pseudo_lock_path, 'w')
+        lock.AcquireFileLock(pseudo_lock_fd, lock.LOCK_EX | lock.LOCK_NB)
+        pseudo_lock_fd_return.append(pseudo_lock_fd)
+        return True
+  except (lock.LockException, IOError):
+    # We failed to acquire either the global cloud storage lock or the pseudo
+    # lock.
+    if pseudo_lock_fd:
+      pseudo_lock_fd.close()
+    return False
+
+
+def _AttemptPseudoLockRelease(pseudo_lock_fd):
+  """Try to release the pseudo lock and return a boolean indicating whether
+  the release was succesful.
+
+  This whole operation is guarded with the global cloud storage lock, which
+  prevents race conditions that might otherwise cause multiple processes to
+  believe they hold the same pseudo lock (see _FileLock for more details).
+  """
+  pseudo_lock_path = pseudo_lock_fd.name
+  try:
+    with open(_CLOUD_STORAGE_GLOBAL_LOCK) as global_file:
+      with lock.FileLock(global_file, lock.LOCK_EX | lock.LOCK_NB):
+        lock.ReleaseFileLock(pseudo_lock_fd)
+        pseudo_lock_fd.close()
+        try:
+          os.remove(pseudo_lock_path)
+        except OSError:
+          # We don't care if the pseudo lock gets removed elsewhere before
+          # we have a chance to do so.
+          pass
+        return True
+  except (lock.LockException, IOError):
+    # We failed to acquire the global cloud storage lock and are thus unable to
+    # release the pseudo lock.
+    return False
 
 
 def _CreateDirectoryIfNecessary(directory):
@@ -295,7 +417,8 @@ def _GetLocked(bucket, remote_path, local_path):
 
 
 def Insert(bucket, remote_path, local_path, publicly_readable=False):
-  """ Upload file in |local_path| to cloud storage.
+  """Upload file in |local_path| to cloud storage.
+
   Args:
     bucket: the google cloud storage bucket name.
     remote_path: the remote file path in |bucket|.
@@ -306,6 +429,43 @@ def Insert(bucket, remote_path, local_path, publicly_readable=False):
   Returns:
     The url where the file is uploaded to.
   """
+  cloud_filepath = Upload(bucket, remote_path, local_path, publicly_readable)
+  return cloud_filepath.view_url
+
+
+class CloudFilepath(object):
+  def __init__(self, bucket, remote_path):
+    self.bucket = bucket
+    self.remote_path = remote_path
+
+  @property
+  def view_url(self):
+    """Get a human viewable url for the cloud file."""
+    return 'https://console.developers.google.com/m/cloudstorage/b/%s/o/%s' % (
+        self.bucket, self.remote_path)
+
+  @property
+  def fetch_url(self):
+    """Get a machine fetchable url for the cloud file."""
+    return 'gs://%s/%s' % (self.bucket, self.remote_path)
+
+
+def Upload(bucket, remote_path, local_path, publicly_readable=False):
+  """Upload file in |local_path| to cloud storage.
+
+  Newer version of 'Insert()' returns an object instead of a string.
+
+  Args:
+    bucket: the google cloud storage bucket name.
+    remote_path: the remote file path in |bucket|.
+    local_path: path of the local file to be uploaded.
+    publicly_readable: whether the uploaded file has publicly readable
+    permission.
+
+  Returns:
+    A CloudFilepath object providing the location of the object in various
+    formats.
+  """
   url = 'gs://%s/%s' % (bucket, remote_path)
   command_and_args = ['cp']
   extra_info = ''
@@ -315,8 +475,7 @@ def Insert(bucket, remote_path, local_path, publicly_readable=False):
   command_and_args += [local_path, url]
   logger.info('Uploading %s to %s%s', local_path, url, extra_info)
   _RunCommand(command_and_args)
-  return 'https://console.developers.google.com/m/cloudstorage/b/%s/o/%s' % (
-      bucket, remote_path)
+  return CloudFilepath(bucket, remote_path)
 
 
 def GetIfHashChanged(cs_path, download_path, bucket, file_hash):
@@ -351,14 +510,49 @@ def GetIfChanged(file_path, bucket):
   """
   with _FileLock(file_path):
     hash_path = file_path + '.sha1'
+    fetch_ts_path = file_path + '.fetchts'
     if not os.path.exists(hash_path):
       logger.warning('Hash file not found: %s', hash_path)
       return False
 
     expected_hash = ReadHash(hash_path)
+
+    # To save the time required computing binary hash (which is an expensive
+    # operation, see crbug.com/793609#c2 for details), any time we fetch a new
+    # binary, we save not only that binary but the time of the fetch in
+    # |fetch_ts_path|. Anytime the file needs updated (its
+    # hash in |hash_path| change), we can just need to compare the timestamp of
+    # |hash_path| with the timestamp in |fetch_ts_path| to figure out
+    # if the update operation has been done.
+    #
+    # Notes: for this to work, we make the assumption that only
+    # cloud_storage.GetIfChanged modifies the local |file_path| binary.
+
+    if os.path.exists(fetch_ts_path) and os.path.exists(file_path):
+      with open(fetch_ts_path) as f:
+        data = f.read().strip()
+        last_binary_fetch_ts = float(data)
+
+      if last_binary_fetch_ts > os.path.getmtime(hash_path):
+        return False
+
+    # Whether the binary stored in local already has hash matched
+    # expected_hash or we need to fetch new binary from cloud, update the
+    # timestamp in |fetch_ts_path| with current time anyway since it is
+    # outdated compared with sha1's last modified time.
+    with open(fetch_ts_path, 'w') as f:
+      f.write(str(time.time()))
+
     if os.path.exists(file_path) and CalculateHash(file_path) == expected_hash:
       return False
     _GetLocked(bucket, expected_hash, file_path)
+    if CalculateHash(file_path) != expected_hash:
+      os.remove(fetch_ts_path)
+      raise RuntimeError(
+          'Binary stored in cloud storage does not have hash matching .sha1 '
+          'file. Please make sure that the binary file is uploaded using '
+          'depot_tools/upload_to_google_storage.py script or through automatic '
+          'framework.')
     return True
 
 
@@ -397,4 +591,4 @@ def CalculateHash(file_path):
 
 def ReadHash(hash_path):
   with open(hash_path, 'rb') as f:
-    return f.read(1024).rstrip()
+    return f.read(1024).rstrip().decode('utf-8')

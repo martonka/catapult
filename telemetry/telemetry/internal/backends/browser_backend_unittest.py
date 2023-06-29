@@ -2,18 +2,20 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import os
 import tempfile
 import unittest
 
 from telemetry.internal.backends import browser_backend
+from telemetry.testing import browser_test_case
 from telemetry.testing import options_for_unittests
 import mock
 
 
 class BrowserBackendLogsUploadingUnittest(unittest.TestCase):
   def testUploadingToCLoudStorage(self):
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, mode='w+')
     temp_file_name = temp_file.name
     try:
       temp_file.write('This is a\ntest log file.\n')
@@ -35,7 +37,9 @@ class BrowserBackendLogsUploadingUnittest(unittest.TestCase):
       options.browser_options.logs_cloud_bucket = 'ABC'
       options.browser_options.logs_cloud_remote_path = 'def'
 
-      b = FakeBrowserBackend(None, False, options.browser_options, None)
+      b = FakeBrowserBackend(
+          platform_backend=None, browser_options=options.browser_options,
+          supports_extensions=False, tab_list_backend=None)
       self.assertEquals(b.GetLogFileContents(), 'This is a\ntest log file.\n')
       with mock.patch('py_utils.cloud_storage.Insert') as mock_insert:
         b.UploadLogsToCloudStorage()
@@ -43,3 +47,21 @@ class BrowserBackendLogsUploadingUnittest(unittest.TestCase):
             bucket='ABC', remote_path='def', local_path=temp_file_name)
     finally:
       os.remove(temp_file_name)
+
+
+class BrowserBackendIntegrationTest(browser_test_case.BrowserTestCase):
+  def setUp(self):
+    super(BrowserBackendIntegrationTest, self).setUp()
+    self._browser_backend = self._browser._browser_backend
+
+  def testSmokeIsBrowserRunningReturnTrue(self):
+    self.assertTrue(self._browser_backend.IsBrowserRunning())
+
+  def testSmokeIsBrowserRunningReturnFalse(self):
+    self._browser_backend.Close()
+    self.assertFalse(self._browser_backend.IsBrowserRunning())
+
+  def testBrowserPid(self):
+    pid = self._browser_backend.GetPid()
+    self.assertTrue(self._browser_backend.GetPid())
+    self.assertEqual(pid, self._browser_backend.GetPid())

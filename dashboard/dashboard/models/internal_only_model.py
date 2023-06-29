@@ -1,12 +1,14 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Base classes for Model classes that can be internal-only."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 from google.appengine.ext import ndb
 
-from dashboard import datastore_hooks
+from dashboard.common import datastore_hooks
 
 
 class InternalOnlyModel(ndb.Model):
@@ -19,8 +21,8 @@ class InternalOnlyModel(ndb.Model):
     if entity is None:
       return
     # Internal-only objects should never be accessed by non-internal accounts!
-    if (getattr(entity, 'internal_only', False) and
-        not datastore_hooks.IsUnalteredQueryPermitted()):
+    if (getattr(entity, 'internal_only', False)
+        and not datastore_hooks.IsUnalteredQueryPermitted()):
       # Keep info about the fact that we're doing an access check out of the
       # callstack in case app engine shows it to the user.
       assert False

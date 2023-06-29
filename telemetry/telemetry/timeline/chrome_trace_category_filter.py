@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import re
 
 
@@ -16,11 +17,12 @@ def CreateLowOverheadFilter():
   the ref builds are updated. crbug.com/386847
   """
   categories = [
-    "toplevel",
-    "benchmark",
-    "webkit.console",
-    "blink.console",
-    "trace_event_overhead"
+      "toplevel",
+      "base",
+      "benchmark",
+      "webkit.console",
+      "blink.console",
+      "trace_event_overhead"
   ]
   return ChromeTraceCategoryFilter(filter_string=','.join(categories))
 
@@ -74,32 +76,38 @@ class ChromeTraceCategoryFilter(object):
     self.AddFilterString(filter_string)
 
   def AddFilterString(self, filter_string):
-    if filter_string == None:
+    if filter_string is None:
       return
 
-    if '*' in filter_string or '?' in filter_string:
+    filter_set = {cf.strip() for cf in filter_string.split(',')}
+    for category in filter_set:
+      self.AddFilter(category)
+
+  def AddFilter(self, category):
+    if category == '':
+      return
+
+    if ',' in category:
+      raise ValueError("Invalid category filter name: '%s'" % category)
+
+    if '*' in category or '?' in category:
       self.contains_wildcards = True
 
-    filter_set = set([cf.strip() for cf in filter_string.split(',')])
-    for category in filter_set:
-      if category == '':
-        continue
+    if _delay_re.match(category):
+      self._synthetic_delays.add(category)
+      return
 
-      if _delay_re.match(category):
-        self._synthetic_delays.add(category)
-        continue
+    if category[0] == '-':
+      assert not category[1:] in self._included_categories
+      self._excluded_categories.add(category[1:])
+      return
 
-      if category[0] == '-':
-        assert not category[1:] in self._included_categories
-        self._excluded_categories.add(category[1:])
-        continue
+    if category.startswith('disabled-by-default-'):
+      self._disabled_by_default_categories.add(category)
+      return
 
-      if category.startswith('disabled-by-default-'):
-        self._disabled_by_default_categories.add(category)
-        continue
-
-      assert not category in self._excluded_categories
-      self._included_categories.add(category)
+    assert not category in self._excluded_categories
+    self._included_categories.add(category)
 
   @property
   def included_categories(self):
@@ -136,8 +144,7 @@ class ChromeTraceCategoryFilter(object):
     categories = []
     for l in lists:
       if stable_output:
-        l = list(l)
-        l.sort()
+        l = sorted(l)
       categories.extend(l)
     return ','.join(categories)
 
@@ -148,12 +155,13 @@ class ChromeTraceCategoryFilter(object):
 
     result = {}
     if self._included_categories or self._disabled_by_default_categories:
-      result[INCLUDED_CATEGORIES_PARAM] = list(
-        self._included_categories | self._disabled_by_default_categories)
+      result[INCLUDED_CATEGORIES_PARAM] = sorted(list(
+          self._included_categories | self._disabled_by_default_categories))
     if self._excluded_categories:
-      result[EXCLUDED_CATEGORIES_PARAM] = list(self._excluded_categories)
+      result[EXCLUDED_CATEGORIES_PARAM] = sorted(list(
+          self._excluded_categories))
     if self._synthetic_delays:
-      result[SYNTHETIC_DELAYS_PARAM] = list(self._synthetic_delays)
+      result[SYNTHETIC_DELAYS_PARAM] = sorted(list(self._synthetic_delays))
     return result
 
   def AddDisabledByDefault(self, category):

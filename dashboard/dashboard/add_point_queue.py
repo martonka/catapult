@@ -1,8 +1,10 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """URL endpoint to add new graph data to the datastore."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import json
 import logging
@@ -11,17 +13,15 @@ from google.appengine.api import datastore_errors
 from google.appengine.ext import ndb
 
 from dashboard import add_point
-from dashboard import datastore_hooks
 from dashboard import find_anomalies
 from dashboard import graph_revisions
-from dashboard import request_handler
-from dashboard import stored_object
 from dashboard import units_to_direction
-from dashboard import utils
+from dashboard import sheriff_config_client
+from dashboard.common import datastore_hooks
+from dashboard.common import request_handler
+from dashboard.common import utils
 from dashboard.models import anomaly
 from dashboard.models import graph_data
-
-BOT_WHITELIST_KEY = 'bot_whitelist'
 
 
 class AddPointQueueHandler(request_handler.RequestHandler):
@@ -48,35 +48,49 @@ class AddPointQueueHandler(request_handler.RequestHandler):
     data = json.loads(self.request.get('data'))
     _PrewarmGets(data)
 
-    bot_whitelist = stored_object.Get(BOT_WHITELIST_KEY)
-
     all_put_futures = []
     added_rows = []
-    monitored_test_keys = []
+    parent_tests = []
     for row_dict in data:
       try:
-        new_row, parent_test, put_futures = _AddRow(row_dict, bot_whitelist)
+        new_row, parent_test, put_futures = _AddRow(row_dict)
         added_rows.append(new_row)
-        is_monitored = parent_test.sheriff and parent_test.has_rows
-        if is_monitored:
-          monitored_test_keys.append(parent_test.key)
+        parent_tests.append(parent_test)
         all_put_futures.extend(put_futures)
 
       except add_point.BadRequestError as e:
         logging.error('Could not add %s, it was invalid.', e.message)
       except datastore_errors.BadRequestError as e:
+        logging.info('While trying to store %s', row_dict)
         logging.error('Datastore request failed: %s.', e.message)
         return
 
     ndb.Future.wait_all(all_put_futures)
 
+    client = sheriff_config_client.GetSheriffConfigClient()
+    tests_keys = []
+    for t in parent_tests:
+      reason = []
+      subscriptions, _ = client.Match(t.test_path, check=True)
+      if not subscriptions:
+        reason.append('subscriptions')
+      if not t.has_rows:
+        reason.append('has_rows')
+      if IsRefBuild(t.key):
+        reason.append('RefBuild')
+      if reason:
+        logging.info('Skip test: %s reason=%s', t.key, ','.join(reason))
+        continue
+      logging.info('Process test: %s', t.key)
+      tests_keys.append(t.key)
+
     # Updating of the cached graph revisions should happen after put because
     # it requires the new row to have a timestamp, which happens upon put.
-    graph_revisions.AddRowsToCache(added_rows)
-
-    for test_key in monitored_test_keys:
-      if not _IsRefBuild(test_key):
-        find_anomalies.ProcessTest(test_key)
+    futures = [
+        graph_revisions.AddRowsToCacheAsync(added_rows),
+        find_anomalies.ProcessTestsAsync(tests_keys)
+    ]
+    ndb.Future.wait_all(futures)
 
 
 def _PrewarmGets(data):
@@ -110,7 +124,7 @@ def _PrewarmGets(data):
   ndb.get_multi_async(list(master_keys) + list(bot_keys) + list(test_keys))
 
 
-def _AddRow(row_dict, bot_whitelist):
+def _AddRow(row_dict):
   """Adds a Row entity to the datastore.
 
   There are three main things that are needed in order to make a new entity;
@@ -120,7 +134,6 @@ def _AddRow(row_dict, bot_whitelist):
 
   Args:
     row_dict: A dictionary obtained from the JSON that was received.
-    bot_whitelist: A list of whitelisted bots names.
 
   Returns:
     A triple: The new row, the parent test, and a list of entity put futures.
@@ -129,11 +142,10 @@ def _AddRow(row_dict, bot_whitelist):
     add_point.BadRequestError: The input dict was invalid.
     RuntimeError: The required parent entities couldn't be created.
   """
-  parent_test = _GetParentTest(row_dict, bot_whitelist)
+  parent_test = _GetParentTest(row_dict)
   test_container_key = utils.GetTestContainerKey(parent_test.key)
 
   columns = add_point.GetAndValidateRowProperties(row_dict)
-  columns['internal_only'] = parent_test.internal_only
 
   row_id = add_point.GetAndValidateRowId(row_dict)
 
@@ -153,16 +165,16 @@ def _AddRow(row_dict, bot_whitelist):
   # Create the entity and add it asynchronously.
   new_row = graph_data.Row(id=row_id, parent=test_container_key, **columns)
   entity_put_futures.append(new_row.put_async())
+  entity_put_futures.append(new_row.UpdateParentAsync())
 
   return new_row, parent_test, entity_put_futures
 
 
-def _GetParentTest(row_dict, bot_whitelist):
+def _GetParentTest(row_dict):
   """Gets the parent test for a Row based on an input dictionary.
 
   Args:
     row_dict: A dictionary from the data parameter.
-    bot_whitelist: A list of whitelisted bot names.
 
   Returns:
     A TestMetadata entity.
@@ -176,14 +188,19 @@ def _GetParentTest(row_dict, bot_whitelist):
   units = row_dict.get('units')
   higher_is_better = row_dict.get('higher_is_better')
   improvement_direction = _ImprovementDirection(higher_is_better)
-  internal_only = _BotInternalOnly(bot_name, bot_whitelist)
+  internal_only = graph_data.Bot.GetInternalOnlySync(master_name, bot_name)
   benchmark_description = row_dict.get('benchmark_description')
+  unescaped_story_name = row_dict.get('unescaped_story_name')
 
-  parent_test = _GetOrCreateAncestors(
-      master_name, bot_name, test_name, units=units,
-      improvement_direction=improvement_direction,
+  parent_test = GetOrCreateAncestors(
+      master_name,
+      bot_name,
+      test_name,
       internal_only=internal_only,
-      benchmark_description=benchmark_description)
+      benchmark_description=benchmark_description,
+      units=units,
+      improvement_direction=improvement_direction,
+      unescaped_story_name=unescaped_story_name)
 
   return parent_test
 
@@ -195,23 +212,14 @@ def _ImprovementDirection(higher_is_better):
   return anomaly.UP if higher_is_better else anomaly.DOWN
 
 
-def _BotInternalOnly(bot_name, bot_whitelist):
-  """Checks whether a given bot name is internal-only.
-
-  If a bot name is internal only, then new data for that bot should be marked
-  as internal-only.
-  """
-  if not bot_whitelist:
-    logging.warning(
-        'No bot whitelist available. All data will be internal-only. If this '
-        'is not intended, please add a bot whitelist using /edit_site_config.')
-    return True
-  return bot_name not in bot_whitelist
-
-
-def _GetOrCreateAncestors(
-    master_name, bot_name, test_name, units=None,
-    improvement_direction=None, internal_only=True, benchmark_description=''):
+def GetOrCreateAncestors(master_name,
+                         bot_name,
+                         test_name,
+                         internal_only=True,
+                         benchmark_description='',
+                         units=None,
+                         improvement_direction=None,
+                         unescaped_story_name=None):
   """Gets or creates all parent Master, Bot, TestMetadata entities for a Row."""
 
   master_entity = _GetOrCreateMaster(master_name)
@@ -228,12 +236,14 @@ def _GetOrCreateAncestors(
     is_leaf_test = (index == len(ancestor_test_parts) - 1)
     test_properties = {
         'units': units if is_leaf_test else None,
-        'improvement_direction': (improvement_direction
-                                  if is_leaf_test else None),
         'internal_only': internal_only,
     }
-    ancestor_test = _GetOrCreateTest(
-        ancestor_test_name, test_path, test_properties)
+    if is_leaf_test and improvement_direction is not None:
+      test_properties['improvement_direction'] = improvement_direction
+    if is_leaf_test and unescaped_story_name is not None:
+      test_properties['unescaped_story_name'] = unescaped_story_name
+    ancestor_test = _GetOrCreateTest(ancestor_test_name, test_path,
+                                     test_properties)
     if index == 0:
       suite = ancestor_test
     test_path = ancestor_test.test_path
@@ -273,8 +283,8 @@ def _GetOrCreateTest(name, parent_test_path, properties):
   If the entity already exists but the properties are different than the ones
   specified, then the properties will be updated first. This implies that a
   new point is being added for an existing TestMetadata, so if the TestMetadata
-  has been previously marked as deprecated or associated with a stoppage alert,
-  then it can be updated and marked as non-deprecated.
+  has been previously marked as deprecated then it can be updated and marked as
+  non-deprecated.
 
   If the entity doesn't yet exist, a new one will be created with the given
   properties.
@@ -295,11 +305,14 @@ def _GetOrCreateTest(name, parent_test_path, properties):
 
   if not existing:
     # Add improvement direction if this is a new test.
-    if 'units' in properties:
+    if 'units' in properties and 'improvement_direction' not in properties:
       units = properties['units']
       direction = units_to_direction.GetImprovementDirection(units)
       properties['improvement_direction'] = direction
+    elif 'units' not in properties or properties['units'] is None:
+      properties['improvement_direction'] = anomaly.UNKNOWN
     new_entity = graph_data.TestMetadata(id=test_path, **properties)
+    new_entity.UpdateSheriff()
     new_entity.put()
     # TODO(sullivan): Consider putting back Test entity in a scoped down
     # form so we can check if it exists here.
@@ -312,39 +325,32 @@ def _GetOrCreateTest(name, parent_test_path, properties):
     existing.deprecated = False
     properties_changed = True
 
-  if existing.stoppage_alert:
-    alert = existing.stoppage_alert.get()
-    if alert:
-      alert.recovered = True
-      alert.put()
-    else:
-      logging.warning('Stoppage alert %s not found.', existing.stoppage_alert)
-    existing.stoppage_alert = None
-    properties_changed = True
-
   # Special case to update improvement direction from units for TestMetadata
   # entities when units are being updated. If an improvement direction is
-  # explicitly provided in the properties, then it will be updated again below.
-  units = properties.get('units')
-  if units:
-    direction = units_to_direction.GetImprovementDirection(units)
-    if direction != existing.improvement_direction:
-      existing.improvement_direction = direction
-      properties_changed = True
+  # explicitly provided in the properties, then we can skip this check since it
+  # will get overwritten below. Additionally, by skipping we avoid
+  # touching the entity and setting off an expensive put() operation.
+  if properties.get('improvement_direction') is None:
+    units = properties.get('units')
+    if units:
+      direction = units_to_direction.GetImprovementDirection(units)
+      if direction != existing.improvement_direction:
+        properties['improvement_direction'] = direction
 
   # Go through the list of general properties and update if necessary.
-  for prop, value in properties.items():
-    if (hasattr(existing, prop) and value is not None and
-        getattr(existing, prop) != value):
+  for prop, value in list(properties.items()):
+    if (hasattr(existing, prop) and value is not None
+        and getattr(existing, prop) != value):
       setattr(existing, prop, value)
       properties_changed = True
 
   if properties_changed:
+    existing.UpdateSheriff()
     existing.put()
   return existing
 
 
-def _IsRefBuild(test_key):
+def IsRefBuild(test_key):
   """Checks whether a TestMetadata is for a reference build test run."""
   test_parts = test_key.id().split('/')
   return test_parts[-1] == 'ref' or test_parts[-1].endswith('_ref')

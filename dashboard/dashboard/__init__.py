@@ -2,6 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
+
 import os
 import sys
 
@@ -12,32 +16,70 @@ _CATAPULT_PATH = os.path.abspath(
 THIRD_PARTY_LIBRARIES = [
     'apiclient',
     'beautifulsoup4',
+    'cachetools',
+    'certifi',
+    'chardet',
+    'cloudstorage',
+    'depot_tools',
+    'flot',
+    'gae_ts_mon',
+    'google-auth',
     'graphy',
+    'html5lib-python',
+    'idna',
+    'ijson',
+    'jquery',
     'mapreduce',
     'mock',
+    'oauth2client',
     'pipeline',
-    'uritemplate',
-    'webtest',
-    'flot',
-    'jquery',
     'polymer',
+    'polymer-svg-template',
+    'polymer2/bower_components',
+    'polymer2/bower_components/chopsui',
+    'pyasn1',
+    'pyasn1_modules',
+    'pyparsing',
+    'redux/redux.min.js',
+    'requests',
+    'requests_toolbelt',
+    'rsa',
+    'six',
+    'uritemplate',
+    'urllib3',
+    'webapp2',
+    'webtest',
 ]
 
-# Libraries bundled with the App Engine SDK.
-THIRD_PARTY_LIBRARIES_IN_SDK = [
-    'httplib2',
-    'oauth2client',
-    'six',
+THIRD_PARTY_LIBRARIES_PY2 = THIRD_PARTY_LIBRARIES + [
+    'httplib2/python2/httplib2'
+]
+
+THIRD_PARTY_LIBRARIES_PY3 = THIRD_PARTY_LIBRARIES + [
+    'httplib2/python3/httplib2'
 ]
 
 # Files and directories in catapult/dashboard.
 DASHBOARD_FILES = [
-    'appengine_config.py',
+    'api.yaml',
     'app.yaml',
+    'appengine_config.py',
+    'cron.yaml',
     'dashboard',
+    'dispatch.yaml',
     'index.yaml',
-    'mapreduce.yaml',
+    'pinpoint.yaml',
     'queue.yaml',
+    'scripts.yaml',
+    'upload-processing.yaml',
+    'upload.yaml',
+]
+
+TRACING_PATHS = [
+    'tracing/tracing',
+    'tracing/tracing_build',
+    'tracing/third_party/gl-matrix/dist/gl-matrix-min.js',
+    'tracing/third_party/mannwhitneyu',
 ]
 
 
@@ -53,39 +95,85 @@ def PathsForDeployment():
   """
   paths = []
   paths.extend(_CatapultThirdPartyLibraryPaths())
-  for p in _AllSdkThirdPartyLibraryPaths():
-    if os.path.basename(p) in THIRD_PARTY_LIBRARIES_IN_SDK:
-      paths.append(p)
   for name in DASHBOARD_FILES:
     paths.append(os.path.join(_CATAPULT_PATH, 'dashboard', name))
+  paths.append(os.path.join(_CATAPULT_PATH, 'tracing', 'tracing_project.py'))
+  paths.append(os.path.join(_CATAPULT_PATH, 'common', 'py_utils', 'py_utils'))
+  # Required by py_utils
+  paths.append(os.path.join(_CATAPULT_PATH, 'devil', 'devil'))
+  paths.extend(_TracingPaths())
   return paths
 
 
-def ExtraPythonLibraryPaths():
+def PathsForTesting():
   """Returns a list of Python library paths required for dashboard tests."""
-  paths = []
-  paths.append(os.path.join(_CATAPULT_PATH, 'dashboard'))
-  paths.extend(_AllSdkThirdPartyLibraryPaths())
-  paths.extend(_CatapultThirdPartyLibraryPaths())
-  return paths
+  return _AllSdkThirdPartyLibraryPaths() + _CatapultThirdPartyLibraryPaths() + [
+      os.path.join(_CATAPULT_PATH, 'dashboard'),
+      os.path.join(_CATAPULT_PATH, 'tracing'),
+      os.path.join(_CATAPULT_PATH, 'common', 'py_utils', 'py_utils'),
+
+      # Required by py_utils
+      os.path.join(_CATAPULT_PATH, 'devil', 'devil'),
+
+      # Isolate the sheriff_config package, since it's deployed independently.
+      os.path.join(_CATAPULT_PATH, 'dashboard', 'dashboard', 'sheriff_config'),
+  ]
 
 
 def _AllSdkThirdPartyLibraryPaths():
-  """Returns a list of all third party library paths from the SDK."""
+  """Returns a list of all third party library paths from the SDK.
+
+  The AppEngine documentation directs us to add App Engine libraries from the
+  SDK to our Python path for local unit tests.
+    https://cloud.google.com/appengine/docs/python/tools/localunittesting
+  """
+  paths = []
+  for sdk_bin_path in os.environ['PATH'].split(os.pathsep):
+    if 'google-cloud-sdk' not in sdk_bin_path:
+      continue
+
+    if not os.path.isdir(sdk_bin_path):
+      sdk_bin_path = os.path.dirname(sdk_bin_path)
+
+    appengine_path = os.path.join(sdk_bin_path, 'platform', 'google_appengine')
+    paths.append(appengine_path)
+    sys.path.insert(0, appengine_path)
+    break
+
   try:
     import dev_appserver
   except ImportError:
-    # TODO(qyearsley): Put the App Engine SDK in the path with the
-    # binary dependency manager.
+    # TODO: Put the Cloud SDK in the path with the binary dependency manager.
     # https://github.com/catapult-project/catapult/issues/2135
-    print 'This script requires the App Engine SDK to be in PYTHONPATH.'
+    print('This script requires the Google Cloud SDK to be in PATH.')
+    print('Install at https://cloud.google.com/sdk and then run')
+    print('`gcloud components install app-engine-python`')
     sys.exit(1)
-  return dev_appserver.EXTRA_PATHS
+
+  paths.extend(dev_appserver.EXTRA_PATHS)
+  return paths
 
 
 def _CatapultThirdPartyLibraryPaths():
   """Returns a list of required third-party libraries in catapult."""
   paths = []
-  for library in THIRD_PARTY_LIBRARIES:
+  paths.append(
+      os.path.join(_CATAPULT_PATH, 'common', 'node_runner', 'node_runner',
+                   'node_modules', '@chopsui', 'tsmon-client',
+                   'tsmon-client.js'))
+  third_party_libraries = (
+      THIRD_PARTY_LIBRARIES_PY3 if sys.version_info.major == 3
+      else THIRD_PARTY_LIBRARIES_PY2)
+  for library in third_party_libraries:
     paths.append(os.path.join(_CATAPULT_PATH, 'third_party', library))
+  return paths
+
+
+def _TracingPaths():
+  """Returns a list of paths that may be imported from tracing."""
+  # TODO(sullivan): This should either pull from tracing_project or be generated
+  # via gypi. See https://github.com/catapult-project/catapult/issues/3048.
+  paths = []
+  for path in TRACING_PATHS:
+    paths.append(os.path.join(_CATAPULT_PATH, os.path.normpath(path)))
   return paths

@@ -2,14 +2,18 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
+
 import unittest
 
 import mock
 
 from google.appengine.ext import ndb
 
-from dashboard import testing_common
-from dashboard import utils
+from dashboard.common import testing_common
+from dashboard.common import utils
 from dashboard.models import anomaly_config
 
 
@@ -31,6 +35,7 @@ class AnomalyConfigTest(testing_common.TestCase):
     }
     my_patterns = [test.test_path]
     anomaly_config.AnomalyConfig(config=my_config, patterns=my_patterns).put()
+    test.UpdateSheriff()
     test.put()
 
     # The sample test now has an overridden config which is used.
@@ -42,8 +47,8 @@ class AnomalyConfigTest(testing_common.TestCase):
     self.assertEqual(expected, anomaly_config.GetAnomalyConfigDict(test))
 
   @mock.patch('logging.warning')
-  def testGetAnomalyConfigDict_OverriddenConfigNotFound(
-      self, mock_logging_warning):
+  def testGetAnomalyConfigDict_OverriddenConfigNotFound(self,
+                                                        mock_logging_warning):
     testing_common.AddTests(['M'], ['b'], {'foo': {'bar': {}}})
     test = utils.TestKey('M/b/foo/bar').get()
     test.overridden_anomaly_config = ndb.Key('AnomalyConfig', 'Non-existent')

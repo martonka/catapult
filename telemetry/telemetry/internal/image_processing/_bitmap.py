@@ -7,8 +7,14 @@ Bitmap is a basic wrapper for image pixels. It includes some basic processing
 tools: crop, find bounding box of a color and compute histogram of color values.
 """
 
+from __future__ import absolute_import
 import array
-import cStringIO
+
+try:
+  from cStringIO import StringIO
+except ImportError:
+  from io import BytesIO as StringIO
+
 import struct
 import subprocess
 import warnings
@@ -30,8 +36,8 @@ class _BitmapTools(object):
   def __init__(self, dimensions, pixels):
     binary = binary_manager.FetchPath(
         'bitmaptools',
-        platform.GetHostPlatform().GetArchName(),
-        platform.GetHostPlatform().GetOSName())
+        platform.GetHostPlatform().GetOSName(),
+        platform.GetHostPlatform().GetArchName())
     assert binary, 'You must build bitmaptools first!'
 
     self._popen = subprocess.Popen([binary],
@@ -43,13 +49,13 @@ class _BitmapTools(object):
     packed_dims = struct.pack('iiiiiii', *dimensions)
     self._popen.stdin.write(packed_dims)
     # If we got a list of ints, we need to convert it into a byte buffer.
-    if type(pixels) is not bytearray:
+    if not isinstance(pixels, bytearray):
       pixels = bytearray(pixels)
     self._popen.stdin.write(pixels)
 
   def _RunCommand(self, *command):
     assert not self._popen.stdin.closed, (
-      'Exactly one command allowed per instance of tools.')
+        'Exactly one command allowed per instance of tools.')
     packed_command = struct.pack('i' * len(command), *command)
     self._popen.stdin.write(packed_command)
     self._popen.stdin.close()
@@ -70,8 +76,8 @@ class _BitmapTools(object):
     out.fromstring(response)
     assert len(out) == 768, (
         'The ColorHistogram has the wrong number of buckets: %s' % len(out))
-    return color_histogram.ColorHistogram(out[:256], out[256:512], out[512:],
-                                    ignore_color)
+    return color_histogram.ColorHistogram(
+        out[:256], out[256:512], out[512:], ignore_color)
 
   def BoundingBox(self, color, tolerance):
     response = self._RunCommand(_BitmapTools.BOUNDING_BOX, int(color),
@@ -126,7 +132,7 @@ class Bitmap(object):
       # pylint: disable=unpacking-non-sequence
       _, _, self._width, self._height = self._crop_box
       self._crop_box = None
-    if type(self._pixels) is not bytearray:
+    if not isinstance(self._pixels, bytearray):
       self._pixels = bytearray(self._pixels)
     return self._pixels
 
@@ -186,7 +192,7 @@ class Bitmap(object):
     out_width = max(self.width, other.width)
     out_height = max(self.height, other.height)
 
-    diff = [[0 for x in xrange(out_width * 3)] for x in xrange(out_height)]
+    diff = [[0 for x in range(out_width * 3)] for x in range(out_height)]
 
     # Loop over each pixel and write out the difference
     for y in range(out_height):
@@ -212,7 +218,7 @@ class Bitmap(object):
         'Using pure python png decoder, which could be very slow. To speed up, '
         'consider installing numpy & cv2 (OpenCV).')
     diff_img = png.from_array(diff, mode='RGB')
-    output = cStringIO.StringIO()
+    output = StringIO()
     try:
       diff_img.save(output)
       diff = Bitmap.FromPng(output.getvalue())

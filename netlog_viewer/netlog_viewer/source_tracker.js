@@ -18,11 +18,6 @@ var SourceTracker = (function() {
     // Observers that only want to receive lists of updated SourceEntries.
     this.sourceEntryObservers_ = [];
 
-    // True when cookies and authentication information should be removed from
-    // displayed events.  When true, such information should be hidden from
-    // all pages.
-    this.privacyStripping_ = true;
-
     // True when times should be displayed as milliseconds since the first
     // event, as opposed to milliseconds since January 1, 1970.
     this.useRelativeTimes_ = true;
@@ -39,13 +34,6 @@ var SourceTracker = (function() {
      * Clears all log entries and SourceEntries and related state.
      */
     clearEntries_: function() {
-      // Used for sorting entries with automatically assigned IDs.
-      this.maxReceivedSourceId_ = 0;
-
-      // Next unique id to be assigned to a log entry without a source.
-      // Needed to identify associated GUI elements, etc.
-      this.nextSourcelessEventId_ = -1;
-
       // Ordered list of log entries.  Needed to maintain original order when
       // generating log dumps
       this.capturedEvents_ = [];
@@ -92,20 +80,10 @@ var SourceTracker = (function() {
       for (var e = 0; e < logEntries.length; ++e) {
         var logEntry = logEntries[e];
 
-        // Assign unique ID, if needed.
-        // TODO(mmenke):  Remove this, and all other code to handle 0 source
-        //                IDs when M19 hits stable.
-        if (logEntry.source.id == 0) {
-          logEntry.source.id = this.nextSourcelessEventId_;
-          --this.nextSourcelessEventId_;
-        } else if (this.maxReceivedSourceId_ < logEntry.source.id) {
-          this.maxReceivedSourceId_ = logEntry.source.id;
-        }
-
         // Create/update SourceEntry object.
         var sourceEntry = this.sourceEntries_[logEntry.source.id];
         if (!sourceEntry) {
-          sourceEntry = new SourceEntry(logEntry, this.maxReceivedSourceId_);
+          sourceEntry = new SourceEntry(logEntry);
           this.sourceEntries_[logEntry.source.id] = sourceEntry;
         } else {
           sourceEntry.update(logEntry);
@@ -135,26 +113,6 @@ var SourceTracker = (function() {
     },
 
     /**
-     * Sets the value of |privacyStripping_| and informs log observers
-     * of the change.
-     */
-    setPrivacyStripping: function(privacyStripping) {
-      this.privacyStripping_ = privacyStripping;
-      for (var i = 0; i < this.sourceEntryObservers_.length; ++i) {
-        if (this.sourceEntryObservers_[i].onPrivacyStrippingChanged)
-          this.sourceEntryObservers_[i].onPrivacyStrippingChanged();
-      }
-    },
-
-    /**
-     * Returns whether or not cookies and authentication information should be
-     * displayed for events that contain them.
-     */
-    getPrivacyStripping: function() {
-      return this.privacyStripping_;
-    },
-
-    /**
      * Sets the value of |useRelativeTimes_| and informs log observers
      * of the change.
      */
@@ -176,12 +134,10 @@ var SourceTracker = (function() {
 
     /**
      * Adds a listener of SourceEntries. |observer| will be called back when
-     * SourceEntries are added or modified, source entries are deleted, or
-     * privacy stripping changes:
+     * SourceEntries are added or modified or source entries are deleted.
      *
      *   observer.onSourceEntriesUpdated(sourceEntries)
      *   observer.onAllSourceEntriesDeleted()
-     *   observer.onPrivacyStrippingChanged()
      */
     addSourceEntryObserver: function(observer) {
       this.sourceEntryObservers_.push(observer);

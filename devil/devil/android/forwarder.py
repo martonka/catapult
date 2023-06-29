@@ -5,25 +5,40 @@
 # pylint: disable=W0212
 
 import fcntl
+import inspect
 import logging
 import os
 import psutil
+import re
+import textwrap
 
 from devil import base_error
 from devil import devil_env
 from devil.android import device_errors
 from devil.android.constants import file_system
+from devil.android.sdk import adb_wrapper
 from devil.android.valgrind_tools import base_tool
 from devil.utils import cmd_helper
 
 logger = logging.getLogger(__name__)
 
+# If passed as the device port, this will tell the forwarder to allocate
+# a dynamic port on the device. The actual port can then be retrieved with
+# Forwarder.DevicePortForHostPort.
+DYNAMIC_DEVICE_PORT = 0
+
+PORT_REGEX = re.compile(r'(?P<device_port>\d+):(?P<host_port>\d+)')
+
 
 def _GetProcessStartTime(pid):
-  return psutil.Process(pid).create_time
+  p = psutil.Process(pid)
+  if inspect.ismethod(p.create_time):
+    return p.create_time()
+  else:  # Process.create_time is a property in old versions of psutil.
+    return p.create_time
 
 
-def _LogMapFailureDiagnostics(device):
+def _DumpHostLog():
   # The host forwarder daemon logs to /tmp/host_forwarder_log, so print the end
   # of that.
   try:
@@ -31,16 +46,21 @@ def _LogMapFailureDiagnostics(device):
       logger.info('Last 50 lines of the host forwarder daemon log:')
       for line in host_forwarder_log.read().splitlines()[-50:]:
         logger.info('    %s', line)
-  except Exception: # pylint: disable=broad-except
+  except Exception:  # pylint: disable=broad-except
     # Grabbing the host forwarder log is best-effort. Ignore all errors.
     logger.warning('Failed to get the contents of host_forwarder_log.')
+
+
+def _LogMapFailureDiagnostics(device):
+  _DumpHostLog()
 
   # The device forwarder daemon logs to the logcat, so print the end of that.
   try:
     logger.info('Last 50 lines of logcat:')
     for logcat_line in device.adb.Logcat(dump=True)[-50:]:
       logger.info('    %s', logcat_line)
-  except device_errors.CommandFailedError:
+  except (device_errors.CommandFailedError,
+          device_errors.DeviceUnreachableError):
     # Grabbing the device forwarder log is also best-effort. Ignore all errors.
     logger.warning('Failed to get the contents of the logcat.')
 
@@ -51,7 +71,8 @@ def _LogMapFailureDiagnostics(device):
     for line in ps_out:
       if 'device_forwarder' in line:
         logger.info('    %s', line)
-  except device_errors.CommandFailedError:
+  except (device_errors.CommandFailedError,
+          device_errors.DeviceUnreachableError):
     logger.warning('Failed to list currently running device_forwarder '
                    'instances.')
 
@@ -88,13 +109,14 @@ class HostForwarderError(base_error.BaseError):
 class Forwarder(object):
   """Thread-safe class to manage port forwards from the device to the host."""
 
-  _DEVICE_FORWARDER_FOLDER = (file_system.TEST_EXECUTABLE_DIR +
-                              '/forwarder/')
-  _DEVICE_FORWARDER_PATH = (file_system.TEST_EXECUTABLE_DIR +
-                            '/forwarder/device_forwarder')
+  _DEVICE_FORWARDER_FOLDER = (file_system.TEST_EXECUTABLE_DIR + '/forwarder/')
+  _DEVICE_FORWARDER_PATH = (
+      file_system.TEST_EXECUTABLE_DIR + '/forwarder/device_forwarder')
   _LOCK_PATH = '/tmp/chrome.forwarder.lock'
   # Defined in host_forwarder_main.cc
   _HOST_FORWARDER_LOG = '/tmp/host_forwarder_log'
+
+  _TIMEOUT = 60  # seconds
 
   _instance = None
 
@@ -122,48 +144,58 @@ class Forwarder(object):
       instance._InitDeviceLocked(device, tool)
 
       device_serial = str(device)
-      redirection_commands = [
-          ['--adb=' + devil_env.config.FetchPath('adb'),
-           '--serial-id=' + device_serial,
-           '--map', str(device_port), str(host_port)]
-          for device_port, host_port in port_pairs]
-      logger.info('Forwarding using commands: %s', redirection_commands)
+      map_arg_lists = [[
+          '--adb=' + adb_wrapper.AdbWrapper.GetAdbPath(),
+          '--serial-id=' + device_serial, '--map',
+          str(device_port),
+          str(host_port)
+      ] for device_port, host_port in port_pairs]
+      logger.info('Forwarding using commands: %s', map_arg_lists)
 
-      for redirection_command in redirection_commands:
+      for map_arg_list in map_arg_lists:
         try:
-          (exit_code, output) = cmd_helper.GetCmdStatusAndOutput(
-              [instance._host_forwarder_path] + redirection_command)
+          map_cmd = [instance._host_forwarder_path] + map_arg_list
+          (exit_code, output) = cmd_helper.GetCmdStatusAndOutputWithTimeout(
+              map_cmd, Forwarder._TIMEOUT)
+        except cmd_helper.TimeoutError as e:
+          raise HostForwarderError(
+              '`%s` timed out:\n%s' % (' '.join(map_cmd), e.output))
         except OSError as e:
           if e.errno == 2:
-            raise HostForwarderError(
-                'Unable to start host forwarder. '
-                'Make sure you have built host_forwarder.')
-          else: raise
+            raise HostForwarderError('Unable to start host forwarder. '
+                                     'Make sure you have built host_forwarder.')
+          else:
+            raise
         if exit_code != 0:
           try:
             instance._KillDeviceLocked(device, tool)
-          except device_errors.CommandFailedError:
+          except (device_errors.CommandFailedError,
+                  device_errors.DeviceUnreachableError):
             # We don't want the failure to kill the device forwarder to
             # supersede the original failure to map.
-            logging.warning(
+            logger.warning(
                 'Failed to kill the device forwarder after map failure: %s',
                 str(e))
           _LogMapFailureDiagnostics(device)
+          formatted_output = ('\n'.join(output)
+                              if isinstance(output, list) else output)
           raise HostForwarderError(
-              '%s exited with %d:\n%s' % (instance._host_forwarder_path,
-                                          exit_code, '\n'.join(output)))
-        tokens = output.split(':')
-        if len(tokens) != 2:
-          raise HostForwarderError(
-              'Unexpected host forwarder output "%s", '
-              'expected "device_port:host_port"' % output)
-        device_port = int(tokens[0])
-        host_port = int(tokens[1])
+              '`%s` exited with %d:\n%s' % (' '.join(map_cmd), exit_code,
+                                            formatted_output))
+        for line in output.splitlines():
+          match = PORT_REGEX.match(line)
+          if match:
+            break
+        if not match:
+          raise HostForwarderError('Unable to find device_port:host_port in '
+                                   'host forwarder output: %s' % output)
+        device_port = int(match.groupdict()['device_port'])
+        host_port = int(match.groupdict()['host_port'])
         serial_with_port = (device_serial, device_port)
         instance._device_to_host_port_map[serial_with_port] = host_port
         instance._host_to_device_port_map[host_port] = serial_with_port
-        logger.info('Forwarding device port: %d to host port: %d.',
-                    device_port, host_port)
+        logger.info('Forwarding device port: %d to host port: %d.', device_port,
+                    host_port)
 
   @staticmethod
   def UnmapDevicePort(device_port, device):
@@ -186,16 +218,25 @@ class Forwarder(object):
     """
     with _FileLock(Forwarder._LOCK_PATH):
       instance = Forwarder._GetInstanceLocked(None)
-      exit_code, output = cmd_helper.GetCmdStatusAndOutput(
-          [instance._host_forwarder_path,
-           '--adb=%s' % devil_env.config.FetchPath('adb'),
-           '--serial-id=%s' % device.serial,
-           '--unmap-all'])
+      unmap_all_cmd = [
+          instance._host_forwarder_path,
+          '--adb=%s' % adb_wrapper.AdbWrapper.GetAdbPath(),
+          '--serial-id=%s' % device.serial, '--unmap-all'
+      ]
+      try:
+        exit_code, output = cmd_helper.GetCmdStatusAndOutputWithTimeout(
+            unmap_all_cmd, Forwarder._TIMEOUT)
+      except cmd_helper.TimeoutError as e:
+        raise HostForwarderError(
+            '`%s` timed out:\n%s' % (' '.join(unmap_all_cmd), e.output))
       if exit_code != 0:
         error_msg = [
-            '%s exited with %d' % (instance._host_forwarder_path,
-                                   exit_code)]
-        error_msg += output
+            '`%s` exited with %d' % (' '.join(unmap_all_cmd), exit_code)
+        ]
+        if isinstance(output, list):
+          error_msg += output
+        else:
+          error_msg += [output]
         raise HostForwarderError('\n'.join(error_msg))
 
       # Clean out any entries from the device & host map.
@@ -215,9 +256,9 @@ class Forwarder(object):
   def DevicePortForHostPort(host_port):
     """Returns the device port that corresponds to a given host port."""
     with _FileLock(Forwarder._LOCK_PATH):
-      _, device_port = Forwarder._GetInstanceLocked(
+      serial_and_port = Forwarder._GetInstanceLocked(
           None)._host_to_device_port_map.get(host_port)
-      return device_port
+      return serial_and_port[1] if serial_and_port else None
 
   @staticmethod
   def RemoveHostLog():
@@ -228,7 +269,7 @@ class Forwarder(object):
   def GetHostLog():
     if not os.path.exists(Forwarder._HOST_FORWARDER_LOG):
       return ''
-    with file(Forwarder._HOST_FORWARDER_LOG, 'r') as f:
+    with open(Forwarder._HOST_FORWARDER_LOG, 'r') as f:
       return f.read()
 
   @staticmethod
@@ -273,22 +314,29 @@ class Forwarder(object):
     instance = Forwarder._GetInstanceLocked(None)
     serial = str(device)
     serial_with_port = (serial, device_port)
-    if not serial_with_port in instance._device_to_host_port_map:
+    if serial_with_port not in instance._device_to_host_port_map:
       logger.error('Trying to unmap non-forwarded port %d', device_port)
       return
-    redirection_command = ['--adb=' + devil_env.config.FetchPath('adb'),
-                           '--serial-id=' + serial,
-                           '--unmap', str(device_port)]
-    logger.info('Undo forwarding using command: %s', redirection_command)
-    (exit_code, output) = cmd_helper.GetCmdStatusAndOutput(
-        [instance._host_forwarder_path] + redirection_command)
-    if exit_code != 0:
-      logger.error(
-          '%s exited with %d:\n%s',
-          instance._host_forwarder_path, exit_code, '\n'.join(output))
+
     host_port = instance._device_to_host_port_map[serial_with_port]
     del instance._device_to_host_port_map[serial_with_port]
     del instance._host_to_device_port_map[host_port]
+
+    unmap_cmd = [
+        instance._host_forwarder_path,
+        '--adb=%s' % adb_wrapper.AdbWrapper.GetAdbPath(),
+        '--serial-id=%s' % serial, '--unmap',
+        str(device_port)
+    ]
+    try:
+      (exit_code, output) = cmd_helper.GetCmdStatusAndOutputWithTimeout(
+          unmap_cmd, Forwarder._TIMEOUT)
+    except cmd_helper.TimeoutError as e:
+      raise HostForwarderError(
+          '`%s` timed out:\n%s' % (' '.join(unmap_cmd), e.output))
+    if exit_code != 0:
+      logger.error('`%s` exited with %d:\n%s', ' '.join(unmap_cmd), exit_code,
+                   '\n'.join(output) if isinstance(output, list) else output)
 
   @staticmethod
   def _GetPidForLock():
@@ -307,6 +355,9 @@ class Forwarder(object):
     """
     # See if the host_forwarder daemon was already initialized by a concurrent
     # process or thread (in case multi-process sharding is not used).
+    # TODO(crbug.com/762005): Consider using a different implemention; relying
+    # on matching the string represantion of the process start time seems
+    # fragile.
     pid_for_lock = Forwarder._GetPidForLock()
     fd = os.open(Forwarder._LOCK_PATH, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, 'r+') as pid_file:
@@ -347,15 +398,18 @@ class Forwarder(object):
         'forwarder_device', device=device)
     forwarder_device_path_on_device = (
         Forwarder._DEVICE_FORWARDER_FOLDER
-        if os.path.isdir(forwarder_device_path_on_host)
-        else Forwarder._DEVICE_FORWARDER_PATH)
-    device.PushChangedFiles([(
-        forwarder_device_path_on_host,
-        forwarder_device_path_on_device)])
+        if os.path.isdir(forwarder_device_path_on_host) else
+        Forwarder._DEVICE_FORWARDER_PATH)
+    device.PushChangedFiles([(forwarder_device_path_on_host,
+                              forwarder_device_path_on_device)])
 
-    cmd = '%s %s' % (tool.GetUtilWrapper(), Forwarder._DEVICE_FORWARDER_PATH)
+    cmd = [Forwarder._DEVICE_FORWARDER_PATH]
+    wrapper = tool.GetUtilWrapper()
+    if wrapper:
+      cmd.insert(0, wrapper)
     device.RunShellCommand(
-        cmd, env={'LD_LIBRARY_PATH': Forwarder._DEVICE_FORWARDER_FOLDER},
+        cmd,
+        env={'LD_LIBRARY_PATH': Forwarder._DEVICE_FORWARDER_FOLDER},
         check_return=True)
     self._initialized_devices.add(device_serial)
 
@@ -371,15 +425,50 @@ class Forwarder(object):
     Note that the global lock must be acquired before calling this method.
     """
     logger.info('Killing host_forwarder.')
-    (exit_code, _o, _e) = cmd_helper.GetCmdStatusOutputAndError(
-        [self._host_forwarder_path, '--kill-server'])
-    if exit_code != 0:
-      (exit_code, output) = cmd_helper.GetCmdStatusAndOutput(
-          ['pkill', '-9', 'host_forwarder'])
+    try:
+      kill_cmd = [self._host_forwarder_path, '--kill-server']
+      (exit_code, output) = cmd_helper.GetCmdStatusAndOutputWithTimeout(
+          kill_cmd, Forwarder._TIMEOUT)
       if exit_code != 0:
+        logger.warning('Forwarder unable to shut down:\n%s', output)
+        kill_cmd = ['pkill', '-9', 'host_forwarder']
+        (exit_code, output) = cmd_helper.GetCmdStatusAndOutputWithTimeout(
+            kill_cmd, Forwarder._TIMEOUT)
+        if exit_code == -9:
+          # pkill can exit with -9, which indicates that it was killed. It's
+          # possible that the forwarder was still killed, though, which will
+          # be checked later.
+          logging.warning('pkilling host forwarder returned -9.')
+        if exit_code in (0, 1):
+          # pkill exits with a 0 if it was able to signal at least one process.
+          # pkill exits with a 1 if it wasn't able to signal a process because
+          # no matching process existed. We're ok with either.
+          return
+
+        _, ps_output = cmd_helper.GetCmdStatusAndOutputWithTimeout(
+            ['ps', 'aux'], Forwarder._TIMEOUT)
+        host_forwarder_lines = [line for line in ps_output.splitlines()
+                                if 'host_forwarder' in line]
+        if host_forwarder_lines:
+          logger.error('Remaining host_forwarder processes:\n  %s',
+                       '\n  '.join(host_forwarder_lines))
+        else:
+          logger.error('No remaining host_forwarder processes?')
+          return
+        _DumpHostLog()
+        error_msg = textwrap.dedent("""\
+            `{kill_cmd}` failed to kill host_forwarder.
+              exit_code: {exit_code}
+              output:
+            {output}
+            """)
         raise HostForwarderError(
-            '%s exited with %d:\n%s' % (self._host_forwarder_path, exit_code,
-                                        '\n'.join(output)))
+            error_msg.format(
+                kill_cmd=' '.join(kill_cmd), exit_code=str(exit_code),
+                output='\n'.join('    %s' % l for l in output.splitlines())))
+    except cmd_helper.TimeoutError as e:
+      raise HostForwarderError(
+          '`%s` timed out:\n%s' % (' '.join(kill_cmd), e.output))
 
   @staticmethod
   def KillDevice(device, tool=None):
@@ -409,8 +498,11 @@ class Forwarder(object):
     if not device.FileExists(Forwarder._DEVICE_FORWARDER_PATH):
       return
 
-    cmd = '%s %s --kill-server' % (tool.GetUtilWrapper(),
-                                   Forwarder._DEVICE_FORWARDER_PATH)
+    cmd = [Forwarder._DEVICE_FORWARDER_PATH, '--kill-server']
+    wrapper = tool.GetUtilWrapper()
+    if wrapper:
+      cmd.insert(0, wrapper)
     device.RunShellCommand(
-        cmd, env={'LD_LIBRARY_PATH': Forwarder._DEVICE_FORWARDER_FOLDER},
+        cmd,
+        env={'LD_LIBRARY_PATH': Forwarder._DEVICE_FORWARDER_FOLDER},
         check_return=True)

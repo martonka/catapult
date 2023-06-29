@@ -1,3 +1,18 @@
+#
+# Copyright 2015 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Integration tests for uploading and downloading to GCS.
 
 These tests exercise most of the corner cases for upload/download of
@@ -12,7 +27,7 @@ import unittest
 
 import six
 
-import apitools.base.py as apitools_base
+from apitools.base.py import transfer
 import storage
 
 _CLIENT = None
@@ -133,12 +148,12 @@ class UploadsTest(unittest.TestCase):
         # Pretend the process died, and resume with a new attempt at the
         # same upload.
         upload_data = json.dumps(self.__upload.serialization_data)
-        second_upload_attempt = apitools_base.Upload.FromData(
+        second_upload_attempt = transfer.Upload.FromData(
             self.__buffer, upload_data, self.__upload.http)
         second_upload_attempt._Upload__SendChunk(0)
         self.assertEqual(second_upload_attempt.chunksize, self.__buffer.tell())
         # Simulate a third try, and stream from there.
-        final_upload_attempt = apitools_base.Upload.FromData(
+        final_upload_attempt = transfer.Upload.FromData(
             self.__buffer, upload_data, self.__upload.http)
         final_upload_attempt.StreamInChunks()
         self.assertEqual(size, self.__buffer.tell())
@@ -146,7 +161,7 @@ class UploadsTest(unittest.TestCase):
         object_info = self.__client.objects.Get(self.__GetRequest(filename))
         self.assertEqual(size, object_info.size)
         # Confirm that a new attempt successfully does nothing.
-        completed_upload_attempt = apitools_base.Upload.FromData(
+        completed_upload_attempt = transfer.Upload.FromData(
             self.__buffer, upload_data, self.__upload.http)
         self.assertTrue(completed_upload_attempt.complete)
         completed_upload_attempt.StreamInChunks()

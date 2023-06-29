@@ -2,15 +2,20 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import division
+from __future__ import absolute_import
 import logging
 import time
-import urlparse
+import six
+import six.moves.urllib.parse # pylint: disable=import-error
+from six.moves import input # pylint: disable=redefined-builtin
 
+from telemetry.core import exceptions
+from telemetry.internal.actions import page_action
 from telemetry.internal.actions.drag import DragAction
 from telemetry.internal.actions.javascript_click import ClickElementAction
 from telemetry.internal.actions.key_event import KeyPressAction
 from telemetry.internal.actions.load_media import LoadMediaAction
-from telemetry.internal.actions.loop import LoopAction
 from telemetry.internal.actions.mouse_click import MouseClickAction
 from telemetry.internal.actions.navigate import NavigateAction
 from telemetry.internal.actions.page_action import GESTURE_SOURCE_DEFAULT
@@ -22,17 +27,37 @@ from telemetry.internal.actions.repaint_continuously import (
 from telemetry.internal.actions.repeatable_scroll import RepeatableScrollAction
 from telemetry.internal.actions.scroll import ScrollAction
 from telemetry.internal.actions.scroll_bounce import ScrollBounceAction
+from telemetry.internal.actions.scroll_to_element import ScrollToElementAction
 from telemetry.internal.actions.seek import SeekAction
 from telemetry.internal.actions.swipe import SwipeAction
 from telemetry.internal.actions.tap import TapAction
 from telemetry.internal.actions.wait import WaitForElementAction
 from telemetry.web_perf import timeline_interaction_record
 
+from py_trace_event import trace_event
 
-_DUMP_WAIT_TIME = 3
+import py_utils
 
 
-class ActionRunner(object):
+# Time to wait in seconds before requesting a memory dump in deterministic
+# mode, thus allowing metric values to stabilize a bit.
+_MEMORY_DUMP_WAIT_TIME = 3
+
+# Time to wait in seconds after forcing garbage collection to allow its
+# effects to propagate. Experimentally determined on an Android One device
+# that Java Heap garbage collection can take ~5 seconds to complete.
+_GARBAGE_COLLECTION_PROPAGATION_TIME = 6
+
+
+if six.PY2:
+  ActionRunnerBase = object
+else:
+  ActionRunnerBase = six.with_metaclass(trace_event.TracedMetaClass, object)
+
+class ActionRunner(ActionRunnerBase):
+
+  if six.PY2:
+    __metaclass__ = trace_event.TracedMetaClass
 
   def __init__(self, tab, skip_waits=False):
     self._tab = tab
@@ -44,8 +69,10 @@ class ActionRunner(object):
     return self._tab
 
   def _RunAction(self, action):
+    logging.info("START Page Action: %s", action)
     action.WillRunAction(self._tab)
     action.RunAction(self._tab)
+    logging.info("DONE Page Action: %s", action.__class__.__name__)
 
   def CreateInteraction(self, label, repeatable=False):
     """ Create an action.Interaction object that issues interaction record.
@@ -78,7 +105,7 @@ class ActionRunner(object):
     if repeatable:
       flags.append(timeline_interaction_record.REPEATABLE)
 
-    return Interaction(self._tab, label, flags)
+    return Interaction(self, label, flags)
 
   def CreateGestureInteraction(self, label, repeatable=False):
     """ Create an action.Interaction object that issues gesture-based
@@ -108,13 +135,23 @@ class ActionRunner(object):
     """
     return self.CreateInteraction('Gesture_' + label, repeatable)
 
+  def WaitForNetworkQuiescence(self, timeout_in_seconds=10):
+    """ Wait for network quiesence on the page.
+    Args:
+      timeout_in_seconds: maximum amount of time (seconds) to wait for network
+        quiesence before raising exception.
+
+    Raises:
+      py_utils.TimeoutException when the timeout is reached but the page's
+        network is not quiet.
+    """
+
+    py_utils.WaitFor(self.tab.HasReachedQuiescence, timeout_in_seconds)
+
   def MeasureMemory(self, deterministic_mode=False):
     """Add a memory measurement to the trace being recorded.
 
     Behaves as a no-op if tracing is not enabled.
-
-    TODO(perezju): Also behave as a no-op if tracing is enabled but
-    memory-infra is not.
 
     Args:
       deterministic_mode: A boolean indicating whether to attempt or not to
@@ -124,29 +161,33 @@ class ActionRunner(object):
     Returns:
       GUID of the generated dump if one was triggered, None otherwise.
     """
-    platform = self.tab.browser.platform
-    if not platform.tracing_controller.is_tracing_running:
+    if not self.tab.browser.platform.tracing_controller.is_tracing_running:
       logging.warning('Tracing is off. No memory dumps are being recorded.')
       return None
     if deterministic_mode:
-      self.Wait(_DUMP_WAIT_TIME)
+      self.Wait(_MEMORY_DUMP_WAIT_TIME)
       self.ForceGarbageCollection()
-      if platform.SupportFlushEntireSystemCache():
-        platform.FlushEntireSystemCache()
-      self.Wait(_DUMP_WAIT_TIME)
     dump_id = self.tab.browser.DumpMemory()
-    assert dump_id, 'Unable to obtain memory dump'
+    if not dump_id:
+      raise exceptions.StoryActionError('Unable to obtain memory dump')
     return dump_id
 
+  def PrepareForLeakDetection(self):
+    """Prepares for Leak Detection.
+
+    Terminate workers, stopping spellcheckers, running GC etc.
+    """
+    self._tab.PrepareForLeakDetection()
+
   def Navigate(self, url, script_to_evaluate_on_commit=None,
-               timeout_in_seconds=60):
+               timeout_in_seconds=page_action.DEFAULT_TIMEOUT):
     """Navigates to |url|.
 
     If |script_to_evaluate_on_commit| is given, the script source string will be
     evaluated when the navigation is committed. This is after the context of
     the page exists, but before any script on the page itself has executed.
     """
-    if urlparse.urlparse(url).scheme == 'file':
+    if six.moves.urllib.parse.urlparse(url).scheme == 'file':
       url = self._tab.browser.platform.http_server.UrlOf(url[7:])
 
     self._RunAction(NavigateAction(
@@ -154,7 +195,12 @@ class ActionRunner(object):
         script_to_evaluate_on_commit=script_to_evaluate_on_commit,
         timeout_in_seconds=timeout_in_seconds))
 
-  def WaitForNavigate(self, timeout_in_seconds_seconds=60):
+  def NavigateBack(self):
+    """ Navigate back to the previous page."""
+    self.ExecuteJavaScript('window.history.back()')
+
+  def WaitForNavigate(
+      self, timeout_in_seconds_seconds=page_action.DEFAULT_TIMEOUT):
     start_time = time.time()
     self._tab.WaitForNavigate(timeout_in_seconds_seconds)
 
@@ -169,35 +215,67 @@ class ActionRunner(object):
     self._tab.ExecuteJavaScript('window.location.reload()')
     self._tab.WaitForDocumentReadyStateToBeInteractiveOrBetter()
 
-  def ExecuteJavaScript(self, statement):
-    """Executes a given JavaScript expression. Does not return the result.
+  def ExecuteJavaScript(self, *args, **kwargs):
+    """Executes a given JavaScript statement. Does not return the result.
 
-    Example: runner.ExecuteJavaScript('var foo = 1;');
+    Example: runner.ExecuteJavaScript('var foo = {{ value }};', value='hi');
 
     Args:
-      statement: The statement to execute (provided as string).
+      statement: The statement to execute (provided as a string).
+
+    Optional keyword args:
+      timeout: The number of seconds to wait for the statement to execute.
+      Additional keyword arguments provide values to be interpolated within
+          the statement. See telemetry.util.js_template for details.
 
     Raises:
       EvaluationException: The statement failed to execute.
     """
-    self._tab.ExecuteJavaScript(statement)
+    if 'timeout' not in kwargs:
+      kwargs['timeout'] = page_action.DEFAULT_TIMEOUT
+    return self._tab.ExecuteJavaScript(*args, **kwargs)
 
-  def EvaluateJavaScript(self, expression):
-    """Returns the evaluation result of the given JavaScript expression.
+  def EvaluateJavaScript(self, *args, **kwargs):
+    """Returns the result of evaluating a given JavaScript expression.
 
     The evaluation results must be convertible to JSON. If the result
     is not needed, use ExecuteJavaScript instead.
 
-    Example: num = runner.EvaluateJavaScript('document.location.href')
+    Example: runner.ExecuteJavaScript('document.location.href');
 
     Args:
-      expression: The expression to evaluate (provided as string).
+      expression: The expression to execute (provided as a string).
+
+    Optional keyword args:
+      timeout: The number of seconds to wait for the expression to evaluate.
+      Additional keyword arguments provide values to be interpolated within
+          the expression. See telemetry.util.js_template for details.
 
     Raises:
       EvaluationException: The statement expression failed to execute
           or the evaluation result can not be JSON-ized.
     """
-    return self._tab.EvaluateJavaScript(expression)
+    if 'timeout' not in kwargs:
+      kwargs['timeout'] = page_action.DEFAULT_TIMEOUT
+    return self._tab.EvaluateJavaScript(*args, **kwargs)
+
+  def WaitForJavaScriptCondition(self, *args, **kwargs):
+    """Wait for a JavaScript condition to become true.
+
+    Example: runner.WaitForJavaScriptCondition('window.foo == 10');
+
+    Args:
+      condition: The JavaScript condition (provided as string).
+
+    Optional keyword args:
+      timeout: The number in seconds to wait for the condition to become
+          True (default to 60).
+      Additional keyword arguments provide values to be interpolated within
+          the expression. See telemetry.util.js_template for details.
+    """
+    if 'timeout' not in kwargs:
+      kwargs['timeout'] = page_action.DEFAULT_TIMEOUT
+    return self._tab.WaitForJavaScriptCondition(*args, **kwargs)
 
   def Wait(self, seconds):
     """Wait for the number of seconds specified.
@@ -208,19 +286,8 @@ class ActionRunner(object):
     if not self._skip_waits:
       time.sleep(seconds)
 
-  def WaitForJavaScriptCondition(self, condition, timeout_in_seconds=60):
-    """Wait for a JavaScript condition to become true.
-
-    Example: runner.WaitForJavaScriptCondition('window.foo == 10');
-
-    Args:
-      condition: The JavaScript condition (as string).
-      timeout_in_seconds: The timeout in seconds (default to 60).
-    """
-    self._tab.WaitForJavaScriptExpression(condition, timeout_in_seconds)
-
   def WaitForElement(self, selector=None, text=None, element_function=None,
-                     timeout_in_seconds=60):
+                     timeout_in_seconds=page_action.DEFAULT_TIMEOUT):
     """Wait for an element to appear in the document.
 
     The element may be selected via selector, text, or element_function.
@@ -232,13 +299,14 @@ class ActionRunner(object):
       element_function: A JavaScript function (as string) that is used
           to retrieve the element. For example:
           '(function() { return foo.element; })()'.
-      timeout_in_seconds: The timeout in seconds (default to 60).
+      timeout_in_seconds: The timeout in seconds.
     """
     self._RunAction(WaitForElementAction(
         selector=selector, text=text, element_function=element_function,
-        timeout_in_seconds=timeout_in_seconds))
+        timeout=timeout_in_seconds))
 
-  def TapElement(self, selector=None, text=None, element_function=None):
+  def TapElement(self, selector=None, text=None, element_function=None,
+                 timeout=page_action.DEFAULT_TIMEOUT):
     """Tap an element.
 
     The element may be selected via selector, text, or element_function.
@@ -252,7 +320,8 @@ class ActionRunner(object):
           '(function() { return foo.element; })()'.
     """
     self._RunAction(TapAction(
-        selector=selector, text=text, element_function=element_function))
+        selector=selector, text=text, element_function=element_function,
+        timeout=timeout))
 
   def ClickElement(self, selector=None, text=None, element_function=None):
     """Click an element.
@@ -317,43 +386,10 @@ class ActionRunner(object):
           gesture, as a ratio of the visible bounding rectangle for
           document.body.
       scale_factor: The ratio of the final span to the initial span.
-          The default scale factor is
-          3.0 / (window.outerWidth/window.innerWidth).
+          The default scale factor is 3.0 / (current scale factor).
       speed_in_pixels_per_second: The speed of the gesture (in pixels/s).
     """
     self._RunAction(PinchAction(
-        left_anchor_ratio=left_anchor_ratio, top_anchor_ratio=top_anchor_ratio,
-        scale_factor=scale_factor,
-        speed_in_pixels_per_second=speed_in_pixels_per_second))
-
-  def PinchElement(self, selector=None, text=None, element_function=None,
-                   left_anchor_ratio=0.5, top_anchor_ratio=0.5,
-                   scale_factor=None, speed_in_pixels_per_second=800):
-    """Perform the pinch gesture on an element.
-
-    It computes the pinch gesture automatically based on the anchor
-    coordinate and the scale factor. The scale factor is the ratio of
-    of the final span and the initial span of the gesture.
-
-    Args:
-      selector: A CSS selector describing the element.
-      text: The element must contains this exact text.
-      element_function: A JavaScript function (as string) that is used
-          to retrieve the element. For example:
-          'function() { return foo.element; }'.
-      left_anchor_ratio: The horizontal pinch anchor coordinate of the
-          gesture, as a ratio of the visible bounding rectangle for
-          the element.
-      top_anchor_ratio: The vertical pinch anchor coordinate of the
-          gesture, as a ratio of the visible bounding rectangle for
-          the element.
-      scale_factor: The ratio of the final span to the initial span.
-          The default scale factor is
-          3.0 / (window.outerWidth/window.innerWidth).
-      speed_in_pixels_per_second: The speed of the gesture (in pixels/s).
-    """
-    self._RunAction(PinchAction(
-        selector=selector, text=text, element_function=element_function,
         left_anchor_ratio=left_anchor_ratio, top_anchor_ratio=top_anchor_ratio,
         scale_factor=scale_factor,
         speed_in_pixels_per_second=speed_in_pixels_per_second))
@@ -393,11 +429,41 @@ class ActionRunner(object):
         speed_in_pixels_per_second=speed_in_pixels_per_second,
         use_touch=use_touch, synthetic_gesture_source=synthetic_gesture_source))
 
+  def ScrollPageToElement(self, selector=None, element_function=None,
+                          container_selector=None,
+                          container_element_function=None,
+                          speed_in_pixels_per_second=800):
+    """Perform scroll gesture on container until an element is in view.
+
+    Both the element and the container can be specified by a CSS selector
+    xor a JavaScript function, provided as a string, which returns an element.
+    The element is required so exactly one of selector and element_function
+    must be provided. The container is optional so at most one of
+    container_selector and container_element_function can be provided.
+    The container defaults to document.scrollingElement or document.body if
+    scrollingElement is not set.
+
+    Args:
+      selector: A CSS selector describing the element.
+      element_function: A JavaScript function (as string) that is used
+          to retrieve the element. For example:
+          'function() { return foo.element; }'.
+      container_selector: A CSS selector describing the container element.
+      container_element_function: A JavaScript function (as a string) that is
+          used to retrieve the container element.
+      speed_in_pixels_per_second: Speed to scroll.
+    """
+    self._RunAction(ScrollToElementAction(
+        selector=selector, element_function=element_function,
+        container_selector=container_selector,
+        container_element_function=container_element_function,
+        speed_in_pixels_per_second=speed_in_pixels_per_second))
+
   def RepeatableBrowserDrivenScroll(self, x_scroll_distance_ratio=0.0,
                                     y_scroll_distance_ratio=0.5,
                                     repeat_count=0,
                                     repeat_delay_ms=250,
-                                    timeout=60,
+                                    timeout=page_action.DEFAULT_TIMEOUT,
                                     prevent_fling=None,
                                     speed=None):
     """Perform a browser driven repeatable scroll gesture.
@@ -540,16 +606,17 @@ class ActionRunner(object):
         overscroll=overscroll, repeat_count=repeat_count,
         speed_in_pixels_per_second=speed_in_pixels_per_second))
 
-  def MouseClick(self, selector=None):
+  def MouseClick(self, selector=None, timeout=page_action.DEFAULT_TIMEOUT):
     """Mouse click the given element.
 
     Args:
       selector: A CSS selector describing the element.
     """
-    self._RunAction(MouseClickAction(selector=selector))
+    self._RunAction(MouseClickAction(selector=selector, timeout=timeout))
 
   def SwipePage(self, left_start_ratio=0.5, top_start_ratio=0.5,
-                direction='left', distance=100, speed_in_pixels_per_second=800):
+                direction='left', distance=100, speed_in_pixels_per_second=800,
+                timeout=page_action.DEFAULT_TIMEOUT):
     """Perform swipe gesture on the page.
 
     Args:
@@ -567,12 +634,14 @@ class ActionRunner(object):
     self._RunAction(SwipeAction(
         left_start_ratio=left_start_ratio, top_start_ratio=top_start_ratio,
         direction=direction, distance=distance,
-        speed_in_pixels_per_second=speed_in_pixels_per_second))
+        speed_in_pixels_per_second=speed_in_pixels_per_second,
+        timeout=timeout))
 
   def SwipeElement(self, selector=None, text=None, element_function=None,
                    left_start_ratio=0.5, top_start_ratio=0.5,
                    direction='left', distance=100,
-                   speed_in_pixels_per_second=800):
+                   speed_in_pixels_per_second=800,
+                   timeout=page_action.DEFAULT_TIMEOUT):
     """Perform swipe gesture on the element.
 
     The element may be selected via selector, text, or element_function.
@@ -599,9 +668,11 @@ class ActionRunner(object):
         selector=selector, text=text, element_function=element_function,
         left_start_ratio=left_start_ratio, top_start_ratio=top_start_ratio,
         direction=direction, distance=distance,
-        speed_in_pixels_per_second=speed_in_pixels_per_second))
+        speed_in_pixels_per_second=speed_in_pixels_per_second,
+        timeout=timeout))
 
-  def PressKey(self, key, repeat_count=1, repeat_delay_ms=100, timeout=60):
+  def PressKey(self, key, repeat_count=1, repeat_delay_ms=100,
+               timeout=page_action.DEFAULT_TIMEOUT):
     """Perform a key press.
 
     Args:
@@ -611,11 +682,13 @@ class ActionRunner(object):
       repeat_delay_ms: Delay after each keypress (including the last one) in
           milliseconds.
     """
-    for _ in xrange(repeat_count):
+    for _ in range(repeat_count):
       self._RunAction(KeyPressAction(key, timeout=timeout))
+      #2To3-division: this line is unchanged as result is expected floats.
       self.Wait(repeat_delay_ms / 1000.0)
 
-  def EnterText(self, text, character_delay_ms=100, timeout=60):
+  def EnterText(self, text, character_delay_ms=100,
+                timeout=page_action.DEFAULT_TIMEOUT):
     """Enter text by performing key presses.
 
     Args:
@@ -697,28 +770,29 @@ class ActionRunner(object):
         timeout_in_seconds=timeout_in_seconds,
         log_time=log_time, label=label))
 
-  def LoopMedia(self, loop_count, selector=None, timeout_in_seconds=None):
-    """Loops a media playback.
-
-    Args:
-      loop_count: The number of times to loop the playback.
-      selector: A CSS selector describing the element. If none is
-          specified, loop the first media element on the page. If the
-          selector matches more than 1 media element, all of them will
-          be looped.
-      timeout_in_seconds: Maximum waiting time for the looped playback to
-          complete. 0 means do not wait. None (the default) means to
-          wait loop_count * 60 seconds.
-
-    Raises:
-      TimeoutException: If the maximum waiting time is exceeded.
-    """
-    self._RunAction(LoopAction(
-        loop_count=loop_count, selector=selector,
-        timeout_in_seconds=timeout_in_seconds))
-
   def ForceGarbageCollection(self):
-    """Forces JavaScript garbage collection on the page."""
+    """Forces garbage collection on all relevant systems.
+
+    This includes:
+    - Java heap for browser and child subprocesses (on Android).
+    - JavaScript on the current renderer.
+    - System caches (on supported platforms).
+    """
+    # 1) Perform V8 and Blink garbage collection. This may free java wrappers.
+    self._tab.CollectGarbage()
+    # 2) Perform Java garbage collection
+    if self._tab.browser.supports_java_heap_garbage_collection:
+      self._tab.browser.ForceJavaHeapGarbageCollection()
+    # 3) Flush system caches. This affects GPU memory.
+    if self._tab.browser.platform.SupportFlushEntireSystemCache():
+      self._tab.browser.platform.FlushEntireSystemCache()
+    # 4) Wait until the effect of Java GC and system cache flushing propagates.
+    self.Wait(_GARBAGE_COLLECTION_PROPAGATION_TIME)
+    # 5) Re-do V8 and Blink garbage collection to free garbage allocated
+    # while waiting.
+    self._tab.CollectGarbage()
+    # 6) Finally, finish with V8 and Blink garbage collection because some
+    # objects require V8 GC => Blink GC => V8 GC roundtrip.
     self._tab.CollectGarbage()
 
   def SimulateMemoryPressureNotification(self, pressure_level):
@@ -729,6 +803,16 @@ class ActionRunner(object):
     """
     self._tab.browser.SimulateMemoryPressureNotification(pressure_level)
 
+  def EnterOverviewMode(self):
+    if not self._tab.browser.supports_overview_mode:
+      raise exceptions.StoryActionError('Overview mode is not supported')
+    self._tab.browser.EnterOverviewMode()
+
+  def ExitOverviewMode(self):
+    if not self._tab.browser.supports_overview_mode:
+      raise exceptions.StoryActionError('Overview mode is not supported')
+    self._tab.browser.ExitOverviewMode()
+
   def PauseInteractive(self):
     """Pause the page execution and wait for terminal interaction.
 
@@ -736,7 +820,7 @@ class ActionRunner(object):
     the page execution and inspect the browser state before
     continuing.
     """
-    raw_input("Interacting... Press Enter to continue.")
+    input("Interacting... Press Enter to continue.")
 
   def RepaintContinuously(self, seconds):
     """Continuously repaints the visible content.
@@ -747,6 +831,28 @@ class ActionRunner(object):
     RAFs were fired."""
     self._RunAction(RepaintContinuouslyAction(
         seconds=0 if self._skip_waits else seconds))
+
+  def StartMobileDeviceEmulation(
+      self, width=360, height=640, dsr=2, timeout=60):
+    """Emulates a mobile device.
+
+    This method is intended for benchmarks used to gather non-performance
+    metrics only. Mobile emulation is not guaranteed to have the same
+    performance characteristics as real devices.
+
+    Example device parameters:
+    https://gist.github.com/devinmancuso/0c94410cb14c83ddad6f
+
+    Args:
+      width: Screen width.
+      height: Screen height.
+      dsr: Screen device scale factor.
+    """
+    self._tab.StartMobileDeviceEmulation(width, height, dsr, timeout)
+
+  def StopMobileDeviceEmulation(self, timeout=60):
+    """Stops emulation of a mobile device."""
+    self._tab.StopMobileDeviceEmulation(timeout)
 
 
 class Interaction(object):
@@ -777,14 +883,14 @@ class Interaction(object):
     assert not self._started
     self._started = True
     self._action_runner.ExecuteJavaScript(
-        'console.time("%s");' %
-        timeline_interaction_record.GetJavaScriptMarker(
-        self._label, self._flags))
+        'console.time({{ marker }});',
+        marker=timeline_interaction_record.GetJavaScriptMarker(
+            self._label, self._flags))
 
   def End(self):
     assert self._started
     self._started = False
     self._action_runner.ExecuteJavaScript(
-        'console.timeEnd("%s");' %
-        timeline_interaction_record.GetJavaScriptMarker(
-        self._label, self._flags))
+        'console.timeEnd({{ marker }});',
+        marker=timeline_interaction_record.GetJavaScriptMarker(
+            self._label, self._flags))

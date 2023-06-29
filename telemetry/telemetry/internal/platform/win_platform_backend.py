@@ -2,29 +2,22 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-from telemetry.internal.util import atexit_with_log
-import collections
+from __future__ import division
+from __future__ import absolute_import
 import contextlib
 import ctypes
 import logging
 import os
 import platform
 import re
-import socket
-import struct
 import subprocess
 import sys
-import time
-import zipfile
-
-from py_utils import cloud_storage  # pylint: disable=import-error
+import six
 
 from telemetry.core import exceptions
 from telemetry.core import os_version as os_version_module
 from telemetry import decorators
 from telemetry.internal.platform import desktop_platform_backend
-from telemetry.internal.platform.power_monitor import msr_power_monitor
-from telemetry.internal.util import path
 
 try:
   import pywintypes  # pylint: disable=import-error
@@ -32,16 +25,18 @@ try:
   from win32com.shell import shell  # pylint: disable=no-name-in-module
   from win32com.shell import shellcon  # pylint: disable=no-name-in-module
   import win32con  # pylint: disable=import-error
-  import win32file  # pylint: disable=import-error
   import win32gui  # pylint: disable=import-error
-  import win32pipe  # pylint: disable=import-error
   import win32process  # pylint: disable=import-error
+  import win32ui  # pylint: disable=import-error
+  import winerror  # pylint: disable=import-error
   try:
     import winreg  # pylint: disable=import-error
   except ImportError:
-    import _winreg as winreg  # pylint: disable=import-error
+    import six.moves.winreg as winreg  # pylint: disable=import-error,wrong-import-order
   import win32security  # pylint: disable=import-error
-except ImportError:
+except ImportError as e:
+  if platform.system() == 'Windows':
+    logging.warning('import error in win_platform_backend: %s', e)
   pywintypes = None
   shell = None
   shellcon = None
@@ -52,86 +47,24 @@ except ImportError:
   win32pipe = None
   win32process = None
   win32security = None
+  win32ui = None
+  winerror = None
   winreg = None
 
 
-def _InstallWinRing0():
-  """WinRing0 is used for reading MSRs."""
-  executable_dir = os.path.dirname(sys.executable)
-
-  python_is_64_bit = sys.maxsize > 2 ** 32
-  dll_file_name = 'WinRing0x64.dll' if python_is_64_bit else 'WinRing0.dll'
-  dll_path = os.path.join(executable_dir, dll_file_name)
-
-  os_is_64_bit = platform.machine().endswith('64')
-  driver_file_name = 'WinRing0x64.sys' if os_is_64_bit else 'WinRing0.sys'
-  driver_path = os.path.join(executable_dir, driver_file_name)
-
-  # Check for WinRing0 and download if needed.
-  if not (os.path.exists(dll_path) and os.path.exists(driver_path)):
-    win_binary_dir = os.path.join(
-        path.GetTelemetryDir(), 'bin', 'win', 'AMD64')
-    zip_path = os.path.join(win_binary_dir, 'winring0.zip')
-    cloud_storage.GetIfChanged(zip_path, bucket=cloud_storage.PUBLIC_BUCKET)
-    try:
-      with zipfile.ZipFile(zip_path, 'r') as zip_file:
-        error_message = (
-            'Failed to extract %s into %s. If python claims that '
-            'the zip file is locked, this may be a lie. The problem may be '
-            'that python does not have write permissions to the destination '
-            'directory.'
-        )
-        # Install DLL.
-        if not os.path.exists(dll_path):
-          try:
-            zip_file.extract(dll_file_name, executable_dir)
-          except:
-            logging.error(error_message % (dll_file_name, executable_dir))
-            raise
-
-        # Install kernel driver.
-        if not os.path.exists(driver_path):
-          try:
-            zip_file.extract(driver_file_name, executable_dir)
-          except:
-            logging.error(error_message % (driver_file_name, executable_dir))
-            raise
-    finally:
-      os.remove(zip_path)
-
-
-def TerminateProcess(process_handle):
-  if not process_handle:
-    return
-  if win32process.GetExitCodeProcess(process_handle) == win32con.STILL_ACTIVE:
-    win32process.TerminateProcess(process_handle, 0)
-  process_handle.close()
+try:
+  from PIL import Image  # pylint: disable=import-error
+except ImportError:
+  Image = None
 
 
 class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
   def __init__(self):
     super(WinPlatformBackend, self).__init__()
-    self._msr_server_handle = None
-    self._msr_server_port = None
-    self._power_monitor = msr_power_monitor.MsrPowerMonitorWin(self)
 
   @classmethod
   def IsPlatformBackendForHost(cls):
     return sys.platform == 'win32'
-
-  def __del__(self):
-    self.close()
-
-  def close(self):
-    self.CloseMsrServer()
-
-  def CloseMsrServer(self):
-    if not self._msr_server_handle:
-      return
-
-    TerminateProcess(self._msr_server_handle)
-    self._msr_server_handle = None
-    self._msr_server_port = None
 
   def IsThermallyThrottled(self):
     raise NotImplementedError()
@@ -139,37 +72,10 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
   def HasBeenThermallyThrottled(self):
     raise NotImplementedError()
 
-  def GetSystemCommitCharge(self):
-    performance_info = self._GetPerformanceInfo()
-    return performance_info.CommitTotal * performance_info.PageSize / 1024
-
   @decorators.Cache
   def GetSystemTotalPhysicalMemory(self):
     performance_info = self._GetPerformanceInfo()
-    return performance_info.PhysicalTotal * performance_info.PageSize / 1024
-
-  def GetCpuStats(self, pid):
-    cpu_info = self._GetWin32ProcessInfo(win32process.GetProcessTimes, pid)
-    # Convert 100 nanosecond units to seconds
-    cpu_time = (cpu_info['UserTime'] / 1e7 +
-                cpu_info['KernelTime'] / 1e7)
-    return {'CpuProcessTime': cpu_time}
-
-  def GetCpuTimestamp(self):
-    """Return current timestamp in seconds."""
-    return {'TotalTime': time.time()}
-
-  @decorators.Deprecated(
-      2017, 11, 4,
-      'Clients should use tracing and memory-infra in new Telemetry '
-      'benchmarks. See for context: https://crbug.com/632021')
-  def GetMemoryStats(self, pid):
-    memory_info = self._GetWin32ProcessInfo(
-        win32process.GetProcessMemoryInfo, pid)
-    return {'VM': memory_info['PagefileUsage'],
-            'VMPeak': memory_info['PeakPagefileUsage'],
-            'WorkingSetSize': memory_info['WorkingSetSize'],
-            'WorkingSetSizePeak': memory_info['PeakWorkingSetSize']}
+    return performance_info.PhysicalTotal * performance_info.PageSize // 1024
 
   def KillProcess(self, pid, kill_process_tree=False):
     # os.kill for Windows is Python 2.7.
@@ -181,11 +87,13 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
 
   def GetSystemProcessInfo(self):
     # [3:] To skip 2 blank lines and header.
-    lines = subprocess.Popen(
-        ['wmic', 'process', 'get',
-         'CommandLine,CreationDate,Name,ParentProcessId,ProcessId',
-         '/format:csv'],
-        stdout=subprocess.PIPE).communicate()[0].splitlines()[3:]
+    lines = six.ensure_str(
+        subprocess.Popen(
+            ['wmic', 'process', 'get',
+             'CommandLine,CreationDate,Name,ParentProcessId,ProcessId',
+             '/format:csv'],
+            stdout=subprocess.PIPE).communicate()[0]
+        ).splitlines()[3:]
     process_info = []
     for line in lines:
       if not line:
@@ -203,32 +111,31 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
       process_info.append(pi)
     return process_info
 
-  def GetChildPids(self, pid):
-    """Retunds a list of child pids of |pid|."""
-    ppid_map = collections.defaultdict(list)
-    creation_map = {}
-    for pi in self.GetSystemProcessInfo():
-      ppid_map[pi['ParentProcessId']].append(pi['ProcessId'])
-      if pi['CreationDate']:
-        creation_map[pi['ProcessId']] = pi['CreationDate']
+  def GetPcSystemType(self):
+    # use: wmic computersystem get pcsystemtype
+    # the return value of the communicate() looks like:
+    #  ('PCSystemType  \r\r\nX             \r\r\n\r\r\n', None)
+    # where X represents the system type.
+    # More on: https://docs.microsoft.com/en-us/windows/win32/cimwin32prov/win32-computersystem
+    lines = six.ensure_str(
+        subprocess.Popen(
+            ['wmic', 'computersystem', 'get', 'pcsystemtype'],
+            stdout=subprocess.PIPE
+            ).communicate()[0]
+        ).split()
+    if len(lines) > 1 and lines[0] == 'PCSystemType':
+      return lines[1]
+    return '0'
 
-    def _InnerGetChildPids(pid):
-      if not pid or pid not in ppid_map:
-        return []
-      ret = [p for p in ppid_map[pid] if creation_map[p] >= creation_map[pid]]
-      for child in ret:
-        if child == pid:
-          continue
-        ret.extend(_InnerGetChildPids(child))
-      return ret
+  def IsLaptop(self):
+    # if the pcsystemtype value is 2, then it is mobile/laptop.
+    return self.GetPcSystemType() == '2'
 
-    return _InnerGetChildPids(pid)
-
-  def GetCommandLine(self, pid):
-    for pi in self.GetSystemProcessInfo():
-      if pid == pi['ProcessId']:
-        return pi['CommandLine']
-    raise exceptions.ProcessGoneException()
+  def GetTypExpectationsTags(self):
+    tags = super(WinPlatformBackend, self).GetTypExpectationsTags()
+    if self.IsLaptop():
+      tags.append('win-laptop')
+    return tags
 
   @decorators.Cache
   def GetArchName(self):
@@ -268,6 +175,46 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
         'Unknown win version: %s, CurrentMajorVersionNumber: %s' %
         (os_version, value))
 
+  @decorators.Cache
+  def GetOSVersionDetailString(self):
+    return platform.uname()[3]
+
+  def CanTakeScreenshot(self):
+    return True
+
+  def TakeScreenshot(self, file_path):
+    width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+    height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+    screen_win = win32gui.GetDesktopWindow()
+    win_dc = None
+    screen_dc = None
+    capture_dc = None
+    capture_bitmap = None
+    try:
+      win_dc = win32gui.GetWindowDC(screen_win)
+      screen_dc = win32ui.CreateDCFromHandle(win_dc)
+      capture_dc = screen_dc.CreateCompatibleDC()
+      capture_bitmap = win32ui.CreateBitmap()
+      capture_bitmap.CreateCompatibleBitmap(screen_dc, width, height)
+      capture_dc.SelectObject(capture_bitmap)
+      capture_dc.BitBlt(
+          (0, 0), (width, height), screen_dc, (0, 0), win32con.SRCCOPY)
+      pixels = capture_bitmap.GetBitmapBits(True)
+      image = Image.frombuffer(
+          'RGB', (width, height), pixels, 'raw', 'BGRX', 0, 1)
+      image.save(file_path, 'PNG')
+      image.close()
+    finally:
+      if capture_bitmap:
+        win32gui.DeleteObject(capture_bitmap.GetHandle())
+      if capture_dc:
+        capture_dc.DeleteDC()
+      if screen_dc:
+        screen_dc.DeleteDC()
+      if win_dc:
+        win32gui.ReleaseDC(screen_win, win_dc)
+    return True
+
   def CanFlushIndividualFilesFromSystemCache(self):
     return True
 
@@ -278,7 +225,7 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
     try:
       handle = win32api.OpenProcess(mask, False, pid)
       return func(handle)
-    except pywintypes.error, e:
+    except pywintypes.error as e:
       errcode = e[0]
       if errcode == 87:
         raise exceptions.ProcessGoneException()
@@ -352,65 +299,14 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
           win32process.CREATE_NO_WINDOW, None, None, win32process.STARTUPINFO())
       return handle
 
-  def CanMonitorPower(self):
-    return self._power_monitor.CanMonitorPower()
-
-  def CanMeasurePerApplicationPower(self):
-    return self._power_monitor.CanMeasurePerApplicationPower()
-
-  def StartMonitoringPower(self, browser):
-    self._power_monitor.StartMonitoringPower(browser)
-
-  def StopMonitoringPower(self):
-    return self._power_monitor.StopMonitoringPower()
-
-  def _StartMsrServerIfNeeded(self):
-    if self._msr_server_handle:
-      return
-
-    _InstallWinRing0()
-
-    pipe_name = r"\\.\pipe\msr_server_pipe_{}".format(os.getpid())
-    # Try to open a named pipe to receive a msr port number from server process.
-    pipe = win32pipe.CreateNamedPipe(
-        pipe_name,
-        win32pipe.PIPE_ACCESS_INBOUND,
-        win32pipe.PIPE_TYPE_MESSAGE | win32pipe.PIPE_WAIT,
-        1, 32, 32, 300, None)
-    parameters = (
-        os.path.join(os.path.dirname(__file__), 'msr_server_win.py'),
-        pipe_name,
-    )
-    self._msr_server_handle = self.LaunchApplication(
-        sys.executable, parameters, elevate_privilege=True)
-    if pipe != win32file.INVALID_HANDLE_VALUE:
-      if win32pipe.ConnectNamedPipe(pipe, None) == 0:
-        self._msr_server_port = int(win32file.ReadFile(pipe, 32)[1])
-      win32api.CloseHandle(pipe)
-    # Wait for server to start.
-    try:
-      socket.create_connection(('127.0.0.1', self._msr_server_port), 5).close()
-    except socket.error:
-      self.CloseMsrServer()
-    atexit_with_log.Register(TerminateProcess, self._msr_server_handle)
-
-  def ReadMsr(self, msr_number, start=0, length=64):
-    self._StartMsrServerIfNeeded()
-    if not self._msr_server_handle:
-      raise OSError('Unable to start MSR server.')
-
-    sock = socket.create_connection(('127.0.0.1', self._msr_server_port), 5)
-    try:
-      sock.sendall(struct.pack('I', msr_number))
-      response = sock.recv(8)
-    finally:
-      sock.close()
-    return struct.unpack('Q', response)[0] >> start & ((1 << length) - 1)
-
   def IsCooperativeShutdownSupported(self):
     return True
 
   def CooperativelyShutdown(self, proc, app_name):
+    if win32gui is None:
+      logging.warning('win32gui unavailable, cannot cooperatively shutdown')
+      return False
+
     pid = proc.pid
 
     # http://timgolden.me.uk/python/win32_how_do_i/
@@ -425,12 +321,19 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
     # It seems safest to send the WM_CLOSE messages after discovering
     # all of the sub-process's windows.
     def find_chrome_windows(hwnd, hwnds):
-      _, win_pid = win32process.GetWindowThreadProcessId(hwnd)
-      if (pid == win_pid and
-          win32gui.IsWindowVisible(hwnd) and
-          win32gui.IsWindowEnabled(hwnd) and
-          win32gui.GetClassName(hwnd).lower().startswith(app_name)):
-        hwnds.append(hwnd)
+      try:
+        _, win_pid = win32process.GetWindowThreadProcessId(hwnd)
+        if (pid == win_pid and
+            win32gui.IsWindowVisible(hwnd) and
+            win32gui.IsWindowEnabled(hwnd) and
+            win32gui.GetClassName(hwnd).lower().startswith(app_name)):
+          hwnds.append(hwnd)
+      except pywintypes.error as e:
+        error_code = e[0]
+        # Some windows may close after enumeration and before the calls above,
+        # so ignore those.
+        if error_code != winerror.ERROR_INVALID_WINDOW_HANDLE:
+          raise
       return True
     hwnds = []
     win32gui.EnumWindows(find_chrome_windows, hwnds)
@@ -441,3 +344,18 @@ class WinPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
     else:
       logging.info('Did not find any windows owned by target process')
     return False
+
+  def GetIntelPowerGadgetPath(self):
+    ipg_dir = os.getenv('IPG_Dir')
+    if not ipg_dir:
+      logging.debug('No env IPG_Dir')
+      return None
+    gadget_path = os.path.join(ipg_dir, 'PowerLog3.0.exe')
+    if not os.path.isfile(gadget_path):
+      logging.debug('Cannot locate Intel Power Gadget at ' + gadget_path)
+      return None
+    return gadget_path
+
+  def SupportsIntelPowerGadget(self):
+    gadget_path = self.GetIntelPowerGadgetPath()
+    return gadget_path is not None

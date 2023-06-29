@@ -2,13 +2,13 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import logging
 import os
-import shutil
+import re
 import tempfile
 import unittest
 
-from telemetry.core import util
 from telemetry.core import exceptions
 from telemetry import decorators
 from telemetry.internal.browser import browser as browser_module
@@ -16,10 +16,10 @@ from telemetry.internal.browser import browser_finder
 from telemetry.internal.platform import gpu_device
 from telemetry.internal.platform import gpu_info
 from telemetry.internal.platform import system_info
-from telemetry.internal.util import path
 from telemetry.testing import browser_test_case
 from telemetry.testing import options_for_unittests
-from telemetry.timeline import tracing_config
+
+from devil.android import app_ui
 
 import mock
 
@@ -30,24 +30,32 @@ class IntentionalException(Exception):
 
 class BrowserTest(browser_test_case.BrowserTestCase):
   def testBrowserCreation(self):
-    self.assertEquals(1, len(self._browser.tabs))
+    self.assertLess(0, len(self._browser.tabs))
+    self.assertGreater(3, len(self._browser.tabs))
 
     # Different browsers boot up to different things.
     assert self._browser.tabs[0].url
 
+  def testTypExpectationsTagsIncludesBrowserTypeTag(self):
+    with mock.patch.object(
+        self._browser.__class__, 'browser_type', 'reference_debug'):
+      self.assertIn('reference-debug', self._browser.GetTypExpectationsTags())
+
   @decorators.Enabled('has tabs')
   def testNewCloseTab(self):
     existing_tab = self._browser.tabs[0]
-    self.assertEquals(1, len(self._browser.tabs))
+    num_tabs = len(self._browser.tabs)
+    self.assertLess(0, num_tabs)
+    self.assertGreater(3, num_tabs)
     existing_tab_url = existing_tab.url
 
     new_tab = self._browser.tabs.New()
-    self.assertEquals(2, len(self._browser.tabs))
+    self.assertEquals(num_tabs + 1, len(self._browser.tabs))
     self.assertEquals(existing_tab.url, existing_tab_url)
     self.assertEquals(new_tab.url, 'about:blank')
 
     new_tab.Close()
-    self.assertEquals(1, len(self._browser.tabs))
+    self.assertEquals(num_tabs, len(self._browser.tabs))
     self.assertEquals(existing_tab.url, existing_tab_url)
 
   def testMultipleTabCalls(self):
@@ -61,17 +69,26 @@ class BrowserTest(browser_test_case.BrowserTestCase):
 
   @decorators.Enabled('has tabs')
   def testCloseReferencedTab(self):
+    num_initial_tabs = len(self._browser.tabs)
     self._browser.tabs.New()
     tab = self._browser.tabs[0]
     tab.Navigate(self.UrlOfUnittestFile('blank.html'))
     tab.Close()
-    self.assertEquals(1, len(self._browser.tabs))
+    self.assertEquals(num_initial_tabs, len(self._browser.tabs))
 
   @decorators.Enabled('has tabs')
   def testForegroundTab(self):
-    # Should be only one tab at this stage, so that must be the foreground tab
+    num_tabs = len(self._browser.tabs)
+    self.assertLess(0, num_tabs)
+    self.assertGreater(3, num_tabs)
+    # The first tab is the foreground tab by default.
     original_tab = self._browser.tabs[0]
     self.assertEqual(self._browser.foreground_tab, original_tab)
+    # If there are 2 tabs open, close the inactive one before creating a new
+    # tab. This ensures the new tab will regain the foreground when we close
+    # the original tab after re-activating it.
+    if num_tabs == 2:
+      self._browser.tabs[1].Close()
     new_tab = self._browser.tabs.New()
     # New tab shouls be foreground tab
     self.assertEqual(self._browser.foreground_tab, new_tab)
@@ -85,7 +102,7 @@ class BrowserTest(browser_test_case.BrowserTestCase):
 
   # This test uses the reference browser and doesn't have access to
   # helper binaries like crashpad_database_util.
-  @decorators.Enabled('linux')
+  @decorators.Enabled('linux')  # https://crbug.com/1113416
   def testGetMinidumpPathOnCrash(self):
     tab = self._browser.tabs[0]
     with self.assertRaises(exceptions.AppCrashException):
@@ -94,12 +111,11 @@ class BrowserTest(browser_test_case.BrowserTestCase):
     self.assertIsNotNone(crash_minidump_path)
 
   def testGetSystemInfo(self):
-    if not self._browser.supports_system_info:
+    info = self._browser.GetSystemInfo()
+    if not info:
       logging.warning(
           'Browser does not support getting system info, skipping test.')
       return
-
-    info = self._browser.GetSystemInfo()
 
     self.assertTrue(isinstance(info, system_info.SystemInfo))
     self.assertTrue(hasattr(info, 'model_name'))
@@ -111,31 +127,34 @@ class BrowserTest(browser_test_case.BrowserTestCase):
       self.assertTrue(isinstance(g, gpu_device.GPUDevice))
 
   def testGetSystemInfoNotCachedObject(self):
-    if not self._browser.supports_system_info:
+    info_a = self._browser.GetSystemInfo()
+    if not info_a:
+      logging.warning(
+          'Browser does not support getting system info, skipping test.')
+      return
+    info_b = self._browser.GetSystemInfo()
+    self.assertFalse(info_a is info_b)
+
+  def testSystemInfoModelNameOnMac(self):
+    if self._browser.platform.GetOSName() != 'mac':
+      self.skipTest('This test is only run on macOS')
+      return
+
+    info = self._browser.GetSystemInfo()
+    if not info:
       logging.warning(
           'Browser does not support getting system info, skipping test.')
       return
 
-    info_a = self._browser.GetSystemInfo()
-    info_b = self._browser.GetSystemInfo()
-    self.assertFalse(info_a is info_b)
+    model_name_re = r"[a-zA-Z]* [0-9.]*"
+    self.assertNotEqual(re.match(model_name_re, info.model_name), None)
 
-  def testGetSystemTotalMemory(self):
-    self.assertTrue(self._browser.memory_stats['SystemTotalPhysicalMemory'] > 0)
-
-  @decorators.Disabled('cros-chrome-guest', 'system-guest',  # chromeos guest
-                       'chromeos')  # crbug.com/628836.
-  def testIsTracingRunning(self):
-    tracing_controller = self._browser.platform.tracing_controller
-    if not tracing_controller.IsChromeTracingSupported():
-      return
-    self.assertFalse(tracing_controller.is_tracing_running)
-    config = tracing_config.TracingConfig()
-    config.enable_chrome_trace = True
-    tracing_controller.StartTracing(config)
-    self.assertTrue(tracing_controller.is_tracing_running)
-    tracing_controller.StopTracing()
-    self.assertFalse(tracing_controller.is_tracing_running)
+  @decorators.Enabled('android')
+  def testGetAppUi(self):
+    self.assertTrue(self._browser.supports_app_ui_interactions)
+    ui = self._browser.GetAppUi()
+    self.assertTrue(isinstance(ui, app_ui.AppUi))
+    self.assertIsNotNone(ui.WaitForUiNode(resource_id='action_bar_root'))
 
 
 class CommandLineBrowserTest(browser_test_case.BrowserTestCase):
@@ -143,6 +162,7 @@ class CommandLineBrowserTest(browser_test_case.BrowserTestCase):
   def CustomizeBrowserOptions(cls, options):
     options.AppendExtraBrowserArgs('--user-agent=telemetry')
 
+  @decorators.Disabled('system-guest', 'cros-chrome-guest')  # crbug.com/985125
   def testCommandLineOverriding(self):
     # This test starts the browser with --user-agent=telemetry. This tests
     # whether the user agent is then set.
@@ -170,113 +190,85 @@ class BrowserLoggingTest(browser_test_case.BrowserTestCase):
   @decorators.Disabled('chromeos', 'android')
   def testLogFileExist(self):
     self.assertTrue(
-       os.path.isfile(self._browser._browser_backend.log_file_path))
-
-
-def _GenerateBrowserProfile(number_of_tabs):
-  """ Generate a browser profile which browser had |number_of_tabs| number of
-  tabs opened before it was closed.
-      Returns:
-        profile_dir: the directory of profile.
-  """
-  profile_dir = tempfile.mkdtemp()
-  options = options_for_unittests.GetCopy()
-  options.browser_options.output_profile_path = profile_dir
-  browser_to_create = browser_finder.FindBrowser(options)
-  browser_to_create.platform.network_controller.InitializeIfNeeded()
-  try:
-    with browser_to_create.Create(options) as browser:
-      browser.platform.SetHTTPServerDirectories(path.GetUnittestDataDir())
-      blank_file_path = os.path.join(path.GetUnittestDataDir(), 'blank.html')
-      blank_url = browser.platform.http_server.UrlOf(blank_file_path)
-      browser.foreground_tab.Navigate(blank_url)
-      browser.foreground_tab.WaitForDocumentReadyStateToBeComplete()
-      for _ in xrange(number_of_tabs - 1):
-        tab = browser.tabs.New()
-        tab.Navigate(blank_url)
-        tab.WaitForDocumentReadyStateToBeComplete()
-    return profile_dir
-  finally:
-    browser_to_create.platform.network_controller.Close()
+        os.path.isfile(self._browser._browser_backend.log_file_path))
 
 
 class BrowserCreationTest(unittest.TestCase):
   def setUp(self):
     self.mock_browser_backend = mock.MagicMock()
     self.mock_platform_backend = mock.MagicMock()
+    self.fake_startup_args = ['--foo', '--bar=2']
 
   def testCleanedUpCalledWhenExceptionRaisedInBrowserCreation(self):
-    self.mock_platform_backend.platform.FlushDnsCache.side_effect = (
+    self.mock_browser_backend.SetBrowser.side_effect = (
         IntentionalException('Boom!'))
     with self.assertRaises(IntentionalException):
       browser_module.Browser(
-         self.mock_browser_backend, self.mock_platform_backend,
-         credentials_path=None)
-    self.assertTrue(self.mock_platform_backend.WillCloseBrowser.called)
+          self.mock_browser_backend, self.mock_platform_backend,
+          self.fake_startup_args)
+    self.assertTrue(self.mock_browser_backend.Close.called)
 
   def testOriginalExceptionNotSwallow(self):
-    self.mock_platform_backend.platform.FlushDnsCache.side_effect = (
+    self.mock_browser_backend.SetBrowser.side_effect = (
         IntentionalException('Boom!'))
     self.mock_platform_backend.WillCloseBrowser.side_effect = (
         IntentionalException('Cannot close browser!'))
     with self.assertRaises(IntentionalException) as context:
       browser_module.Browser(
-         self.mock_browser_backend, self.mock_platform_backend,
-         credentials_path=None)
-    self.assertIn('Boom!', context.exception.message)
+          self.mock_browser_backend, self.mock_platform_backend,
+          self.fake_startup_args)
+    self.assertIn('Boom!', repr(context.exception))
 
 
-class BrowserRestoreSessionTest(unittest.TestCase):
+class TestBrowserCreation(unittest.TestCase):
 
-  @classmethod
-  def setUpClass(cls):
-    cls._number_of_tabs = 4
-    cls._profile_dir = _GenerateBrowserProfile(cls._number_of_tabs)
-    cls._options = options_for_unittests.GetCopy()
-    cls._options.browser_options.AppendExtraBrowserArgs(
-        ['--restore-last-session'])
-    cls._options.browser_options.profile_dir = cls._profile_dir
-    cls._browser_to_create = browser_finder.FindBrowser(cls._options)
-    cls._browser_to_create.platform.network_controller.InitializeIfNeeded()
+  def setUp(self):
+    self.finder_options = options_for_unittests.GetCopy()
+    self.browser_to_create = browser_finder.FindBrowser(self.finder_options)
+    self.browser_to_create.platform.network_controller.Open()
 
-  @decorators.Enabled('has tabs')
-  @decorators.Disabled('chromeos', 'win', 'mac')
-  # TODO(nednguyen): Enable this test on windowsn platform
-  def testRestoreBrowserWithMultipleTabs(self):
-    with self._browser_to_create.Create(self._options) as browser:
-      # The number of tabs will be self._number_of_tabs + 1 as it includes the
-      # old tabs and a new blank tab.
-      expected_number_of_tabs = self._number_of_tabs + 1
-      try:
-        util.WaitFor(lambda: len(browser.tabs) == expected_number_of_tabs, 10)
-      except:
-        logging.error('Number of tabs is %s' % len(browser.tabs))
-        raise
-      self.assertEquals(expected_number_of_tabs, len(browser.tabs))
+  @property
+  def browser_options(self):
+    return self.finder_options.browser_options
 
-  @classmethod
-  def tearDownClass(cls):
-    cls._browser_to_create.platform.network_controller.Close()
-    shutil.rmtree(cls._profile_dir)
+  def tearDown(self):
+    self.browser_to_create.platform.network_controller.Close()
 
+  def testCreateWithBrowserSession(self):
+    with self.browser_to_create.BrowserSession(self.browser_options) as browser:
+      tab = browser.tabs.New()
+      tab.Navigate('about:blank')
+      self.assertEquals(2, tab.EvaluateJavaScript('1 + 1'))
 
-class TestBrowserOperationDoNotLeakTempFiles(unittest.TestCase):
+  def testCreateWithBadOptionsRaises(self):
+    with self.assertRaises(AssertionError):
+      # It's an error to pass finder_options instead of browser_options.
+      with self.browser_to_create.BrowserSession(self.finder_options):
+        pass  # Do nothing.
 
-  @decorators.Enabled('win', 'mac', 'linux')
-  @decorators.Isolated
-  def testBrowserNotLeakingTempFiles(self):
-    options = options_for_unittests.GetCopy()
-    browser_to_create = browser_finder.FindBrowser(options)
-    self.assertIsNotNone(browser_to_create)
-    before_browser_run_temp_dir_content = os.listdir(tempfile.tempdir)
-    browser_to_create.platform.network_controller.InitializeIfNeeded()
+  @decorators.Disabled('chromeos')  # crbug.com/1014115
+  def testCreateBrowserTwice(self):
     try:
-      with browser_to_create.Create(options) as browser:
+      self.browser_to_create.SetUpEnvironment(self.browser_options)
+      for _ in range(2):
+        browser = self.browser_to_create.Create()
         tab = browser.tabs.New()
         tab.Navigate('about:blank')
         self.assertEquals(2, tab.EvaluateJavaScript('1 + 1'))
-      after_browser_run_temp_dir_content = os.listdir(tempfile.tempdir)
-      self.assertEqual(before_browser_run_temp_dir_content,
-                       after_browser_run_temp_dir_content)
+        browser.Close()
     finally:
-      browser_to_create.platform.network_controller.Close()
+      self.browser_to_create.CleanUpEnvironment()
+
+  @decorators.Enabled('linux')
+  # TODO(crbug.com/782691): enable this on Win
+  # TODO(ashleymarie): Re-enable on mac (BUG=catapult:#3523)
+  @decorators.Isolated
+  def testBrowserNotLeakingTempFiles(self):
+    before_browser_run_temp_dir_content = os.listdir(tempfile.tempdir)
+    with self.browser_to_create.BrowserSession(self.browser_options) as browser:
+      tab = browser.tabs.New()
+      tab.Navigate('about:blank')
+      self.assertEquals(2, tab.EvaluateJavaScript('1 + 1'))
+    after_browser_run_temp_dir_content = os.listdir(tempfile.tempdir)
+    self.assertEqual(before_browser_run_temp_dir_content,
+                     after_browser_run_temp_dir_content)

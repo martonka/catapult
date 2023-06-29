@@ -9,7 +9,6 @@ import tempfile
 
 from tracing_build import vulcanize_trace_viewer
 
-
 class Trace2HTMLTests(unittest.TestCase):
 
   def testWriteHTMLForTracesToFile(self):

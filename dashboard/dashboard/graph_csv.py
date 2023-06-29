@@ -1,16 +1,18 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Downloads a single time series as CSV."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import csv
 import logging
-import StringIO
+import six
 
-from dashboard import datastore_hooks
-from dashboard import request_handler
-from dashboard import utils
+from dashboard.common import datastore_hooks
+from dashboard.common import request_handler
+from dashboard.common import utils
 from dashboard.models import graph_data
 
 
@@ -42,8 +44,8 @@ class GraphCsvHandler(request_handler.RequestHandler):
 
     test_key = utils.TestKey(test_path)
     test = test_key.get()
-    assert(datastore_hooks.IsUnalteredQueryPermitted() or
-           not test.internal_only)
+    assert (datastore_hooks.IsUnalteredQueryPermitted()
+            or not test.internal_only)
     datastore_hooks.SetSinglePrivilegedRequest()
     q = graph_data.Row.query()
     q = q.filter(graph_data.Row.parent_test == utils.OldStyleTestKey(test_key))
@@ -54,7 +56,7 @@ class GraphCsvHandler(request_handler.RequestHandler):
 
     rows = self._GenerateRows(points, attributes)
 
-    output = StringIO.StringIO()
+    output = six.StringIO()
     csv.writer(output).writerows(rows)
     self.response.headers['Content-Type'] = 'text/csv'
     self.response.headers['Content-Disposition'] = (

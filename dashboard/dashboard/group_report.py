@@ -1,8 +1,10 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Provides the web interface for a set of alerts and their graphs."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import json
 
@@ -10,19 +12,16 @@ from google.appengine.ext import ndb
 
 from dashboard import alerts
 from dashboard import chart_handler
-from dashboard import list_tests
-from dashboard import request_handler
 from dashboard import update_test_suites
-from dashboard import utils
+from dashboard.common import request_handler
+from dashboard.common import utils
+from dashboard.models import alert_group
 from dashboard.models import anomaly
-from dashboard.models import stoppage_alert
+from dashboard.models import page_state
 
 # This is the max number of alerts to query at once. This is used in cases
 # when we may want to query more many more alerts than actually get displayed.
-_QUERY_LIMIT = 2000
-
-# Maximum number of alerts that we might want to try display in one table.
-_DISPLAY_LIMIT = 500
+_QUERY_LIMIT = 5000
 
 
 class GroupReportHandler(chart_handler.ChartHandler):
@@ -35,152 +34,171 @@ class GroupReportHandler(chart_handler.ChartHandler):
   def post(self):
     """Returns dynamic data for /group_report with some set of alerts.
 
-    The set of alerts is determined by the keys, bug ID or revision given.
+    The set of alerts is determined by the sid, keys, bug ID, AlertGroup ID,
+    or revision given.
 
     Request parameters:
       keys: A comma-separated list of urlsafe Anomaly keys (optional).
       bug_id: A bug number on the Chromium issue tracker (optional).
+      project_id: A project ID in Monorail (optional).
       rev: A revision number (optional).
+      sid: A hash of a group of keys from /short_uri (optional).
+      group_id: An AlertGroup ID (optional).
 
     Outputs:
       JSON for the /group_report page XHR request.
     """
-    keys = self.request.get('keys')
     bug_id = self.request.get('bug_id')
+    project_id = self.request.get('project_id', 'chromium') or 'chromium'
     rev = self.request.get('rev')
+    keys = self.request.get('keys')
+    hash_code = self.request.get('sid')
+    group_id = self.request.get('group_id')
+
+    # sid takes precedence.
+    if hash_code:
+      state = ndb.Key(page_state.PageState, hash_code).get()
+      if state:
+        keys = json.loads(state.value)
+    elif keys:
+      keys = keys.split(',')
 
     try:
+      alert_list = None
       if bug_id:
-        self._ShowAlertsWithBugId(bug_id)
+        try:
+          alert_list, _, _ = anomaly.Anomaly.QueryAsync(
+              bug_id=bug_id, project_id=project_id,
+              limit=_QUERY_LIMIT).get_result()
+        except ValueError:
+          raise request_handler.InvalidInputError('Invalid bug ID "%s:%s".' %
+                                                  (project_id, bug_id))
       elif keys:
-        self._ShowAlertsForKeys(keys)
+        alert_list = GetAlertsForKeys(keys)
       elif rev:
-        self._ShowAlertsAroundRevision(rev)
+        alert_list = GetAlertsAroundRevision(rev)
+      elif group_id:
+        alert_list = GetAlertsForGroupID(group_id)
       else:
-        # TODO(qyearsley): Instead of just showing an error here, show a form
-        # where the user can input a bug ID or revision.
         raise request_handler.InvalidInputError('No anomalies specified.')
+
+      alert_dicts = alerts.AnomalyDicts(
+          [a for a in alert_list if a.key.kind() == 'Anomaly'])
+
+      values = {
+          'alert_list': alert_dicts,
+          'test_suites': update_test_suites.FetchCachedTestSuites(),
+      }
+      if bug_id:
+        values['bug_id'] = bug_id
+        values['project_id'] = project_id
+      if keys:
+        values['selected_keys'] = keys
+      self.GetDynamicVariables(values)
+
+      self.response.out.write(json.dumps(values))
     except request_handler.InvalidInputError as error:
       self.response.out.write(json.dumps({'error': str(error)}))
 
-  def _ShowAlertsWithBugId(self, bug_id):
-    """Show alerts for |bug_id|.
 
-    Args:
-      bug_id: A bug ID (as an int or string). Could be also be a pseudo-bug ID,
-          such as -1 or -2 indicating invalid or ignored.
-    """
-    if not _IsInt(bug_id):
-      raise request_handler.InvalidInputError('Invalid bug ID "%s".' % bug_id)
-    bug_id = int(bug_id)
-    anomaly_query = anomaly.Anomaly.query(
-        anomaly.Anomaly.bug_id == bug_id)
-    anomalies = anomaly_query.fetch(limit=_DISPLAY_LIMIT)
-    stoppage_alert_query = stoppage_alert.StoppageAlert.query(
-        stoppage_alert.StoppageAlert.bug_id == bug_id)
-    stoppage_alerts = stoppage_alert_query.fetch(limit=_DISPLAY_LIMIT)
-    self._ShowAlerts(anomalies + stoppage_alerts, bug_id)
+def GetAlertsAroundRevision(rev):
+  """Gets the alerts whose revision range includes the given revision.
 
-  def _ShowAlertsAroundRevision(self, rev):
-    """Shows a alerts whose revision range includes the given revision.
+  Args:
+    rev: A revision number, as a string.
 
-    Args:
-      rev: A revision number, as a string.
-    """
-    if not _IsInt(rev):
-      raise request_handler.InvalidInputError('Invalid rev "%s".' % rev)
-    rev = int(rev)
+  Returns:
+    list of anomaly.Anomaly
+  """
+  if not _IsInt(rev):
+    raise request_handler.InvalidInputError('Invalid rev "%s".' % rev)
+  rev = int(rev)
 
-    # We can't make a query that has two inequality filters on two different
-    # properties (start_revision and end_revision). Therefore we first query
-    # Anomaly entities based on one of these, then filter the resulting list.
-    anomaly_query = anomaly.Anomaly.query(anomaly.Anomaly.end_revision >= rev)
-    anomaly_query = anomaly_query.order(anomaly.Anomaly.end_revision)
-    anomalies = anomaly_query.fetch(limit=_QUERY_LIMIT)
-    anomalies = [a for a in anomalies if a.start_revision <= rev]
-    stoppage_alert_query = stoppage_alert.StoppageAlert.query(
-        stoppage_alert.StoppageAlert.end_revision == rev)
-    stoppage_alerts = stoppage_alert_query.fetch(limit=_DISPLAY_LIMIT)
-    self._ShowAlerts(anomalies + stoppage_alerts)
+  # We can't make a query that has two inequality filters on two different
+  # properties (start_revision and end_revision). Therefore we first query
+  # Anomaly entities based on one of these, then filter the resulting list.
+  anomaly_query = anomaly.Anomaly.query(anomaly.Anomaly.end_revision >= rev)
+  anomaly_query = anomaly_query.order(anomaly.Anomaly.end_revision)
+  anomalies = anomaly_query.fetch(limit=_QUERY_LIMIT)
+  return [a for a in anomalies if a.start_revision <= rev]
 
-  def _ShowAlertsForKeys(self, keys):
-    """Show alerts for |keys|.
 
-    Query for anomalies with overlapping revision. The |keys|
-    parameter for group_report is a comma-separated list of urlsafe strings
-    for Keys for Anomaly entities. (Each key corresponds to an alert)
+def GetAlertsForKeys(keys):
+  """Get alerts for |keys|.
 
-    Args:
-      keys: Comma-separated list of urlsafe strings for Anomaly keys.
-    """
-    urlsafe_keys = keys.split(',')
-    try:
-      keys = [ndb.Key(urlsafe=k) for k in urlsafe_keys]
-    # Errors that can be thrown here include ProtocolBufferDecodeError
-    # in google.net.proto.ProtocolBuffer. We want to catch any errors here
-    # because they're almost certainly urlsafe key decoding errors.
-    except Exception:
-      raise request_handler.InvalidInputError('Invalid Anomaly key given.')
+  Query for anomalies with overlapping revision. The |keys|
+  parameter for group_report is a comma-separated list of urlsafe strings
+  for Keys for Anomaly entities. (Each key corresponds to an alert)
 
-    requested_anomalies = utils.GetMulti(keys)
+  Args:
+    keys: Comma-separated list of urlsafe strings for Anomaly keys.
 
-    for i, anomaly_entity in enumerate(requested_anomalies):
-      if anomaly_entity is None:
-        raise request_handler.InvalidInputError(
-            'No Anomaly found for key %s.' % urlsafe_keys[i])
+  Returns:
+    list of anomaly.Anomaly
+  """
+  urlsafe_keys = keys
 
-    if not requested_anomalies:
-      raise request_handler.InvalidInputError('No anomalies found.')
+  try:
+    keys = [ndb.Key(urlsafe=k) for k in urlsafe_keys]
+  # Errors that can be thrown here include ProtocolBufferDecodeError
+  # in google.net.proto.ProtocolBuffer. We want to catch any errors here
+  # because they're almost certainly urlsafe key decoding errors.
+  except Exception:
+    raise request_handler.InvalidInputError('Invalid Anomaly key given.')
 
-    sheriff_key = requested_anomalies[0].sheriff
-    min_range = utils.MinimumAlertRange(requested_anomalies)
-    if min_range:
-      query = anomaly.Anomaly.query(
-          anomaly.Anomaly.sheriff == sheriff_key)
-      query = query.order(-anomaly.Anomaly.timestamp)
-      anomalies = query.fetch(limit=_QUERY_LIMIT)
+  requested_anomalies = utils.GetMulti(keys)
 
-      # Filter out anomalies that have been marked as invalid or ignore.
-      # Include all anomalies with an overlapping revision range that have
-      # been associated with a bug, or are not yet triaged.
-      anomalies = [a for a in anomalies if a.bug_id is None or a.bug_id > 0]
-      anomalies = _GetOverlaps(anomalies, min_range[0], min_range[1])
+  for i, anomaly_entity in enumerate(requested_anomalies):
+    if anomaly_entity is None:
+      raise request_handler.InvalidInputError('No Anomaly found for key %s.' %
+                                              urlsafe_keys[i])
 
-      # Make sure alerts in specified param "keys" are included.
-      key_set = {a.key for a in anomalies}
-      for anomaly_entity in requested_anomalies:
-        if anomaly_entity.key not in key_set:
-          anomalies.append(anomaly_entity)
-    else:
-      anomalies = requested_anomalies
-    self._ShowAlerts(anomalies)
+  if not requested_anomalies:
+    raise request_handler.InvalidInputError('No anomalies found.')
 
-  def _ShowAlerts(self, alert_list, bug_id=None):
-    """Responds to an XHR from /group_report page with a JSON list of alerts.
+  # Just an optimization because we can't fetch anomalies directly based
+  # on revisions. Apply some filters to reduce unrelated anomalies.
+  subscriptions = []
+  for anomaly_entity in requested_anomalies:
+    subscriptions.extend(anomaly_entity.subscription_names)
+  subscriptions = list(set(subscriptions))
+  min_range = utils.MinimumAlertRange(requested_anomalies)
+  if min_range:
+    anomalies, _, _ = anomaly.Anomaly.QueryAsync(
+        subscriptions=subscriptions, limit=_QUERY_LIMIT).get_result()
 
-    Args:
-      alert_list: A list of Anomaly and/or StoppageAlert entities.
-      bug_id: An integer bug ID.
-    """
-    anomaly_dicts = alerts.AnomalyDicts(
-        [a for a in alert_list if a.key.kind() == 'Anomaly'])
-    stoppage_alert_dicts = alerts.StoppageAlertDicts(
-        [a for a in alert_list if a.key.kind() == 'StoppageAlert'])
-    alert_dicts = anomaly_dicts + stoppage_alert_dicts
+    # Filter out anomalies that have been marked as invalid or ignore.
+    # Include all anomalies with an overlapping revision range that have
+    # been associated with a bug, or are not yet triaged.
+    requested_anomalies_set = {a.key for a in requested_anomalies}
 
-    values = {
-        'alert_list': alert_dicts[:_DISPLAY_LIMIT],
-        # This code for getting the subtests is supposed to be used to sort out
-        # which metrics are "core" vs "non-core". But it's extremely slow, and
-        # also doesn't seem to work very well. Turn it off for now:
-        # https://github.com/catapult-project/catapult/issues/2877
-        #'subtests': _GetSubTestsForAlerts(alert_dicts),
-        'bug_id': bug_id,
-        'test_suites': update_test_suites.FetchCachedTestSuites(),
-    }
-    self.GetDynamicVariables(values)
+    def _IsValidAlert(a):
+      if a.key in requested_anomalies_set:
+        return False
+      return a.bug_id is None or a.bug_id > 0
 
-    self.response.out.write(json.dumps(values))
+    anomalies = [a for a in anomalies if _IsValidAlert(a)]
+    anomalies = _GetOverlaps(anomalies, min_range[0], min_range[1])
+    anomalies = requested_anomalies + anomalies
+  else:
+    anomalies = requested_anomalies
+  return anomalies
+
+
+def GetAlertsForGroupID(group_id):
+  """Get alerts for AlertGroup.
+
+  Args:
+    group_id: AlertGroup ID
+
+  Returns:
+    list of anomaly.Anomaly
+  """
+  group = alert_group.AlertGroup.GetByID(group_id)
+  if not group:
+    raise request_handler.InvalidInputError('Invalid AlertGroup ID "%s".' %
+                                            group_id)
+  return ndb.get_multi(group.anomalies)
 
 
 def _IsInt(x):
@@ -190,20 +208,6 @@ def _IsInt(x):
     return True
   except ValueError:
     return False
-
-
-def _GetSubTestsForAlerts(alert_list):
-  """Gets subtest dict for list of alerts."""
-  subtests = {}
-  for alert in alert_list:
-    bot_name = alert['master'] + '/' + alert['bot']
-    testsuite = alert['testsuite']
-    if bot_name not in subtests:
-      subtests[bot_name] = {}
-    if testsuite not in subtests[bot_name]:
-      subtests[bot_name][testsuite] = list_tests.GetSubTests(
-          testsuite, [bot_name])
-  return subtests
 
 
 def _GetOverlaps(anomalies, start, end):
@@ -217,5 +221,7 @@ def _GetOverlaps(anomalies, start, end):
   Returns:
     A list of anomalies.
   """
-  return [a for a in anomalies
-          if a.start_revision <= end and a.end_revision >= start]
+  return [
+      a for a in anomalies
+      if a.start_revision <= end and a.end_revision >= start
+  ]

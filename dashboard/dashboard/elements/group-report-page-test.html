@@ -13,12 +13,12 @@ found in the LICENSE file.
 <script>
 'use strict';
 
-var GRAPH_JSON = {
+const GRAPH_JSON = {
   'data': {
     '0': {
       'color': 0,
       'data': [[348164, 24290], [348167, 22206], [348182, 24170],
-               [348198, 22847], [348224, 25224]],
+        [348198, 22847], [348224, 25224]],
       'id': 'line_0'
     }
   },
@@ -29,7 +29,7 @@ var GRAPH_JSON = {
         'clickable': false,
         'hoverable': false,
         'data': [[348164, 24290], [348167, 22206], [348182, 24170],
-                 [348198, 22847], [348224, 25224]],
+          [348198, 22847], [348224, 25224]],
         'color': 0,
         'id': 'bottom_0',
         'lines': {
@@ -43,7 +43,7 @@ var GRAPH_JSON = {
         'clickable': false,
         'hoverable': false,
         'data': [[348164, 24290], [348167, 22206], [348182, 24170],
-                 [348198, 22847], [348224, 25224]],
+          [348198, 22847], [348224, 25224]],
         'color': 0,
         'id': 'top_0',
         'lines': {
@@ -57,7 +57,6 @@ var GRAPH_JSON = {
   'annotations': {
     '0': {
       '0': {
-        'a_trace_rerun_options': null,
         'error': 0,
         'r_webkit_rev': '202058',
         'a_stdio_uri': '[Buildbot stdio](//dromaeo/stdio)',
@@ -78,24 +77,23 @@ var GRAPH_JSON = {
   }
 };
 
-var GRAPH_REVISION_JSON = [
-   [348164, 24290, 1445661677000],
-   [348167, 22206, 1445674668000],
-   [348182, 24170, 1445685601000],
-   [348198, 22847, 1445696455000],
-   [348224, 25224, 1445707715000]
+const GRAPH_REVISION_JSON = [
+  [348164, 24290, 1445661677000],
+  [348167, 22206, 1445674668000],
+  [348182, 24170, 1445685601000],
+  [348198, 22847, 1445696455000],
+  [348224, 25224, 1445707715000]
 ];
 
 
 tr.b.unittest.testSuite(function() {
+  let originalGetQueryString;
 
-  var originalGetQueryString;
-
-  var testOptions = {
-    setUp: function() {
+  const testOptions = {
+    setUp() {
       originalGetQueryString = uri.getQueryString;
     },
-    tearDown: function() {
+    tearDown() {
       uri.getQueryString = originalGetQueryString;
       // When testing locally, comment this out to make the checkboxes in
       // the table work correctly. They do an XHR, but the mock has already
@@ -105,7 +103,7 @@ tr.b.unittest.testSuite(function() {
   };
 
   test('instantiation', function() {
-    var mockResponse = {
+    const mockResponse = {
       'alert_list': [
         {
           'key': '12345',
@@ -157,9 +155,21 @@ tr.b.unittest.testSuite(function() {
     testing_common.addXhrMock(
         '/graph_revisions?test_path=Chromium%2Fwin%2Fsunspider%2FTotal',
         JSON.stringify(GRAPH_REVISION_JSON));
-    var page = document.createElement('group-report-page');
+    const page = document.createElement('group-report-page');
     this.addHTMLOutput(page);
+    assert.isFalse(page.$.container.hidden);
   }, testOptions);
 
+  test('error', function() {
+    const mockResponse = {
+      'error': 'something is wrong!!!'
+    };
+    uri.getQueryString = function() { return '?keys=12345'; };
+    testing_common.addXhrMock('/group_report?keys=12345',
+        JSON.stringify(mockResponse));
+    const page = document.createElement('group-report-page');
+    this.addHTMLOutput(page);
+    assert.isTrue(page.$.container.hidden);
+  }, testOptions);
 });
 </script>

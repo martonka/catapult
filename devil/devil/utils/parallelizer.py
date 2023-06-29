@@ -1,7 +1,6 @@
 # Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """ Wrapper that allows method execution in parallel.
 
 This class wraps a list of objects of the same type, emulates their
@@ -113,12 +112,12 @@ class Parallelizer(object):
         raise AttributeError("'%s' is not callable" % o.__name__)
 
     r = type(self)(self._orig_objs)
-    r._objs = reraiser_thread.ReraiserThreadGroup(
-        [reraiser_thread.ReraiserThread(
-            o, args=args, kwargs=kwargs,
-            name='%s.%s' % (str(d), o.__name__))
-         for d, o in zip(self._orig_objs, self._objs)])
-    r._objs.StartAll()  # pylint: disable=W0212
+    r._objs = reraiser_thread.ReraiserThreadGroup([
+        reraiser_thread.ReraiserThread(
+            o, args=args, kwargs=kwargs, name='%s.%s' % (str(d), o.__name__))
+        for d, o in zip(self._orig_objs, self._objs)
+    ])
+    r._objs.StartAll()
     return r
 
   def pFinish(self, timeout):
@@ -169,12 +168,15 @@ class Parallelizer(object):
     """
     self._assertNoShadow('pMap')
     r = type(self)(self._orig_objs)
-    r._objs = reraiser_thread.ReraiserThreadGroup(
-        [reraiser_thread.ReraiserThread(
-            f, args=tuple([o] + list(args)), kwargs=kwargs,
+    r._objs = reraiser_thread.ReraiserThreadGroup([
+        reraiser_thread.ReraiserThread(
+            f,
+            args=tuple([o] + list(args)),
+            kwargs=kwargs,
             name='%s(%s)' % (f.__name__, d))
-         for d, o in zip(self._orig_objs, self._objs)])
-    r._objs.StartAll()  # pylint: disable=W0212
+        for d, o in zip(self._orig_objs, self._objs)
+    ])
+    r._objs.StartAll()
     return r
 
   def _assertNoShadow(self, attr_name):
@@ -199,6 +201,33 @@ class Parallelizer(object):
 
 class SyncParallelizer(Parallelizer):
   """A Parallelizer that blocks on function calls."""
+
+  def __enter__(self):
+    """Emulate entering the context of |self|.
+
+    Note that this call is synchronous.
+
+    Returns:
+      A Parallelizer emulating the value returned from entering into the
+      context of |self|.
+    """
+    r = type(self)(self._orig_objs)
+    r._objs = [o.__enter__ for o in r._objs]
+    return r.__call__()
+
+  def __exit__(self, exc_type, exc_val, exc_tb):
+    """Emulate exiting the context of |self|.
+
+    Note that this call is synchronous.
+
+    Args:
+      exc_type: the exception type.
+      exc_val: the exception value.
+      exc_tb: the exception traceback.
+    """
+    r = type(self)(self._orig_objs)
+    r._objs = [o.__exit__ for o in r._objs]
+    r.__call__(exc_type, exc_val, exc_tb)
 
   # override
   def __call__(self, *args, **kwargs):
@@ -235,4 +264,3 @@ class SyncParallelizer(Parallelizer):
     r = super(SyncParallelizer, self).pMap(f, *args, **kwargs)
     r.pFinish(None)
     return r
-

@@ -22,6 +22,8 @@ import sys
 import tempfile
 import time
 
+from typ import python_2_3_compat
+
 
 if sys.version_info.major == 2:  # pragma: python2
     from urllib2 import urlopen, Request
@@ -127,7 +129,7 @@ class Host(object):
     def join(self, *comps):
         return os.path.join(*comps)
 
-    def maybe_mkdir(self, *comps):
+    def maybe_make_directory(self, *comps):
         path = self.abspath(self.join(*comps))
         if not self.exists(path):
             os.makedirs(path)
@@ -245,6 +247,8 @@ class Host(object):
     def restore_output(self):
         assert isinstance(self.stdout, _TeedStream)
         out, err = (self.stdout.restore(), self.stderr.restore())
+        out = python_2_3_compat.bytes_to_str(out)
+        err = python_2_3_compat.bytes_to_str(err)
         self.logger.handlers = self._orig_logging_handlers
         self._untap_output()
         return out, err

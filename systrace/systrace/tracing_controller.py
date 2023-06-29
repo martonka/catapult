@@ -9,11 +9,14 @@ multiple tracing agents and collects data from all of them. It also
 manages the clock sync process.
 '''
 
+from __future__ import print_function
 import ast
+import json
 import sys
-import py_utils
 import tempfile
 import uuid
+
+import py_utils
 
 from systrace import trace_result
 from systrace import tracing_agents
@@ -48,8 +51,8 @@ class TracingControllerAgent(tracing_agents.TracingAgent):
     """
     del config
     if not trace_event.trace_can_enable():
-      raise RuntimeError, ('Cannot enable trace_event;'
-                           ' ensure py_utils is in PYTHONPATH')
+      raise RuntimeError('Cannot enable trace_event;'
+                         ' ensure py_utils is in PYTHONPATH')
 
     controller_log_file = tempfile.NamedTemporaryFile(delete=False)
     self._log_path = controller_log_file.name
@@ -74,9 +77,17 @@ class TracingControllerAgent(tracing_agents.TracingAgent):
     This output only contains the "controller side" of the clock sync records.
     """
     with open(self._log_path, 'r') as outfile:
-      result = outfile.read() + ']'
+      data = ast.literal_eval(outfile.read() + ']')
+    # Explicitly set its own clock domain. This will stop the Systrace clock
+    # domain from incorrectly being collapsed into the on device clock domain.
+    formatted_data = {
+        'traceEvents': data,
+        'metadata': {
+            'clock-domain': 'SYSTRACE',
+        }
+    }
     return trace_result.TraceResult(TRACE_DATA_CONTROLLER_NAME,
-                                    ast.literal_eval(result))
+                                    json.dumps(formatted_data))
 
   def SupportsExplicitClockSync(self):
     """Returns whether this supports explicit clock sync.
@@ -134,7 +145,7 @@ class TracingController(object):
     if not self._controller_agent.StartAgentTracing(
         self._controller_config,
         timeout=self._controller_config.timeout):
-      print 'Unable to start controller tracing agent.'
+      print('Unable to start controller tracing agent.')
       return False
 
     # Start the child tracing agents.
@@ -146,13 +157,13 @@ class TracingController(object):
                                  timeout=self._controller_config.timeout):
         succ_agents.append(agent)
       else:
-        print 'Agent %s not started.' % str(agent)
+        print('Agent %s not started.' % str(agent))
 
     # Print warning if all agents not started.
     na = len(self._child_agents_with_config)
     ns = len(succ_agents)
     if ns < na:
-      print 'Warning: Only %d of %d tracing agents started.' % (ns, na)
+      print('Warning: Only %d of %d tracing agents started.' % (ns, na))
     self._child_agents = succ_agents
     return True
 
@@ -177,20 +188,20 @@ class TracingController(object):
       if agent.StopAgentTracing(timeout=self._controller_config.timeout):
         succ_agents.append(agent)
       else:
-        print 'Agent %s not stopped.' % str(agent)
+        print('Agent %s not stopped.' % str(agent))
 
     # Stop the controller tracing agent. Controller tracing agent
     # must be stopped successfully to proceed.
     if not self._controller_agent.StopAgentTracing(
         timeout=self._controller_config.timeout):
-      print 'Unable to stop controller tracing agent.'
+      print('Unable to stop controller tracing agent.')
       return False
 
     # Print warning if all agents not stopped.
     na = len(self._child_agents)
     ns = len(succ_agents)
     if ns < na:
-      print 'Warning: Only %d of %d tracing agents stopped.' % (ns, na)
+      print('Warning: Only %d of %d tracing agents stopped.' % (ns, na))
       self._child_agents = succ_agents
 
     # Collect the results from all the stopped tracing agents.
@@ -200,7 +211,7 @@ class TracingController(object):
         result = agent.GetResults(
             timeout=self._controller_config.collection_timeout)
         if not result:
-          print 'Warning: Timeout when getting results from %s.' % str(agent)
+          print('Warning: Timeout when getting results from %s.' % str(agent))
           continue
         if result.source_name in [r.source_name for r in all_results]:
           print ('Warning: Duplicate tracing agents named %s.' %
@@ -211,8 +222,9 @@ class TracingController(object):
       # mechanism and will not get to that point (it will return False instead
       # of the trace result, which will be dealt with above)
       except:
-        print 'Warning: Exception getting results from %s:' % str(agent)
-        print sys.exc_info()[0]
+        print('Warning: Exception getting results from %s:' % str(agent))
+        print('Try checking android device storage permissions for chrome')
+        print(sys.exc_info()[0])
         raise
     self.all_results = all_results
     return all_results
@@ -271,7 +283,7 @@ def CreateAgentsWithConfig(options, modules):
 class TracingControllerConfig(tracing_agents.TracingConfig):
   def __init__(self, output_file, trace_time, write_json,
                link_assets, asset_dir, timeout, collection_timeout,
-               device_serial_number, target):
+               device_serial_number, target, trace_buf_size):
     tracing_agents.TracingConfig.__init__(self)
     self.output_file = output_file
     self.trace_time = trace_time
@@ -282,6 +294,7 @@ class TracingControllerConfig(tracing_agents.TracingConfig):
     self.collection_timeout = collection_timeout
     self.device_serial_number = device_serial_number
     self.target = target
+    self.trace_buf_size = trace_buf_size
 
 
 def GetControllerConfig(options):
@@ -289,9 +302,10 @@ def GetControllerConfig(options):
                                  options.write_json,
                                  options.link_assets, options.asset_dir,
                                  options.timeout, options.collection_timeout,
-                                 options.device_serial_number, options.target)
+                                 options.device_serial_number, options.target,
+                                 options.trace_buf_size)
 
 def GetChromeStartupControllerConfig(options):
   return TracingControllerConfig(None, options.trace_time,
                                  options.write_json, None, None, None, None,
-                                 None, None)
+                                 None, None, options.trace_buf_size)

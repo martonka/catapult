@@ -5,9 +5,8 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="import" href="/tracing/base/iteration_helpers.html">
-<link rel="import" href="/tracing/base/sorted_array_utils.html">
 <link rel="import" href="/tracing/base/unit.html">
+<link rel="import" href="/tracing/base/utils.html">
 <link rel="import" href="/tracing/model/event.html">
 <link rel="import" href="/tracing/model/event_registry.html">
 
@@ -15,7 +14,6 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.model', function() {
-
   /**
    * The value of a given measurement at a given time.
    *
@@ -34,19 +32,13 @@ tr.exportTo('tr.model', function() {
   }
 
   CounterSample.groupByTimestamp = function(samples) {
-    var samplesByTimestamp = tr.b.group(samples, function(sample) {
-      return sample.timestamp;
-    });
-
-    var timestamps = tr.b.dictionaryKeys(samplesByTimestamp);
+    const samplesByTimestamp = tr.b.groupIntoMap(samples, s => s.timestamp);
+    const timestamps = Array.from(samplesByTimestamp.keys());
     timestamps.sort();
-    var groups = [];
-    for (var i = 0; i < timestamps.length; i++) {
-      var ts = timestamps[i];
-      var group = samplesByTimestamp[ts];
-      group.sort(function(x, y) {
-        return x.series.seriesIndex - y.series.seriesIndex;
-      });
+    const groups = [];
+    for (const ts of timestamps) {
+      const group = samplesByTimestamp.get(ts);
+      group.sort((x, y) => x.series.seriesIndex - y.series.seriesIndex);
       groups.push(group);
     }
     return groups;
@@ -71,11 +63,11 @@ tr.exportTo('tr.model', function() {
       this.timestamp_ = timestamp;
     },
 
-    addBoundsToRange: function(range) {
+    addBoundsToRange(range) {
       range.addValue(this.timestamp);
     },
 
-    getSampleIndex: function() {
+    getSampleIndex() {
       return tr.b.findLowIndexInSortedArray(
           this.series.timestamps,
           function(x) { return x; },
@@ -97,7 +89,7 @@ tr.exportTo('tr.model', function() {
       });
 
   return {
-    CounterSample: CounterSample
+    CounterSample,
   };
 });
 </script>

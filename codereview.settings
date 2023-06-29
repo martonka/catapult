@@ -1,6 +1,6 @@
-# This file is used by gcl to get repository specific information.
-CODE_REVIEW_SERVER: codereview.chromium.org
+# This file is used by git-cl to get repository specific information.
+BUG_PREFIX: chromium:
 CC_LIST: catapult-reviews@chromium.org
-VIEW_VC: https://chromium.googlesource.com/external/github.com/catapult-project/catapult/+/
+GERRIT_HOST: True
 PROJECT: catapult
-BUG_PREFIX: catapult:#
+VIEW_VC: https://chromium.googlesource.com/catapult/+/

@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import types
 import unittest
 
@@ -20,7 +21,8 @@ class CounterIterEventsInThisContainerTest(unittest.TestCase):
 
   def assertIsEmptyIterator(self, itr):
     self.assertIsInstance(itr, types.GeneratorType)
-    self.assertRaises(StopIteration, itr.next)
+    with self.assertRaises(StopIteration):
+      next(itr)
 
   def testEmptyTimestamps(self):
     self.assertIsEmptyIterator(self.counter.IterEventsInThisContainer(

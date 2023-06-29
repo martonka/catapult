@@ -2,43 +2,44 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
 import optparse
-import py_utils
+import platform
 import re
-import subprocess
 import sys
 import threading
 import zlib
 
+import py_utils
+
 from devil.android import device_utils
+from devil.android.sdk import version_codes
 from py_trace_event import trace_time as trace_time_module
 from systrace import trace_result
 from systrace import tracing_agents
 from systrace import util
 
-
 # Text that ADB sends, but does not need to be displayed to the user.
-ADB_IGNORE_REGEXP = r'^capturing trace\.\.\. done|^capturing trace\.\.\.'
+ADB_IGNORE_REGEXP = br'^capturing trace\.\.\. done|^capturing trace\.\.\.'
 # The number of seconds to wait on output from ADB.
 ADB_STDOUT_READ_TIMEOUT = 0.2
+# The number of seconds to wait for large output from ADB.
+ADB_LARGE_OUTPUT_TIMEOUT = 600
 # The adb shell command to initiate a trace.
 ATRACE_BASE_ARGS = ['atrace']
 # If a custom list of categories is not specified, traces will include
 # these categories (if available on the device).
-DEFAULT_CATEGORIES = 'sched,gfx,view,dalvik,webview,input,disk,am,wm'
+DEFAULT_CATEGORIES = 'am,binder_driver,camera,dalvik,freq,'\
+                     'gfx,hal,idle,input,memory,memreclaim,'\
+                     'res,sched,sync,view,webview,wm,workq'
 # The command to list trace categories.
 LIST_CATEGORIES_ARGS = ATRACE_BASE_ARGS + ['--list_categories']
 # Minimum number of seconds between displaying status updates.
 MIN_TIME_BETWEEN_STATUS_UPDATES = 0.2
 # ADB sends this text to indicate the beginning of the trace data.
-TRACE_START_REGEXP = r'TRACE\:'
+TRACE_START_REGEXP = br'TRACE\:'
 # Plain-text trace data should always start with this string.
-TRACE_TEXT_HEADER = '# tracer'
-# The property name for switching on and off tracing during boot.
-BOOTTRACE_PROP = 'persist.debug.atrace.boottrace'
-# The file path for specifying categories to be traced during boot.
-BOOTTRACE_CATEGORIES = '/data/misc/boottrace/categories'
-_FIX_THREAD_IDS = True
+TRACE_TEXT_HEADER = b'# tracer'
 _FIX_MISSING_TGIDS = True
 _FIX_CIRCULAR_TRACES = True
 
@@ -53,19 +54,34 @@ def list_categories(config):
       config: Tracing config.
   """
   devutils = device_utils.DeviceUtils(config.device_serial_number)
-  print '\n'.join(devutils.RunShellCommand(LIST_CATEGORIES_ARGS))
+  categories = devutils.RunShellCommand(
+      LIST_CATEGORIES_ARGS, check_return=True)
+
+  device_sdk_version = util.get_device_sdk_version()
+  if device_sdk_version < version_codes.MARSHMALLOW:
+    # work around platform bug where rs tag would corrupt trace until M(Api23)
+    categories = [c for c in categories if not re.match(r'^\s*rs\s*-', c)]
+
+  print('\n'.join(categories))
   if not devutils.HasRoot():
-    print '\nNOTE: more categories may be available with adb root\n'
+    print('\nNOTE: more categories may be available with adb root\n')
 
 
-def get_available_categories(config):
+def get_available_categories(config, device_sdk_version):
   """Gets the list of atrace categories available for tracing.
   Args:
       config: Tracing config.
+      device_sdk_version: Sdk version int of device to be queried.
   """
   devutils = device_utils.DeviceUtils(config.device_serial_number)
-  categories_output = devutils.RunShellCommand(LIST_CATEGORIES_ARGS)
-  return [c.split('-')[0].strip() for c in categories_output]
+  categories_output = devutils.RunShellCommand(
+      LIST_CATEGORIES_ARGS, check_return=True)
+  categories = [c.split('-')[0].strip() for c in categories_output]
+
+  if device_sdk_version < version_codes.MARSHMALLOW:
+    # work around platform bug where rs tag would corrupt trace until M(Api23)
+    categories = [c for c in categories if c != 'rs']
+  return categories
 
 
 def try_create_agent(config):
@@ -79,18 +95,18 @@ def try_create_agent(config):
   if config.from_file is not None:
     return None
 
+  if not config.atrace_categories:
+    return None
+
   # Check device SDK version.
   device_sdk_version = util.get_device_sdk_version()
-  if device_sdk_version <= 17:
-    print ('Device SDK versions <= 17 not supported.\n'
-           'Your device SDK version is %d.' % device_sdk_version)
+  if device_sdk_version < version_codes.JELLY_BEAN_MR2:
+    print('Device SDK versions < 18 (Jellybean MR2) not supported.\n'
+          'Your device SDK version is %d.' % device_sdk_version)
     return None
-  if device_sdk_version <= 22 and config.boot:
-    print ('--boot option does not work on the device SDK '
-           'version 22 or before.\nYour device SDK version '
-           'is %d.' % device_sdk_version)
-    return None
-  return BootAgent() if config.boot else AtraceAgent()
+
+  return AtraceAgent(device_sdk_version,
+                     util.get_tracing_path(config.device_serial_number))
 
 def _construct_extra_atrace_args(config, categories):
   """Construct extra arguments (-a, -k, categories) for atrace command.
@@ -127,6 +143,11 @@ def _construct_atrace_args(config, categories):
   if (config.trace_buf_size is not None) and (config.trace_buf_size > 0):
     atrace_args.extend(['-b', str(config.trace_buf_size)])
 
+  elif 'webview' in categories and 'sched' in categories:
+    # https://crbug.com/814330: webview_startup sometimes exceeds the buffer
+    # limit, so doubling this.
+    atrace_args.extend(['-b', '8192'])
+
   elif 'sched' in categories:
     # 'sched' is a high-volume tag, double the default buffer size
     # to accommodate that
@@ -139,8 +160,10 @@ def _construct_atrace_args(config, categories):
 
 class AtraceAgent(tracing_agents.TracingAgent):
 
-  def __init__(self):
+  def __init__(self, device_sdk_version, tracing_path):
     super(AtraceAgent, self).__init__()
+    self._device_sdk_version = device_sdk_version
+    self._tracing_path = tracing_path
     self._adb = None
     self._trace_data = None
     self._tracer_args = None
@@ -155,24 +178,24 @@ class AtraceAgent(tracing_agents.TracingAgent):
 
   @py_utils.Timeout(tracing_agents.START_STOP_TIMEOUT)
   def StartAgentTracing(self, config, timeout=None):
+    assert config.atrace_categories, 'Atrace categories are missing!'
     self._config = config
     self._categories = config.atrace_categories
     if isinstance(self._categories, list):
       self._categories = ','.join(self._categories)
-    if not self._categories:
-      self._categories = DEFAULT_CATEGORIES
-    avail_cats = get_available_categories(config)
+    avail_cats = get_available_categories(config, self._device_sdk_version)
     unavailable = [x for x in self._categories.split(',') if
         x not in avail_cats]
     self._categories = [x for x in self._categories.split(',') if
         x in avail_cats]
     if unavailable:
-      print 'These categories are unavailable: ' + ' '.join(unavailable)
+      print('These categories are unavailable: ' + ' '.join(unavailable))
     self._device_utils = device_utils.DeviceUtils(config.device_serial_number)
     self._device_serial_number = config.device_serial_number
     self._tracer_args = _construct_atrace_args(config,
                                                self._categories)
-    self._device_utils.RunShellCommand(self._tracer_args + ['--async_start'])
+    self._device_utils.RunShellCommand(
+        self._tracer_args + ['--async_start'], check_return=True)
     return True
 
   def _collect_and_preprocess(self):
@@ -212,41 +235,51 @@ class AtraceAgent(tracing_agents.TracingAgent):
         sync_id: ID string for clock sync marker.
     """
     cmd = 'echo trace_event_clock_sync: name=%s >' \
-        ' /sys/kernel/debug/tracing/trace_marker' % sync_id
+        ' %s/trace_marker' % (sync_id, self._tracing_path)
     with self._device_utils.adb.PersistentShell(
         self._device_serial_number) as shell:
       t1 = trace_time_module.Now()
       shell.RunCommand(cmd, close=True)
       did_record_sync_marker_callback(t1, sync_id)
 
-  def _dump_trace(self):
-    """Dumps the atrace buffer and returns the dumped buffer."""
-    dump_cmd = self._tracer_args + ['--async_dump']
-    return self._device_utils.RunShellCommand(dump_cmd, raw_output=True)
-
-  def _stop_trace(self):
+  def _stop_collect_trace(self):
     """Stops atrace.
 
-    Tries to stop the atrace asynchronously. Note that on some devices,
-    --async-stop does not work. Thus, this uses the fallback
-    method of running a zero-length synchronous trace if that fails.
-    """
-    self._device_utils.RunShellCommand(self._tracer_args + ['--async_stop'])
-    is_trace_enabled_cmd = ['cat', '/sys/kernel/debug/tracing/tracing_on']
-    trace_on = int(self._device_utils.RunShellCommand(is_trace_enabled_cmd)[0])
-    if trace_on:
-      self._device_utils.RunShellCommand(self._tracer_args + ['-t 0'])
+    Note that prior to Api 23, --async-stop isn't working correctly. It
+    doesn't stop tracing and clears trace buffer before dumping it rendering
+    results unusable."""
+    if self._device_sdk_version < version_codes.MARSHMALLOW:
+      is_trace_enabled_file = '%s/tracing_on' % self._tracing_path
+      # Stop tracing first so new data won't arrive while dump is performed (it
+      # may take a non-trivial time and tracing buffer may overflow).
+      self._device_utils.WriteFile(is_trace_enabled_file, '0')
+      result = self._device_utils.RunShellCommand(
+          self._tracer_args + ['--async_dump'], raw_output=True,
+          large_output=True, check_return=True,
+          timeout=ADB_LARGE_OUTPUT_TIMEOUT)
+      # Run synchronous tracing for 0 seconds to stop tracing, clear buffers
+      # and other state.
+      self._device_utils.RunShellCommand(
+          self._tracer_args + ['-t 0'], check_return=True)
+    else:
+      # On M+ --async_stop does everything necessary
+      result = self._device_utils.RunShellCommand(
+          self._tracer_args + ['--async_stop'], raw_output=True,
+          large_output=True, check_return=True,
+          timeout=ADB_LARGE_OUTPUT_TIMEOUT)
+
+    return result
 
   def _collect_trace_data(self):
     """Reads the output from atrace and stops the trace."""
-    result = self._dump_trace()
+    result = self._stop_collect_trace()
+
     data_start = re.search(TRACE_START_REGEXP, result)
     if data_start:
       data_start = data_start.end(0)
     else:
       raise IOError('Unable to get atrace data. Did you forget adb root?')
     output = re.sub(ADB_IGNORE_REGEXP, '', result[data_start:])
-    self._stop_trace()
     return output
 
   def _preprocess_trace_data(self, trace_data):
@@ -261,116 +294,34 @@ class AtraceAgent(tracing_agents.TracingAgent):
       trace_data = strip_and_decompress_trace(trace_data)
 
     if not trace_data:
-      print >> sys.stderr, ('No data was captured.  Output file was not '
-                            'written.')
+      print('No data was captured.  Output file was not written.',
+            file=sys.stderr)
       sys.exit(1)
 
-    if _FIX_THREAD_IDS:
-      # Issue ps command to device and patch thread names
-      ps_dump = do_preprocess_adb_cmd('ps -T -o USER,TID,PPID,VSIZE,RSS'
-                                      ',WCHAN,ADDR=PC,S,CMD || ps -t',
-                                      self._config.device_serial_number)
-      if ps_dump is not None:
-        thread_names = extract_thread_list(ps_dump)
-        trace_data = fix_thread_names(trace_data, thread_names)
-
     if _FIX_MISSING_TGIDS:
-      # Issue printf command to device and patch tgids
-      procfs_dump = do_preprocess_adb_cmd('printf "%s\n" ' +
-                                          '/proc/[0-9]*/task/[0-9]*',
-                                          self._config.device_serial_number)
-      if procfs_dump is not None:
-        pid2_tgid = extract_tgids(procfs_dump)
-        trace_data = fix_missing_tgids(trace_data, pid2_tgid)
+      # Gather proc data from device and patch tgids
+      procfs_dump = self._device_utils.RunShellCommand(
+          'echo -n /proc/[0-9]*/task/[0-9]*',
+          shell=True, check_return=True)[0].split(' ')
+      pid2_tgid = extract_tgids(procfs_dump)
+      trace_data = fix_missing_tgids(trace_data, pid2_tgid)
 
     if _FIX_CIRCULAR_TRACES:
       trace_data = fix_circular_traces(trace_data)
 
     return trace_data
 
-
-class BootAgent(AtraceAgent):
-  """AtraceAgent that specializes in tracing the boot sequence."""
-
-  def __init__(self):
-    super(BootAgent, self).__init__()
-
-  @py_utils.Timeout(tracing_agents.START_STOP_TIMEOUT)
-  def StartAgentTracing(self, config, timeout=None):
-    self._config = config
-    try:
-      setup_args = _construct_boot_setup_command(config)
-      subprocess.check_call(setup_args)
-    except OSError as error:
-      print >> sys.stderr, (
-          'The command "%s" failed with the following error:' %
-          ' '.join(setup_args))
-      print >> sys.stderr, '    ', error
-      sys.exit(1)
-
-  def _dump_trace(self): #called by StopAgentTracing
-    """Dumps the running trace asynchronously and returns the dumped trace."""
-    dump_cmd = _construct_boot_trace_command(self._config)
-    return self._device_utils.RunShellCommand(dump_cmd, raw_output=True)
-
-  def _stop_trace(self): # called by _collect_trace_data via StopAgentTracing
-    # pylint: disable=no-self-use
-    # This is a member function for consistency with AtraceAgent
-    pass # don't need to stop separately; already done in dump_trace
-
-def _construct_boot_setup_command(config):
-  echo_args = (['echo'] + config.atrace_categories +
-               ['>', BOOTTRACE_CATEGORIES])
-  setprop_args = ['setprop', BOOTTRACE_PROP, '1']
-  reboot_args = ['reboot']
-  return util.construct_adb_shell_command(
-      echo_args + ['&&'] + setprop_args + ['&&'] + reboot_args,
-      config.device_serial_number)
-
-def _construct_boot_trace_command(config):
-  atrace_args = ['atrace', '--async_stop']
-  setprop_args = ['setprop', BOOTTRACE_PROP, '0']
-  rm_args = ['rm', BOOTTRACE_CATEGORIES]
-  return util.construct_adb_shell_command(
-        atrace_args + ['&&'] + setprop_args + ['&&'] + rm_args,
-        config.device_serial_number)
-
-
-def extract_thread_list(trace_text):
-  """Removes the thread list from the given trace data.
-
-  Args:
-    trace_text: The text portion of the trace
-
-  Returns:
-    a map of thread ids to thread names
-  """
-
-  threads = {}
-  # start at line 1 to skip the top of the ps dump:
-  text = trace_text.splitlines()
-  for line in text[1:]:
-    cols = line.split(None, 8)
-    if len(cols) == 9:
-      tid = int(cols[1])
-      name = cols[8]
-      threads[tid] = name
-
-  return threads
-
-
-def extract_tgids(trace_text):
+def extract_tgids(trace_lines):
   """Removes the procfs dump from the given trace text
 
   Args:
-    trace_text: The text portion of the trace
+    trace_lines: The text portion of the trace
 
   Returns:
     a map of pids to their tgid.
   """
   tgid_2pid = {}
-  text = trace_text.splitlines()
-  for line in text:
+  for line in trace_lines:
     result = re.match('^/proc/([0-9]+)/task/([0-9]+)', line)
     if result:
       parent_pid, tgid = result.group(1, 2)
@@ -388,14 +339,14 @@ def strip_and_decompress_trace(trace_data):
     The decompressed trace data.
   """
   # Collapse CRLFs that are added by adb shell.
-  if trace_data.startswith('\r\n'):
-    trace_data = trace_data.replace('\r\n', '\n')
-  elif trace_data.startswith('\r\r\n'):
+  if trace_data.startswith(b'\r\n'):
+    trace_data = trace_data.replace(b'\r\n', b'\n')
+  elif trace_data.startswith(b'\r\r\n'):
     # On windows, adb adds an extra '\r' character for each line.
-    trace_data = trace_data.replace('\r\r\n', '\n')
+    trace_data = trace_data.replace(b'\r\r\n', b'\n')
 
   # Skip the initial newline.
-  if trace_data[0] == '\n':
+  if trace_data.startswith(b'\n'):
     trace_data = trace_data[1:]
 
   if not trace_data.startswith(TRACE_TEXT_HEADER):
@@ -403,42 +354,12 @@ def strip_and_decompress_trace(trace_data):
     trace_data = zlib.decompress(trace_data)
 
   # Enforce Unix line-endings.
-  trace_data = trace_data.replace('\r', '')
+  trace_data = trace_data.replace(b'\r', b'')
 
   # Skip any initial newlines.
-  while trace_data and trace_data[0] == '\n':
+  while trace_data and trace_data.startswith(b'\n'):
     trace_data = trace_data[1:]
 
-  return trace_data
-
-
-def fix_thread_names(trace_data, thread_names):
-  """Replaces thread ids with their names.
-
-  Args:
-    trace_data: The atrace data.
-    thread_names: A mapping of thread ids to thread names.
-  Returns:
-    The updated trace data.
-  """
-
-  def repl(m):
-    tid = int(m.group(2))
-    if tid > 0:
-      name = thread_names.get(tid)
-      if name is None:
-        name = m.group(1)
-        if name == '<...>':
-          name = '<' + str(tid) + '>'
-        thread_names[tid] = name
-      return name + '-' + m.group(2)
-    else:
-      return m.group(0)
-
-  # matches something like:
-  # Binder_2-895, or com.google.android.inputmethod.latin-1078 etc...
-  trace_data = re.sub(r'^\s*(\S+)-(\d+)', repl, trace_data,
-                      flags=re.MULTILINE)
   return trace_data
 
 
@@ -488,7 +409,7 @@ def fix_circular_traces(out):
   #
   # No such headers are emitted if there were no overflows or the trace
   # was captured with non-circular buffers.
-  buffer_start_re = re.compile(r'^#+ CPU \d+ buffer started', re.MULTILINE)
+  buffer_start_re = re.compile(br'^#+ CPU \d+ buffer started', re.MULTILINE)
 
   start_of_full_trace = 0
 
@@ -501,41 +422,24 @@ def fix_circular_traces(out):
 
   if start_of_full_trace > 0:
     # Need to keep the header intact to make the importer happy.
-    end_of_header = re.search(r'^[^#]', out, re.MULTILINE).start()
+    end_of_header = re.search(br'^[^#]', out, re.MULTILINE).start()
     out = out[:end_of_header] + out[start_of_full_trace:]
   return out
-
-def do_preprocess_adb_cmd(command, serial):
-  """Run an ADB command for preprocessing of output.
-
-  Run an ADB command and get the results. This function is used for
-  running commands relating to preprocessing of output data.
-
-  Args:
-      command: Command to run.
-      serial: Serial number of device.
-  """
-
-  args = [command]
-  dump, ret_code = util.run_adb_shell(args, serial)
-  if ret_code != 0:
-    return None
-
-  dump = ''.join(dump)
-  return dump
 
 
 class AtraceConfig(tracing_agents.TracingConfig):
   def __init__(self, atrace_categories, trace_buf_size, kfuncs,
-               app_name, compress_trace_data, boot, from_file,
+               app_name, compress_trace_data, from_file,
                device_serial_number, trace_time, target):
     tracing_agents.TracingConfig.__init__(self)
     self.atrace_categories = atrace_categories
     self.trace_buf_size = trace_buf_size
     self.kfuncs = kfuncs
     self.app_name = app_name
-    self.compress_trace_data = compress_trace_data
-    self.boot = boot
+    # Trace compression is broken on Windows.
+    # TODO: Fix https://crbug.com/739751.
+    self.compress_trace_data = \
+        compress_trace_data and platform.system() != 'Windows'
     self.from_file = from_file
     self.device_serial_number = device_serial_number
     self.trace_time = trace_time
@@ -554,10 +458,6 @@ def add_options(parser):
                      default=True, action='store_false',
                      help='Tell the device not to send the trace data in '
                      'compressed form.')
-  options.add_option('--boot', dest='boot', default=False, action='store_true',
-                     help='reboot the device with tracing during boot enabled.'
-                     'The report is created by hitting Ctrl+C after the device'
-                     'has booted up.')
   options.add_option('-a', '--app', dest='app_name', default=None,
                      type='string', action='store',
                      help='enable application-level tracing for '
@@ -572,6 +472,5 @@ def get_config(options):
   return AtraceConfig(options.atrace_categories,
                       options.trace_buf_size, options.kfuncs,
                       options.app_name, options.compress_trace_data,
-                      options.boot, options.from_file,
-                      options.device_serial_number, options.trace_time,
-                      options.target)
+                      options.from_file, options.device_serial_number,
+                      options.trace_time, options.target)

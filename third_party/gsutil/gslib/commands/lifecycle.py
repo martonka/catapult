@@ -15,19 +15,23 @@
 """Implementation of lifecycle configuration command for GCS buckets."""
 
 from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import division
+from __future__ import unicode_literals
 
 import sys
 
+from gslib import metrics
 from gslib.command import Command
 from gslib.command_argument import CommandArgument
 from gslib.cs_api_map import ApiSelector
 from gslib.exception import CommandException
+from gslib.exception import NO_URLS_MATCHED_TARGET
 from gslib.help_provider import CreateHelpText
+from gslib.storage_url import UrlsAreForSingleProvider
 from gslib.third_party.storage_apitools import storage_v1_messages as apitools_messages
-from gslib.translation_helper import LifecycleTranslation
-from gslib.util import NO_MAX
-from gslib.util import UrlsAreForSingleProvider
-
+from gslib.utils.constants import NO_MAX
+from gslib.utils.translation_helper import LifecycleTranslation
 
 _GET_SYNOPSIS = """
   gsutil lifecycle get url
@@ -59,7 +63,7 @@ _DESCRIPTION = """
   The lifecycle command can be used to get or set lifecycle management policies
   for the given bucket(s). This command is supported for buckets only, not
   objects. For more information on object lifecycle management, please see the
-  `developer guide <https://developers.google.com/storage/docs/lifecycle>`_.
+  `Google Cloud Storage docs <https://cloud.google.com/storage/docs/lifecycle>`_.
 
   The lifecycle command has two sub-commands:
 """ + _GET_DESCRIPTION + _SET_DESCRIPTION + """
@@ -104,27 +108,32 @@ class LifecycleCommand(Command):
       file_url_ok=True,
       provider_url_ok=False,
       urls_start_arg=1,
-      gs_api_support=[ApiSelector.XML, ApiSelector.JSON],
+      gs_api_support=[
+          ApiSelector.JSON,
+          ApiSelector.XML,
+      ],
       gs_default_api=ApiSelector.JSON,
       argparse_arguments={
           'set': [
               CommandArgument.MakeNFileURLsArgument(1),
-              CommandArgument.MakeZeroOrMoreCloudBucketURLsArgument()
+              CommandArgument.MakeZeroOrMoreCloudBucketURLsArgument(),
           ],
-          'get': [
-              CommandArgument.MakeNCloudBucketURLsArgument(1)
-          ]
-      }
-  )
+          'get': [CommandArgument.MakeNCloudBucketURLsArgument(1),]
+      })
   # Help specification. See help_provider.py for documentation.
   help_spec = Command.HelpSpec(
       help_name='lifecycle',
-      help_name_aliases=['getlifecycle', 'setlifecycle'],
+      help_name_aliases=[
+          'getlifecycle',
+          'setlifecycle',
+      ],
       help_type='command_help',
-      help_one_line_summary=(
-          'Get or set lifecycle configuration for a bucket'),
+      help_one_line_summary=('Get or set lifecycle configuration for a bucket'),
       help_text=_DETAILED_HELP_TEXT,
-      subcommand_help_text={'get': _get_help_text, 'set': _set_help_text},
+      subcommand_help_text={
+          'get': _get_help_text,
+          'set': _set_help_text,
+      },
   )
 
   def _SetLifecycleConfig(self):
@@ -151,15 +160,18 @@ class LifecycleCommand(Command):
         some_matched = True
         self.logger.info('Setting lifecycle configuration on %s...', blr)
         if url.scheme == 's3':
-          self.gsutil_api.XmlPassThroughSetLifecycle(
-              lifecycle_txt, url, provider=url.scheme)
+          self.gsutil_api.XmlPassThroughSetLifecycle(lifecycle_txt,
+                                                     url,
+                                                     provider=url.scheme)
         else:
           lifecycle = LifecycleTranslation.JsonLifecycleToMessage(lifecycle_txt)
           bucket_metadata = apitools_messages.Bucket(lifecycle=lifecycle)
-          self.gsutil_api.PatchBucket(url.bucket_name, bucket_metadata,
-                                      provider=url.scheme, fields=['id'])
+          self.gsutil_api.PatchBucket(url.bucket_name,
+                                      bucket_metadata,
+                                      provider=url.scheme,
+                                      fields=['id'])
     if not some_matched:
-      raise CommandException('No URLs matched')
+      raise CommandException(NO_URLS_MATCHED_TARGET % list(url_args))
     return 0
 
   def _GetLifecycleConfig(self):
@@ -168,12 +180,14 @@ class LifecycleCommand(Command):
         self.args[0], bucket_fields=['lifecycle'])
 
     if bucket_url.scheme == 's3':
-      sys.stdout.write(self.gsutil_api.XmlPassThroughGetLifecycle(
-          bucket_url, provider=bucket_url.scheme))
+      sys.stdout.write(
+          self.gsutil_api.XmlPassThroughGetLifecycle(
+              bucket_url, provider=bucket_url.scheme))
     else:
       if bucket_metadata.lifecycle and bucket_metadata.lifecycle.rule:
-        sys.stdout.write(LifecycleTranslation.JsonLifecycleFromMessage(
-            bucket_metadata.lifecycle))
+        sys.stdout.write(
+            LifecycleTranslation.JsonLifecycleFromMessage(
+                bucket_metadata.lifecycle))
       else:
         sys.stdout.write('%s has no lifecycle configuration.\n' % bucket_url)
 
@@ -183,8 +197,10 @@ class LifecycleCommand(Command):
     """Command entry point for the lifecycle command."""
     subcommand = self.args.pop(0)
     if subcommand == 'get':
+      metrics.LogCommandParams(subcommands=[subcommand])
       return self._GetLifecycleConfig()
     elif subcommand == 'set':
+      metrics.LogCommandParams(subcommands=[subcommand])
       return self._SetLifecycleConfig()
     else:
       raise CommandException('Invalid subcommand "%s" for the %s command.' %

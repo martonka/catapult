@@ -17,6 +17,7 @@ import io
 import logging
 import sys
 
+from typ import python_2_3_compat
 from typ.host import _TeedStream
 
 
@@ -161,7 +162,7 @@ class FakeHost(object):
             p = '/'.join(comps)
         return p
 
-    def maybe_mkdir(self, *comps):
+    def maybe_make_directory(self, *comps):
         path = self.abspath(self.join(*comps))
         if path not in self.dirs:
             self.dirs.add(path)
@@ -238,7 +239,7 @@ class FakeHost(object):
 
     def _write(self, path, contents):
         full_path = self.abspath(path)
-        self.maybe_mkdir(self.dirname(full_path))
+        self.maybe_make_directory(self.dirname(full_path))
         self.files[full_path] = contents
         self.written_files[full_path] = contents
 
@@ -273,6 +274,8 @@ class FakeHost(object):
     def restore_output(self):
         assert isinstance(self.stdout, _TeedStream)
         out, err = (self.stdout.restore(), self.stderr.restore())
+        out = python_2_3_compat.bytes_to_str(out)
+        err = python_2_3_compat.bytes_to_str(err)
         self.logger.handlers = self._orig_logging_handlers
         self._untap_output()
         return out, err

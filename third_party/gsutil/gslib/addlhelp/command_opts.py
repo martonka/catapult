@@ -15,14 +15,13 @@
 """Additional help about gsutil command-level options."""
 
 from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import division
+from __future__ import unicode_literals
 
 from gslib.help_provider import HelpProvider
 
 _DETAILED_HELP_TEXT = ("""
-<B>SYNOPSIS</B>
-  Top-level gsutil Options
-
-
 <B>DESCRIPTION</B>
   gsutil supports separate options for the top-level gsutil command and
   the individual sub-commands (like cp, rm, etc.) The top-level options
@@ -37,10 +36,10 @@ _DETAILED_HELP_TEXT = ("""
 
 <B>OPTIONS</B>
   -D          Shows HTTP requests/headers and additional debug info needed when
-              posting support requests.
+              posting support requests, including exception stack traces.
 
-  -DD         Shows HTTP requests/headers, additional debug info plus HTTP
-              upstream payload.
+  -DD         Shows HTTP requests/headers, additional debug info,
+              exception stack traces, plus HTTP upstream payload.
 
   -h          Allows you to specify certain HTTP headers, for example:
 
@@ -52,15 +51,21 @@ _DETAILED_HELP_TEXT = ("""
               filename=filename.ext"), to avoid having the shell split them
               into separate arguments.
 
-              The following headers are supported:
-              Cache-Control
-              Content-Disposition
-              Content-Encoding
-              Content-Language
-              Content-MD5
-              Content-Type
-              Custom metadata headers with a matching Cloud Storage Provider
-              prefix, such as:
+              The following headers are stored as object metadata and used
+              in future requests on the object:
+
+                Cache-Control
+                Content-Disposition
+                Content-Encoding
+                Content-Language
+                Content-Type
+
+              The following headers are used to check data integrity:
+
+                Content-MD5
+
+              gsutil also supports custom metadata headers with a matching
+              Cloud Storage Provider prefix, such as:
 
                 x-goog-meta-
 
@@ -74,6 +79,15 @@ _DETAILED_HELP_TEXT = ("""
 
               See also "gsutil help setmeta" for the ability to set metadata
               fields on objects after they have been uploaded.
+
+  -i          Allows you to use the configured credentials to impersonate a
+              service account, for example:
+
+                gsutil -i "service-account@google.com" ls gs://pub
+
+              Note that this setting will be ignored by the XML API and S3. See
+              'gsutil help creds' for more information on impersonating service
+              accounts.
 
   -m          Causes supported operations (acl ch, acl set, cp, mv, rm, rsync,
               and setmeta) to run in parallel. This can significantly improve
@@ -92,8 +106,9 @@ _DETAILED_HELP_TEXT = ("""
               are using a slower network, such as the typical network speeds
               offered by non-business home network plans. It can also make
               your performance worse for cases that perform all operations
-              locally (e.g., gsutil rsync, where both source and desination URLs
-              are on the local disk), because it can "thrash" your local disk.
+              locally (e.g., gsutil rsync, where both source and destination
+              URLs are on the local disk), because it can "thrash" your local
+              disk.
 
               If a download or upload operation using parallel transfer fails
               before the entire transfer is complete (e.g. failing after 300 of
@@ -104,7 +119,8 @@ _DETAILED_HELP_TEXT = ("""
               an error when the -m flag is disabled, all commands will
               continue to try all operations when -m is enabled with multiple
               threads or processes, and the number of failed operations (if any)
-              will be reported at the end of the command's execution.
+              will be reported as an exception at the end of the command's
+              execution.
 
   -o          Set/override values in the boto configuration value, in the format
               <section>:<name>=<value>, e.g. gsutil -o "Boto:proxy=host" ...
@@ -116,6 +132,11 @@ _DETAILED_HELP_TEXT = ("""
               etc. Errors are still reported. This option can be useful for
               running gsutil from a cron job that logs its output to a file, for
               which the only information desired in the log is failures.
+
+  -u          Allows you to specify a user project to be billed for the request.
+              For example:
+
+                gsutil -u "bill-this-project" cp ...
 """)
 
 

@@ -4,6 +4,7 @@
 
 from __future__ import division
 
+from __future__ import absolute_import
 import warnings
 
 from telemetry.internal.util import external_modules
@@ -64,7 +65,20 @@ def FromPngFile(path):
 def FromPng(png_data):
   if cv2 is not None:
     file_bytes = np.asarray(bytearray(png_data), dtype=np.uint8)
-    return cv2.imdecode(file_bytes, cv2.CV_LOAD_IMAGE_COLOR)
+    image = cv2.imdecode(file_bytes, cv2.CV_LOAD_IMAGE_UNCHANGED)
+
+    # Some platforms set a transparent background. For consistency, we override
+    # transparency to white and drop the alpha channel here.
+    if image[0][0].size == 4:
+      # Set the alpha channel to white.
+      alpha_mask = image[:, :, 3] == 0
+      image[alpha_mask] = [255, 255, 255, 255]
+      image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+
+      # Drop the alpha channel.
+      image = image[:, :, :3]
+
+    return image
   else:
     warnings.warn(
         'Using pure python png decoder, which could be very slow. To speed up, '
@@ -89,7 +103,7 @@ def AreEqual(image1, image2, tolerance, likely_equal):
     if likely_equal:
       return np.amax(_SimpleDiff(image1, image2)) <= tolerance
     else:
-      for row in xrange(Height(image1)):
+      for row in range(Height(image1)):
         if np.amax(_SimpleDiff(image1[row], image2[row])) > tolerance:
           return False
       return True
@@ -97,7 +111,7 @@ def AreEqual(image1, image2, tolerance, likely_equal):
     if likely_equal:
       return (self_image == other_image).all()
     else:
-      for row in xrange(Height(image1)):
+      for row in range(Height(image1)):
         if not (self_image[row] == other_image[row]).all():
           return False
       return True
@@ -178,8 +192,9 @@ def GetColorHistogram(image, ignore_color, tolerance):
                   (filtered[:, 2] < colorm[2]) | (filtered[:, 2] > colorp[2]))
       filtered = np.compress(in_range, filtered, axis=0)
     if len(filtered[:, 0]) == 0:
-      return color_histogram.ColorHistogram(np.zeros((256)), np.zeros((256)),
-                                      np.zeros((256)), ignore_color)
+      return color_histogram.ColorHistogram(
+          np.zeros((256)), np.zeros((256)),
+          np.zeros((256)), ignore_color)
     hist_b = np.bincount(filtered[:, 0], minlength=256)
     hist_g = np.bincount(filtered[:, 1], minlength=256)
     hist_r = np.bincount(filtered[:, 2], minlength=256)

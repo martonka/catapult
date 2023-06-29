@@ -14,66 +14,52 @@ found in the LICENSE file.
  * tracing, and that tracing can use to talk to inspector.
  */
 tr.exportTo('tr.ui.e.about_tracing', function() {
-  // Interface used by inspector when it hands data to us from the backend.
-  window.DevToolsAPI = {
-    setToolbarColors: function() { },
-    addExtensions: function() { },
-    setInspectedPageId: function() { },
+  class InspectorConnection {
+    constructor(windowGlobal) {
+      if (!windowGlobal.DevToolsHost) {
+        throw new Error('Requires window.DevToolsHost');
+      }
+      this.devToolsHost_ = windowGlobal.DevToolsHost;
+      this.installDevToolsAPI_(windowGlobal);
 
-    dispatchMessage: function(payload) {
-      throw new Error('Should have been patched by InspectorConnection');
+      this.nextRequestId_ = 1;
+      this.pendingRequestResolversId_ = {};
+
+      this.notificationListenersByMethodName_ = {};
     }
-  };
-  // Temporary until inspector backend switches to DevToolsAPI.
-  window.InspectorFrontendAPI = window.DevToolsAPI;
 
-  /**
-   * @constructor
-   */
-  function InspectorConnection() {
-    if (InspectorConnection.instance)
-      throw new Error('Singleton');
-
-    this.nextRequestId_ = 1;
-    this.pendingRequestResolversId_ = {};
-
-    this.notificationListenersByMethodName_ = {};
-    DevToolsAPI.dispatchMessage = this.dispatchMessage_.bind(this);
-  }
-
-  InspectorConnection.prototype = {
-    req: function(method, params) {
-      var id = this.nextRequestId_++;
-      var msg = JSON.stringify({
-        id: id,
-        method: method,
-        params: params
+    req(method, params) {
+      const id = this.nextRequestId_++;
+      const msg = JSON.stringify({
+        id,
+        method,
+        params
       });
-      var devtoolsMessageStr = JSON.stringify(
-        {'id': id, 'method': 'dispatchProtocolMessage', 'params': [msg]});
-      DevToolsHost.sendMessageToEmbedder(devtoolsMessageStr);
+      const devtoolsMessageStr = JSON.stringify(
+          {id, 'method': 'dispatchProtocolMessage', 'params': [msg]});
+      this.devToolsHost_.sendMessageToEmbedder(devtoolsMessageStr);
 
       return new Promise(function(resolve, reject) {
         this.pendingRequestResolversId_[id] = {
-          resolve: resolve,
-          reject: reject
+          resolve,
+          reject
         };
       }.bind(this));
-    },
+    }
 
-    setNotificationListener: function(method, listener) {
+    setNotificationListener(method, listener) {
       this.notificationListenersByMethodName_[method] = listener;
-    },
+    }
 
-    dispatchMessage_: function(payload) {
-      var isStringPayload = typeof payload === 'string';
+    dispatchMessage_(payload) {
+      const isStringPayload = typeof payload === 'string';
       // Special handling for Tracing.dataCollected because it is high
       // bandwidth.
-      var isDataCollectedMessage = isStringPayload ?
-          payload.indexOf('"method": "Tracing.dataCollected"') !== -1 :
-          payload.method === 'Tracing.dataCollected';
+      const isDataCollectedMessage = isStringPayload ?
+        payload.includes('"method": "Tracing.dataCollected"') :
+        payload.method === 'Tracing.dataCollected';
       if (isDataCollectedMessage) {
-        var listener = this.notificationListenersByMethodName_[
+        const listener = this.notificationListenersByMethodName_[
             'Tracing.dataCollected'];
         if (listener) {
           // FIXME(loislo): trace viewer should be able to process
@@ -85,11 +71,10 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
         }
       }
 
-      var message = isStringPayload ? JSON.parse(payload) : payload;
+      const message = isStringPayload ? JSON.parse(payload) : payload;
       if (message.id) {
-        var resolver = this.pendingRequestResolversId_[message.id];
+        const resolver = this.pendingRequestResolversId_[message.id];
         if (resolver === undefined) {
-          console.log('Unrecognized ack', message);
           return;
         }
         if (message.error) {
@@ -100,26 +85,31 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
         return;
       }
 
-      if (message['method']) {
-        var listener = this.notificationListenersByMethodName_[message.method];
-        if (listener === undefined) {
-          console.log('Unhandled ', message.method);
-          return;
-        }
+      if (message.method) {
+        const listener = this.notificationListenersByMethodName_[
+            message.method];
+        if (listener === undefined) return;
         listener(message.params);
         return;
       }
-      console.log('Unknown dispatchMessage: ', payload);
     }
-  };
 
-  if (window.DevToolsHost)
-    InspectorConnection.instance = new InspectorConnection();
-  else
-    InspectorConnection.instance = undefined;
+    installDevToolsAPI_(windowGlobal) {
+      // Interface used by inspector when it hands data to us from the backend.
+      windowGlobal.DevToolsAPI = {
+        setToolbarColors() { },
+        addExtensions() { },
+        setInspectedPageId() { },
+        dispatchMessage: this.dispatchMessage_.bind(this),
+      };
+
+      // Temporary until inspector backend switches to DevToolsAPI.
+      windowGlobal.InspectorFrontendAPI = windowGlobal.DevToolsAPI;
+    }
+  }
 
   return {
-    InspectorConnection: InspectorConnection
+    InspectorConnection,
   };
 });
 </script>

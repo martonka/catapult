@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <!--
-Copyright (c) 2013 The Chromium Authors. All rights reserved.
+Copyright (c) 2016 The Chromium Authors. All rights reserved.
 Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
+<link rel="import" href="/tracing/base/math/range.html">
 <link rel="import" href="/tracing/base/multi_dimensional_view.html">
-<link rel="import" href="/tracing/base/range.html">
 <link rel="import" href="/tracing/base/unit.html">
 <link rel="import" href="/tracing/ui/analysis/analysis_sub_view.html">
 <link rel="import" href="/tracing/ui/base/table.html">
@@ -47,27 +47,19 @@ found in the LICENSE file.
 'use strict';
 
 (function() {
-  var MultiDimensionalViewBuilder = tr.b.MultiDimensionalViewBuilder;
-  var SAMPLE_TYPE = {
-    COMPILER: 'compiler',
-    EXTERNAL: 'external',
-    GC: 'gc',
-    NATIVEV8: '[native v8]',
-    OTHER: 'other',
-    UNKNOWN: 'unknown'
-  };
+  const MultiDimensionalViewBuilder = tr.b.MultiDimensionalViewBuilder;
 
   Polymer({
     is: 'tr-ui-a-multi-sample-sub-view',
     behaviors: [tr.ui.analysis.AnalysisSubView],
 
-    created: function() {
+    created() {
       this.viewOption_ = undefined;
       this.selection_ = undefined;
     },
 
-    ready: function() {
-      var viewSelector = tr.ui.b.createSelector(
+    ready() {
+      const viewSelector = tr.ui.b.createSelector(
           this, 'viewOption', 'tracing.ui.analysis.multi_sample_sub_view',
           MultiDimensionalViewBuilder.ViewType.TOP_DOWN_TREE_VIEW,
           [
@@ -106,94 +98,47 @@ found in the LICENSE file.
       this.updateContents_();
     },
 
-    createSamplingSummary_: function(selection, viewOption) {
-      var builder = new MultiDimensionalViewBuilder(
+    createSamplingSummary_(selection, viewOption) {
+      const builder = new MultiDimensionalViewBuilder(
           1 /* dimensions */, 1 /* valueCount */);
-      var samples = selection.filter(function(event) {
-        return event instanceof tr.model.Sample;
-      });
+      const samples = selection.filter(
+          event => event instanceof tr.model.Sample);
 
       samples.forEach(function(sample) {
-        builder.addPath([sample.getUserFriendlyStackTrace().reverse()],
+        builder.addPath([sample.userFriendlyStack.reverse()],
             [1], MultiDimensionalViewBuilder.ValueKind.SELF);
       });
 
       return builder.buildView(viewOption);
     },
 
-    // Constructs function name and file name of sample
-    // if it is compiler, external, gc, other, or unknown.
-    processTypedSampleRow_: function(row) {
-      var title = row.title[0];
-      switch (title) {
-        case SAMPLE_TYPE.COMPILER:
-        case SAMPLE_TYPE.EXTERNAL:
-        case SAMPLE_TYPE.GC:
-        case SAMPLE_TYPE.OTHER:
+    processSampleRows_(rows) {
+      for (const row of rows) {
+        let title = row.title[0];
+        let results = /(.*) (Deoptimized reason: .*)/.exec(title);
+        if (results !== null) {
+          row.deoptReason = results[2];
+          title = results[1];
+        }
+        results = /(.*) url: (.*)/.exec(title);
+        if (results !== null) {
+          row.functionName = results[1];
+          row.url = results[2];
+          if (row.functionName === '') {
+            row.functionName = '(anonymous function)';
+          }
+          if (row.url === '') {
+            row.url = 'unknown';
+          }
+        } else {
           row.functionName = title;
-          row.fileName = 'N/A';
-          return true;
-        case SAMPLE_TYPE.UNKNOWN:
-          row.functionName = SAMPLE_TYPE.UNKNOWN;
-          row.fileName = SAMPLE_TYPE.UNKNOWN;
-          return true;
-        default:
-          return false;
-      }
-    },
-
-    // Constructs function name and file name of native v8 sample.
-    processNativeV8SampleRow_: function(row) {
-      var title = row.title[0];
-      if (!title.includes(SAMPLE_TYPE.NATIVEV8))
-        return false;
-      var arr = title.split(SAMPLE_TYPE.NATIVEV8);
-      row.functionName = arr[0].trim();
-      if (row.functionName === '')
-        row.functionName = '(anonymous function)';
-      row.fileName = SAMPLE_TYPE.NATIVEV8;
-      var fileNameSuffix = arr[1].trim();
-      if (fileNameSuffix !== '')
-        row.fileName += ' ' + fileNameSuffix;
-      return true;
-    },
-
-    // Constructs function name and file name for sample.
-    processGeneralSampleRow_: function(row) {
-      var title = row.title[0];
-      var idx = title.lastIndexOf(' ');
-      if (idx === -1) {
-        row.functionName = title;
-        row.fileName = 'unknown';
-        return;
-      }
-      var prefix = title.substr(0, idx);
-      var suffix = title.substr(idx + 1);
-      if (suffix.startsWith('v8/')) {
-        row.functionName = suffix;
-        row.fileName = 'unknown';
-      } else if (suffix === '') {
-        row.functionName = prefix;
-        row.fileName = 'unknown';
-      } else if (prefix === '') {
-        row.functionName = '(anonymous function)';
-        row.fileName = suffix.substr(suffix.lastIndexOf('/') + 1);
-      } else {
-        row.functionName = prefix;
-        row.fileName = suffix.substr(suffix.lastIndexOf('/') + 1);
-      }
-    },
-
-    processSampleRows_: function(rows) {
-      rows.forEach(function(row) {
-        if (!this.processTypedSampleRow_(row) &&
-            !this.processNativeV8SampleRow_(row))
-          this.processGeneralSampleRow_(row);
+          row.url = 'unknown';
+        }
         this.processSampleRows_(row.subRows);
-      }, this);
+      }
     },
 
-    updateContents_: function() {
+    updateContents_() {
       if (this.selection === undefined) {
         this.$.table.tableColumns = [];
         this.$.table.tableRows = [];
@@ -201,86 +146,89 @@ found in the LICENSE file.
         return;
       }
 
-      var samplingData = this.createSamplingSummary_(
+      const samplingData = this.createSamplingSummary_(
           this.selection, this.viewOption);
-      var total = samplingData.values[0].total;
-      var columns = [
+      const total = samplingData.values[0].total;
+      const columns = [
         this.createPercentColumn_('Total', total),
         this.createSamplesColumn_('Total'),
         this.createPercentColumn_('Self', total),
         this.createSamplesColumn_('Self'),
         {
           title: 'Function Name',
-          value: function(row) { return row.functionName; },
-          width: '150px',
-          cmp: function(a, b) {
-            return a.functionName.localeCompare(b.functionName);
+          value(row) {
+            // For function that got deoptimized, show function name
+            // as red italic with a tooltip
+            if (row.deoptReason !== undefined) {
+              const spanEl = tr.ui.b.createSpan({
+                italic: true,
+                color: '#F44336',
+                tooltip: row.deoptReason
+              });
+              spanEl.innerText = row.functionName;
+              return spanEl;
+            }
+            return row.functionName;
           },
+          width: '150px',
+          cmp: (a, b) => a.functionName.localeCompare(b.functionName),
           showExpandButtons: true
         },
         {
           title: 'Location',
-          value: function(row) { return row.fileName; },
+          value(row) { return row.url; },
           width: '250px',
-          cmp: function(a, b) {
-            return a.fileName.localeCompare(b.fileName);
-          }
+          cmp: (a, b) => a.url.localeCompare(b.url),
         }
       ];
 
       this.processSampleRows_(samplingData.subRows);
       this.$.table.tableColumns = columns;
-      this.$.table.sortColumnIndex = 1 /* Total samples */;
+      this.$.table.sortColumnIndex = 1; /* Total samples */
       this.$.table.sortDescending = true;
       this.$.table.tableRows = samplingData.subRows;
       this.$.table.rebuild();
     },
 
-    createPercentColumn_: function(title, samplingDataTotal) {
-      var field = title.toLowerCase();
+    createPercentColumn_(title, samplingDataTotal) {
+      const field = title.toLowerCase();
       return {
         title: title + ' percent',
-        value: function(row) {
+        value(row) {
           return tr.v.ui.createScalarSpan(
               row.values[0][field] / samplingDataTotal, {
-                customContextRange: tr.b.Range.PERCENT_RANGE,
+                customContextRange: tr.b.math.Range.PERCENT_RANGE,
                 unit: tr.b.Unit.byName.normalizedPercentage,
                 context: { minimumFractionDigits: 2, maximumFractionDigits: 2 },
-                rightAlign: true
               });
         },
         width: '60px',
-        cmp: function(a, b) {
-          return a.values[0][field] - b.values[0][field];
-        }
+        cmp: (a, b) => a.values[0][field] - b.values[0][field]
       };
     },
 
-    createSamplesColumn_: function(title) {
-      var field = title.toLowerCase();
+    createSamplesColumn_(title) {
+      const field = title.toLowerCase();
       return {
         title: title + ' samples',
-        value: function(row) {
+        value(row) {
           return tr.v.ui.createScalarSpan(row.values[0][field], {
             unit: tr.b.Unit.byName.unitlessNumber,
             context: { maximumFractionDigits: 0 },
-            rightAlign: true
           });
         },
         width: '60px',
-        cmp: function(a, b) {
-          return a.values[0][field] - b.values[0][field];
-        }
+        cmp: (a, b) => a.values[0][field] - b.values[0][field]
       };
     }
   });
 
   tr.ui.analysis.AnalysisSubView.register(
-    'tr-ui-a-multi-sample-sub-view',
-    tr.model.Sample,
-    {
-      multi: true,
-      title: 'Samples',
-    });
+      'tr-ui-a-multi-sample-sub-view',
+      tr.model.Sample,
+      {
+        multi: true,
+        title: 'Samples',
+      });
 })();
 </script>

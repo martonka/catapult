@@ -22,13 +22,11 @@ tr.b.unittest.testSuite(function() {
       sockets: false,
       http2: false,
       quic: false,
+      reporting: false,
       'alt-svc': false,
-      sdch: false,
       httpCache: false,
       modules: false,
       prerender: false,
-      bandwidth: false,
-      chromeos: cr.isChromeOS
     };
 
     NetInternalsTest.checkTabLinkVisibility(tabVisibilityState, true);

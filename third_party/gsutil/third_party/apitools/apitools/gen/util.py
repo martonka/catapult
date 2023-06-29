@@ -1,16 +1,35 @@
 #!/usr/bin/env python
+#
+# Copyright 2015 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Assorted utilities shared between parts of apitools."""
 from __future__ import print_function
+from __future__ import unicode_literals
 
 import collections
 import contextlib
+import gzip
 import json
 import keyword
 import logging
 import os
 import re
+import tempfile
 
 import six
+from six.moves import urllib_parse
 import six.moves.urllib.error as urllib_error
 import six.moves.urllib.request as urllib_request
 
@@ -107,7 +126,9 @@ class Names(object):
             return name
         # TODO(craigcitro): This is a hack to handle the case of specific
         # protorpc class names; clean this up.
-        if name.startswith('protorpc.') or name.startswith('message_types.'):
+        if name.startswith(('protorpc.', 'message_types.',
+                            'apitools.base.protorpclite.',
+                            'apitools.base.protorpclite.message_types.')):
             return name
         name = self.__StripName(name)
         name = self.__ToCamel(name, separator=separator)
@@ -141,9 +162,11 @@ def Chdir(dirname, create=True):
         else:
             os.mkdir(dirname)
     previous_directory = os.getcwd()
-    os.chdir(dirname)
-    yield
-    os.chdir(previous_directory)
+    try:
+        os.chdir(dirname)
+        yield
+    finally:
+        os.chdir(previous_directory)
 
 
 def NormalizeVersion(version):
@@ -151,9 +174,20 @@ def NormalizeVersion(version):
     return version.replace('.', '_')
 
 
+def _ComputePaths(package, version, discovery_doc):
+    full_path = urllib_parse.urljoin(
+        discovery_doc['rootUrl'], discovery_doc['servicePath'])
+    api_path_component = '/'.join((package, version, ''))
+    if api_path_component not in full_path:
+        return full_path, ''
+    prefix, _, suffix = full_path.rpartition(api_path_component)
+    return prefix + api_path_component, suffix
+
+
 class ClientInfo(collections.namedtuple('ClientInfo', (
         'package', 'scopes', 'version', 'client_id', 'client_secret',
-        'user_agent', 'client_class_name', 'url_version', 'api_key'))):
+        'user_agent', 'client_class_name', 'url_version', 'api_key',
+        'base_url', 'base_path'))):
 
     """Container for client-related info and names."""
 
@@ -164,15 +198,22 @@ class ClientInfo(collections.namedtuple('ClientInfo', (
         scopes = set(
             discovery_doc.get('auth', {}).get('oauth2', {}).get('scopes', {}))
         scopes.update(scope_ls)
+        package = discovery_doc['name']
+        url_version = discovery_doc['version']
+        base_url, base_path = _ComputePaths(package, url_version,
+                                            discovery_doc)
+
         client_info = {
-            'package': discovery_doc['name'],
+            'package': package,
             'version': NormalizeVersion(discovery_doc['version']),
-            'url_version': discovery_doc['version'],
+            'url_version': url_version,
             'scopes': sorted(list(scopes)),
             'client_id': client_id,
             'client_secret': client_secret,
             'user_agent': user_agent,
             'api_key': api_key,
+            'base_url': base_url,
+            'base_path': base_path,
         }
         client_class_name = '%s%s' % (
             names.ClassName(client_info['package']),
@@ -183,14 +224,6 @@ class ClientInfo(collections.namedtuple('ClientInfo', (
     @property
     def default_directory(self):
         return self.package
-
-    @property
-    def cli_rule_name(self):
-        return '%s_%s' % (self.package, self.version)
-
-    @property
-    def cli_file_name(self):
-        return '%s.py' % self.cli_rule_name
 
     @property
     def client_rule_name(self):
@@ -221,15 +254,51 @@ class ClientInfo(collections.namedtuple('ClientInfo', (
         return '%s.proto' % self.services_rule_name
 
 
-def GetPackage(path):
-    path_components = path.split(os.path.sep)
-    return '.'.join(path_components)
+def ReplaceHomoglyphs(s):
+    """Returns s with unicode homoglyphs replaced by ascii equivalents."""
+    homoglyphs = {
+        '\xa0': ' ',  # &nbsp; ?
+        '\u00e3': '',  # TODO(gsfowler) drop after .proto spurious char elided
+        '\u00a0': ' ',  # &nbsp; ?
+        '\u00a9': '(C)',  # COPYRIGHT SIGN (would you believe "asciiglyph"?)
+        '\u00ae': '(R)',  # REGISTERED SIGN (would you believe "asciiglyph"?)
+        '\u2014': '-',  # EM DASH
+        '\u2018': "'",  # LEFT SINGLE QUOTATION MARK
+        '\u2019': "'",  # RIGHT SINGLE QUOTATION MARK
+        '\u201c': '"',  # LEFT DOUBLE QUOTATION MARK
+        '\u201d': '"',  # RIGHT DOUBLE QUOTATION MARK
+        '\u2026': '...',  # HORIZONTAL ELLIPSIS
+        '\u2e3a': '-',  # TWO-EM DASH
+    }
+
+    def _ReplaceOne(c):
+        """Returns the homoglyph or escaped replacement for c."""
+        equiv = homoglyphs.get(c)
+        if equiv is not None:
+            return equiv
+        try:
+            c.encode('ascii')
+            return c
+        except UnicodeError:
+            pass
+        try:
+            return c.encode('unicode-escape').decode('ascii')
+        except UnicodeError:
+            return '?'
+
+    return ''.join([_ReplaceOne(c) for c in s])
 
 
 def CleanDescription(description):
     """Return a version of description safe for printing in a docstring."""
     if not isinstance(description, six.string_types):
         return description
+    if six.PY3:
+        # https://docs.python.org/3/reference/lexical_analysis.html#index-18
+        description = description.replace('\\N', '\\\\N')
+        description = description.replace('\\u', '\\\\u')
+        description = description.replace('\\U', '\\\\U')
+    description = ReplaceHomoglyphs(description)
     return description.replace('"""', '" " "')
 
 
@@ -273,40 +342,74 @@ class SimplePrettyPrinter(object):
                 line = (args[0] % args[1:]).rstrip()
             else:
                 line = args[0].rstrip()
-            line = line.encode('ascii', 'backslashreplace')
-            print('%s%s' % (self.__indent, line), file=self.__out)
+            line = ReplaceHomoglyphs(line)
+            try:
+                print('%s%s' % (self.__indent, line), file=self.__out)
+            except UnicodeEncodeError:
+                line = line.encode('ascii', 'backslashreplace').decode('ascii')
+                print('%s%s' % (self.__indent, line), file=self.__out)
         else:
             print('', file=self.__out)
 
 
-def NormalizeDiscoveryUrl(discovery_url):
+def _NormalizeDiscoveryUrls(discovery_url):
     """Expands a few abbreviations into full discovery urls."""
     if discovery_url.startswith('http'):
-        return discovery_url
+        return [discovery_url]
     elif '.' not in discovery_url:
         raise ValueError('Unrecognized value "%s" for discovery url')
     api_name, _, api_version = discovery_url.partition('.')
-    return 'https://www.googleapis.com/discovery/v1/apis/%s/%s/rest' % (
-        api_name, api_version)
+    return [
+        'https://www.googleapis.com/discovery/v1/apis/%s/%s/rest' % (
+            api_name, api_version),
+        'https://%s.googleapis.com/$discovery/rest?version=%s' % (
+            api_name, api_version),
+    ]
+
+
+def _Gunzip(gzipped_content):
+    """Returns gunzipped content from gzipped contents."""
+    f = tempfile.NamedTemporaryFile(suffix='gz', mode='w+b', delete=False)
+    try:
+        f.write(gzipped_content)
+        f.close()  # force file synchronization
+        with gzip.open(f.name, 'rb') as h:
+            decompressed_content = h.read()
+        return decompressed_content
+    finally:
+        os.unlink(f.name)
+
+
+def _GetURLContent(url):
+    """Download and return the content of URL."""
+    response = urllib_request.urlopen(url)
+    encoding = response.info().get('Content-Encoding')
+    if encoding == 'gzip':
+        content = _Gunzip(response.read())
+    else:
+        content = response.read()
+    return content
 
 
 def FetchDiscoveryDoc(discovery_url, retries=5):
     """Fetch the discovery document at the given url."""
-    discovery_url = NormalizeDiscoveryUrl(discovery_url)
+    discovery_urls = _NormalizeDiscoveryUrls(discovery_url)
     discovery_doc = None
     last_exception = None
-    for _ in range(retries):
-        try:
-            discovery_doc = json.loads(
-                urllib_request.urlopen(discovery_url).read())
-            break
-        except (urllib_error.HTTPError,
-                urllib_error.URLError) as last_exception:
-            logging.warning(
-                'Attempting to fetch discovery doc again after "%s"',
-                last_exception)
+    for url in discovery_urls:
+        for _ in range(retries):
+            try:
+                content = _GetURLContent(url)
+                if isinstance(content, bytes):
+                    content = content.decode('utf8')
+                discovery_doc = json.loads(content)
+                break
+            except (urllib_error.HTTPError, urllib_error.URLError) as e:
+                logging.info(
+                    'Attempting to fetch discovery doc again after "%s"', e)
+                last_exception = e
     if discovery_doc is None:
         raise CommunicationError(
-            'Could not find discovery doc at url "%s": %s' % (
-                discovery_url, last_exception))
+            'Could not find discovery doc at any of %s: %s' % (
+                discovery_urls, last_exception))
     return discovery_doc

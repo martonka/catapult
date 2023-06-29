@@ -1,12 +1,11 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Provides the web interface for adding and editing stored configs."""
 
-# TODO(qyearsley): If a namespaced config is set, don't show/edit
-# the non-namespaced configs. If a non-namespaced config is set,
-# don't show or edit the namespaced configs.
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import difflib
 import json
@@ -15,11 +14,11 @@ from google.appengine.api import app_identity
 from google.appengine.api import mail
 from google.appengine.api import users
 
-from dashboard import namespaced_stored_object
-from dashboard import request_handler
-from dashboard import stored_object
-from dashboard import utils
-from dashboard import xsrf
+from dashboard.common import namespaced_stored_object
+from dashboard.common import request_handler
+from dashboard.common import stored_object
+from dashboard.common import utils
+from dashboard.common import xsrf
 
 _NOTIFICATION_EMAIL_BODY = """
 The configuration of %(hostname)s was changed by %(user)s.
@@ -36,15 +35,21 @@ Internal-only value diff:
 %(internal_value_diff)s
 """
 
-# TODO(qyearsley): Make this customizable by storing the value in datastore.
-# Make sure to send a notification to both old and new address if this value
-# gets changed.
+# The mailing list to which config change notifications are sent,
+# so that the team can keep an audit record of these changes.
+# The "gasper-alerts" address is a historic legacy and not important.
 _NOTIFICATION_ADDRESS = 'chrome-performance-monitoring-alerts@google.com'
 _SENDER_ADDRESS = 'gasper-alerts@google.com'
 
 
 class EditSiteConfigHandler(request_handler.RequestHandler):
-  """Handles editing of site config values stored with stored_entity."""
+  """Handles editing of site config values stored with stored_entity.
+
+  FIXME: One confusing aspect of this page is: If a namespaced config is set,
+  the non-namespaced configs are probably irrelevant bu tthe field is still
+  shown. Similarly, if a non-namespaced config is set, the namespaced config
+  fields are likely not needed, but they're shown.
+  """
 
   def get(self):
     """Renders the UI with the form."""
@@ -56,12 +61,13 @@ class EditSiteConfigHandler(request_handler.RequestHandler):
     value = stored_object.Get(key)
     external_value = namespaced_stored_object.GetExternal(key)
     internal_value = namespaced_stored_object.Get(key)
-    self.RenderHtml('edit_site_config.html', {
-        'key': key,
-        'value': _FormatJson(value),
-        'external_value': _FormatJson(external_value),
-        'internal_value': _FormatJson(internal_value),
-    })
+    self.RenderHtml(
+        'edit_site_config.html', {
+            'key': key,
+            'value': _FormatJson(value),
+            'external_value': _FormatJson(external_value),
+            'internal_value': _FormatJson(internal_value),
+        })
 
   @xsrf.TokenRequired
   def post(self):
@@ -69,9 +75,9 @@ class EditSiteConfigHandler(request_handler.RequestHandler):
     key = self.request.get('key')
 
     if not utils.IsInternalUser():
-      self.RenderHtml('edit_site_config.html', {
-          'error': 'Only internal users can post to this end-point.'
-      })
+      self.RenderHtml(
+          'edit_site_config.html',
+          {'error': 'Only internal users can post to this end-point.'})
       return
 
     if not key:
@@ -106,16 +112,16 @@ class EditSiteConfigHandler(request_handler.RequestHandler):
     namespaced_stored_object.SetExternal(key, new_external_value)
     namespaced_stored_object.Set(key, new_internal_value)
 
-    _SendNotificationEmail(
-        key, old_value, old_external_value, old_internal_value,
-        new_value, new_external_value, new_internal_value)
+    _SendNotificationEmail(key, old_value, old_external_value,
+                           old_internal_value, new_value, new_external_value,
+                           new_internal_value)
 
     self.RenderHtml('edit_site_config.html', template_params)
 
 
-def _SendNotificationEmail(
-    key, old_value, old_external_value, old_internal_value,
-    new_value, new_external_value, new_internal_value):
+def _SendNotificationEmail(key, old_value, old_external_value,
+                           old_internal_value, new_value, new_external_value,
+                           new_internal_value):
   user_email = users.get_current_user().email()
   subject = 'Config "%s" changed by %s' % (key, user_email)
   email_body = _NOTIFICATION_EMAIL_BODY % {
@@ -136,9 +142,10 @@ def _SendNotificationEmail(
 def _DiffJson(obj1, obj2):
   """Returns a string diff of two JSON-serializable objects."""
   differ = difflib.Differ()
-  return '\n'.join(differ.compare(
-      _FormatJson(obj1).splitlines(),
-      _FormatJson(obj2).splitlines()))
+  return '\n'.join(
+      differ.compare(
+          _FormatJson(obj1).splitlines(),
+          _FormatJson(obj2).splitlines()))
 
 
 def _FormatJson(obj):

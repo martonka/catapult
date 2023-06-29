@@ -2,19 +2,17 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from functools import wraps
 import logging
 import os
-import sys
 import types
 import unittest
+import six
 
 from telemetry.internal.browser import browser_finder
 from telemetry.internal.util import path
 from telemetry.testing import options_for_unittests
-
-current_browser_options = None
-current_browser = None
 
 
 class _MetaBrowserTestCase(type):
@@ -26,7 +24,7 @@ class _MetaBrowserTestCase(type):
 
   def __new__(mcs, name, bases, dct):
     new_dct = {}
-    for attributeName, attribute in dct.iteritems():
+    for attributeName, attribute in six.iteritems(dct):
       if (isinstance(attribute, types.FunctionType) and
           attributeName.startswith('test')):
         attribute = mcs._PrintBrowserStandardOutputAndLogOnFailure(attribute)
@@ -39,69 +37,61 @@ class _MetaBrowserTestCase(type):
     def WrappedMethod(self):
       try:  # pylint: disable=broad-except
         method(self)
-      except Exception:
-        exc_info = sys.exc_info()
-
+      except Exception: # pylint: disable=broad-except
         if self._browser:
           self._browser.DumpStateUponFailure()
         else:
           logging.warning('Cannot dump browser state: No browser.')
-
-        # Re-raise the original exception. Note that we can't just use 'raise'
-        # without any arguments because an exception might have been thrown when
-        # dumping the state of the browser.
-        raise exc_info[0], exc_info[1], exc_info[2]
+        raise
     return WrappedMethod
 
 
-def teardown_browser():
-  global current_browser
-  global current_browser_options
+class BrowserTestCase(
+    six.with_metaclass(_MetaBrowserTestCase, unittest.TestCase)):
+  _possible_browser = None
+  _platform = None
+  _browser = None
+  _device = None
 
-  if current_browser:
-    current_browser.Close()
-    current_browser.platform.network_controller.Close()
-  current_browser = None
-  current_browser_options = None
+  def setUp(self):
+    if self._browser:
+      self._browser.CleanupUnsymbolizedMinidumps()
 
-
-class BrowserTestCase(unittest.TestCase):
-  __metaclass__ = _MetaBrowserTestCase
+  def tearDown(self):
+    if self._browser:
+      self._browser.CleanupUnsymbolizedMinidumps(fatal=True)
 
   @classmethod
   def setUpClass(cls):
-    cls._platform = None
-    global current_browser
-    global current_browser_options
-
-    options = options_for_unittests.GetCopy()
-
-    cls.CustomizeBrowserOptions(options.browser_options)
-    if not current_browser or (current_browser_options !=
-                               options.browser_options):
-      if current_browser:
-        teardown_browser()
-
-      browser_to_create = browser_finder.FindBrowser(options)
-      if not browser_to_create:
+    try:
+      options = options_for_unittests.GetCopy()
+      cls.CustomizeBrowserOptions(options.browser_options)
+      cls._possible_browser = browser_finder.FindBrowser(options)
+      if not cls._possible_browser:
         raise Exception('No browser found, cannot continue test.')
-      cls._platform = browser_to_create.platform
-      cls._platform.network_controller.InitializeIfNeeded()
-
-      try:
-        current_browser = browser_to_create.Create(options)
-        current_browser_options = options.browser_options
-      except:
-        cls.tearDownClass()
-        raise
-    cls._browser = current_browser
-    cls._device = options.remote_platform_options.device
+      cls._platform = cls._possible_browser.platform
+      cls._platform.network_controller.Open()
+      cls._possible_browser.SetUpEnvironment(options.browser_options)
+      cls._browser = cls._possible_browser.Create()
+      cls._device = options.remote_platform_options.device
+    except:
+      # Try to tear down the class upon any errors during set up.
+      cls.tearDownClass()
+      raise
 
   @classmethod
   def tearDownClass(cls):
-    if cls._platform:
+    cls._device = None
+    if cls._browser is not None:
+      cls._browser.Close()
+      cls._browser = None
+    if cls._possible_browser is not None:
+      cls._possible_browser.CleanUpEnvironment()
+      cls._possible_browser = None
+    if cls._platform is not None:
       cls._platform.StopAllLocalServers()
       cls._platform.network_controller.Close()
+      cls._platform = None
 
   @classmethod
   def CustomizeBrowserOptions(cls, options):
@@ -109,7 +99,8 @@ class BrowserTestCase(unittest.TestCase):
     pass
 
   @classmethod
-  def UrlOfUnittestFile(cls, filename):
-    cls._platform.SetHTTPServerDirectories(path.GetUnittestDataDir())
+  def UrlOfUnittestFile(cls, filename, handler_class=None):
+    cls._platform.SetHTTPServerDirectories(path.GetUnittestDataDir(),
+                                           handler_class)
     file_path = os.path.join(path.GetUnittestDataDir(), filename)
     return cls._platform.http_server.UrlOf(file_path)

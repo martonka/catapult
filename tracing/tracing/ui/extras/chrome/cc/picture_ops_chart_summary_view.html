@@ -5,29 +5,26 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="stylesheet"
-    href="/tracing/ui/extras/chrome/cc/picture_ops_chart_summary_view.css">
-
 <link rel="import" href="/tracing/ui/base/ui.html">
 
 <script>
 'use strict';
 
 tr.exportTo('tr.ui.e.chrome.cc', function() {
-  var OPS_TIMING_ITERATIONS = 3;
-  var CHART_PADDING_LEFT = 65;
-  var CHART_PADDING_RIGHT = 40;
-  var AXIS_PADDING_LEFT = 60;
-  var AXIS_PADDING_RIGHT = 35;
-  var AXIS_PADDING_TOP = 25;
-  var AXIS_PADDING_BOTTOM = 45;
-  var AXIS_LABEL_PADDING = 5;
-  var AXIS_TICK_SIZE = 10;
-  var LABEL_PADDING = 5;
-  var LABEL_INTERLEAVE_OFFSET = 15;
-  var BAR_PADDING = 5;
-  var VERTICAL_TICKS = 5;
-  var HUE_CHAR_CODE_ADJUSTMENT = 5.7;
+  const OPS_TIMING_ITERATIONS = 3;
+  const CHART_PADDING_LEFT = 65;
+  const CHART_PADDING_RIGHT = 40;
+  const AXIS_PADDING_LEFT = 60;
+  const AXIS_PADDING_RIGHT = 35;
+  const AXIS_PADDING_TOP = 25;
+  const AXIS_PADDING_BOTTOM = 45;
+  const AXIS_LABEL_PADDING = 5;
+  const AXIS_TICK_SIZE = 10;
+  const LABEL_PADDING = 5;
+  const LABEL_INTERLEAVE_OFFSET = 15;
+  const BAR_PADDING = 5;
+  const VERTICAL_TICKS = 5;
+  const HUE_CHAR_CODE_ADJUSTMENT = 5.7;
 
   /**
    * Provides a chart showing the cumulative time spent in Skia operations
@@ -35,13 +32,23 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
    *
    * @constructor
    */
-  var PictureOpsChartSummaryView = tr.ui.b.define(
+  const PictureOpsChartSummaryView = tr.ui.b.define(
       'tr-ui-e-chrome-cc-picture-ops-chart-summary-view');
 
   PictureOpsChartSummaryView.prototype = {
     __proto__: HTMLDivElement.prototype,
 
-    decorate: function() {
+    decorate() {
+      this.style.flexGrow = 0;
+      this.style.flexShrink = 0;
+      this.style.flexBasis = 'auto';
+      this.style.fontSize = 0;
+      this.style.margin = 0;
+      this.style.minHeight = '200px';
+      this.style.minWidth = '200px';
+      this.style.overflow = 'hidden';
+      this.style.padding = 0;
+
       this.picture_ = undefined;
       this.pictureDataProcessed_ = false;
 
@@ -60,6 +67,12 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.currentBarMouseOverTarget_ = null;
 
       this.chart_.addEventListener('mousemove', this.onMouseMove_.bind(this));
+      try {
+        new ResizeObserver(this.onResize_.bind(this)).observe(this);
+      } catch (e) {
+        // We can't set up resize observer under polyfill, but not being able
+        // to set up resize observer should not break everything else.
+      }
     },
 
     get requiresRedraw() {
@@ -78,70 +91,69 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.picture_ = picture;
       this.pictureDataProcessed_ = false;
 
-      if (Polymer.dom(this).classList.contains('hidden'))
-        return;
+      if (Polymer.dom(this).classList.contains('hidden')) return;
 
       this.processPictureData_();
       this.requiresRedraw = true;
       this.updateChartContents();
     },
 
-    hide: function() {
+    hide() {
       Polymer.dom(this).classList.add('hidden');
+      this.style.display = 'none';
     },
 
-    show: function() {
-
+    show() {
       Polymer.dom(this).classList.remove('hidden');
+      this.style.display = '';
 
-      if (this.pictureDataProcessed_)
-        return;
-
-      this.processPictureData_();
+      if (!this.pictureDataProcessed_) {
+        this.processPictureData_();
+      }
       this.requiresRedraw = true;
       this.updateChartContents();
-
     },
 
-    onMouseMove_: function(e) {
-
-      var lastBarMouseOverTarget = this.currentBarMouseOverTarget_;
+    onMouseMove_(e) {
+      const lastBarMouseOverTarget = this.currentBarMouseOverTarget_;
       this.currentBarMouseOverTarget_ = null;
 
-      var x = e.offsetX;
-      var y = e.offsetY;
+      const x = e.offsetX;
+      const y = e.offsetY;
 
-      var chartLeft = CHART_PADDING_LEFT;
-      var chartRight = this.chartWidth_ - CHART_PADDING_RIGHT;
-      var chartTop = AXIS_PADDING_TOP;
-      var chartBottom = this.chartHeight_ - AXIS_PADDING_BOTTOM;
-      var chartInnerWidth = chartRight - chartLeft;
+      const chartLeft = CHART_PADDING_LEFT;
+      const chartRight = this.chartWidth_ - CHART_PADDING_RIGHT;
+      const chartTop = AXIS_PADDING_TOP;
+      const chartBottom = this.chartHeight_ - AXIS_PADDING_BOTTOM;
+      const chartInnerWidth = chartRight - chartLeft;
 
       if (x > chartLeft && x < chartRight && y > chartTop && y < chartBottom) {
-
         this.currentBarMouseOverTarget_ = Math.floor(
             (x - chartLeft) / chartInnerWidth * this.opsTimingData_.length);
 
-        this.currentBarMouseOverTarget_ = tr.b.clamp(
+        this.currentBarMouseOverTarget_ = tr.b.math.clamp(
             this.currentBarMouseOverTarget_, 0, this.opsTimingData_.length - 1);
-
       }
 
-      if (this.currentBarMouseOverTarget_ === lastBarMouseOverTarget)
-        return;
+      if (this.currentBarMouseOverTarget_ === lastBarMouseOverTarget) return;
 
       this.drawChartContents_();
     },
 
-    updateChartContents: function() {
+    onResize_() {
+      this.requiresRedraw = true;
+      this.updateChartContents();
+    },
 
-      if (this.requiresRedraw)
+    updateChartContents() {
+      if (this.requiresRedraw) {
         this.updateChartDimensions_();
+      }
 
       this.drawChartContents_();
     },
 
-    updateChartDimensions_: function() {
+    updateChartDimensions_() {
       this.chartWidth_ = this.offsetWidth;
       this.chartHeight_ = this.offsetHeight;
 
@@ -157,29 +169,24 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.chartCtx_.scale(this.chartScale_, this.chartScale_);
     },
 
-    processPictureData_: function() {
-
+    processPictureData_() {
       this.resetOpsTimingData_();
       this.pictureDataProcessed_ = true;
 
-      if (!this.picture_)
-        return;
+      if (!this.picture_) return;
 
-      var ops = this.picture_.getOps();
-      if (!ops)
-        return;
+      let ops = this.picture_.getOps();
+      if (!ops) return;
 
       ops = this.picture_.tagOpsWithTimings(ops);
 
       // Check that there are valid times.
-      if (ops[0].cmd_time === undefined)
-        return;
+      if (ops[0].cmd_time === undefined) return;
 
       this.collapseOpsToTimingBuckets_(ops);
     },
 
-    drawChartContents_: function() {
-
+    drawChartContents_() {
       this.clearChartContents_();
 
       if (this.opsTimingData_.length === 0) {
@@ -191,35 +198,33 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.drawBars_();
       this.drawLineAtBottomOfChart_();
 
-      if (this.currentBarMouseOverTarget_ === null)
-        return;
+      if (this.currentBarMouseOverTarget_ === null) return;
 
       this.drawTooltip_();
     },
 
-    drawLineAtBottomOfChart_: function() {
+    drawLineAtBottomOfChart_() {
       this.chartCtx_.strokeStyle = '#AAA';
       this.chartCtx_.moveTo(0, this.chartHeight_ - 0.5);
       this.chartCtx_.lineTo(this.chartWidth_, this.chartHeight_ - 0.5);
       this.chartCtx_.stroke();
     },
 
-    drawTooltip_: function() {
+    drawTooltip_() {
+      const tooltipData = this.opsTimingData_[this.currentBarMouseOverTarget_];
+      const tooltipTitle = tooltipData.cmd_string;
+      const tooltipTime = tooltipData.cmd_time.toFixed(4);
 
-      var tooltipData = this.opsTimingData_[this.currentBarMouseOverTarget_];
-      var tooltipTitle = tooltipData.cmd_string;
-      var tooltipTime = tooltipData.cmd_time.toFixed(4);
-
-      var tooltipWidth = 110;
-      var tooltipHeight = 40;
-      var chartInnerWidth = this.chartWidth_ - CHART_PADDING_RIGHT -
+      const tooltipWidth = 110;
+      const tooltipHeight = 40;
+      const chartInnerWidth = this.chartWidth_ - CHART_PADDING_RIGHT -
           CHART_PADDING_LEFT;
-      var barWidth = chartInnerWidth / this.opsTimingData_.length;
-      var tooltipOffset = Math.round((tooltipWidth - barWidth) * 0.5);
+      const barWidth = chartInnerWidth / this.opsTimingData_.length;
+      const tooltipOffset = Math.round((tooltipWidth - barWidth) * 0.5);
 
-      var left = CHART_PADDING_LEFT + this.currentBarMouseOverTarget_ *
+      const left = CHART_PADDING_LEFT + this.currentBarMouseOverTarget_ *
           barWidth - tooltipOffset;
-      var top = Math.round((this.chartHeight_ - tooltipHeight) * 0.5);
+      const top = Math.round((this.chartHeight_ - tooltipHeight) * 0.5);
 
       this.chartCtx_.save();
 
@@ -250,24 +255,22 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
           left + 8, top + 22);
     },
 
-    drawBars_: function() {
+    drawBars_() {
+      const len = this.opsTimingData_.length;
+      const max = this.opsTimingData_[0].cmd_time;
+      const min = this.opsTimingData_[len - 1].cmd_time;
 
-      var len = this.opsTimingData_.length;
-      var max = this.opsTimingData_[0].cmd_time;
-      var min = this.opsTimingData_[len - 1].cmd_time;
+      const width = this.chartWidth_ - CHART_PADDING_LEFT - CHART_PADDING_RIGHT;
+      const height = this.chartHeight_ - AXIS_PADDING_TOP - AXIS_PADDING_BOTTOM;
+      const barWidth = Math.floor(width / len);
 
-      var width = this.chartWidth_ - CHART_PADDING_LEFT - CHART_PADDING_RIGHT;
-      var height = this.chartHeight_ - AXIS_PADDING_TOP - AXIS_PADDING_BOTTOM;
-      var barWidth = Math.floor(width / len);
+      let opData;
+      let opTiming;
+      let opHeight;
+      let opLabel;
+      let barLeft;
 
-      var opData;
-      var opTiming;
-      var opHeight;
-      var opLabel;
-      var barLeft;
-
-      for (var b = 0; b < len; b++) {
-
+      for (let b = 0; b < len; b++) {
         opData = this.opsTimingData_[b];
         opTiming = opData.cmd_time / max;
 
@@ -280,40 +283,37 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
         this.chartCtx_.fillRect(barLeft + BAR_PADDING, AXIS_PADDING_TOP +
             height - opHeight, barWidth - 2 * BAR_PADDING, opHeight);
       }
-
     },
 
-    getOpColor_: function(opName) {
-
-      var characters = opName.split('');
-      var hue = characters.reduce(this.reduceNameToHue, 0) % 360;
+    getOpColor_(opName) {
+      const characters = opName.split('');
+      const hue = characters.reduce(this.reduceNameToHue, 0) % 360;
 
       return 'hsl(' + hue + ', 30%, 50%)';
     },
 
-    reduceNameToHue: function(previousValue, currentValue, index, array) {
+    reduceNameToHue(previousValue, currentValue, index, array) {
       // Get the char code and apply a magic adjustment value so we get
       // pretty colors from around the rainbow.
       return Math.round(previousValue + currentValue.charCodeAt(0) *
           HUE_CHAR_CODE_ADJUSTMENT);
     },
 
-    drawChartAxes_: function() {
+    drawChartAxes_() {
+      const len = this.opsTimingData_.length;
+      const max = this.opsTimingData_[0].cmd_time;
+      const min = this.opsTimingData_[len - 1].cmd_time;
 
-      var len = this.opsTimingData_.length;
-      var max = this.opsTimingData_[0].cmd_time;
-      var min = this.opsTimingData_[len - 1].cmd_time;
+      const width = this.chartWidth_ - AXIS_PADDING_LEFT - AXIS_PADDING_RIGHT;
+      const height = this.chartHeight_ - AXIS_PADDING_TOP - AXIS_PADDING_BOTTOM;
 
-      var width = this.chartWidth_ - AXIS_PADDING_LEFT - AXIS_PADDING_RIGHT;
-      var height = this.chartHeight_ - AXIS_PADDING_TOP - AXIS_PADDING_BOTTOM;
-
-      var totalBarWidth = this.chartWidth_ - CHART_PADDING_LEFT -
+      const totalBarWidth = this.chartWidth_ - CHART_PADDING_LEFT -
           CHART_PADDING_RIGHT;
-      var barWidth = Math.floor(totalBarWidth / len);
-      var tickYInterval = height / (VERTICAL_TICKS - 1);
-      var tickYPosition = 0;
-      var tickValInterval = (max - min) / (VERTICAL_TICKS - 1);
-      var tickVal = 0;
+      const barWidth = Math.floor(totalBarWidth / len);
+      const tickYInterval = height / (VERTICAL_TICKS - 1);
+      let tickYPosition = 0;
+      const tickValInterval = (max - min) / (VERTICAL_TICKS - 1);
+      let tickVal = 0;
 
       this.chartCtx_.fillStyle = '#333';
       this.chartCtx_.strokeStyle = '#777';
@@ -336,8 +336,7 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.chartCtx_.textAlign = 'right';
       this.chartCtx_.textBaseline = 'middle';
 
-      for (var t = 0; t < VERTICAL_TICKS; t++) {
-
+      for (let t = 0; t < VERTICAL_TICKS; t++) {
         tickYPosition = Math.round(t * tickYInterval);
         tickVal = (max - t * tickValInterval).toFixed(4);
 
@@ -345,7 +344,6 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
         this.chartCtx_.lineTo(-AXIS_TICK_SIZE, tickYPosition);
         this.chartCtx_.fillText(tickVal,
             -AXIS_TICK_SIZE - AXIS_LABEL_PADDING, tickYPosition);
-
       }
 
       this.chartCtx_.stroke();
@@ -364,10 +362,9 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.chartCtx_.textAlign = 'center';
       this.chartCtx_.textBaseline = 'top';
 
-      var labelTickLeft;
-      var labelTickBottom;
-      for (var l = 0; l < len; l++) {
-
+      let labelTickLeft;
+      let labelTickBottom;
+      for (let l = 0; l < len; l++) {
         labelTickLeft = Math.round(l * barWidth);
         labelTickBottom = l % 2 * LABEL_INTERLEAVE_OFFSET;
 
@@ -386,11 +383,11 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.chartCtx_.restore();
     },
 
-    clearChartContents_: function() {
+    clearChartContents_() {
       this.chartCtx_.clearRect(0, 0, this.chartWidth_, this.chartHeight_);
     },
 
-    showNoTimingDataMessage_: function() {
+    showNoTimingDataMessage_() {
       this.chartCtx_.font = '800 italic 14px Arial';
       this.chartCtx_.fillStyle = '#333';
       this.chartCtx_.textAlign = 'center';
@@ -399,19 +396,16 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
           this.chartWidth_ * 0.5, this.chartHeight_ * 0.5);
     },
 
-    collapseOpsToTimingBuckets_: function(ops) {
+    collapseOpsToTimingBuckets_(ops) {
+      const opsTimingDataIndexHash_ = {};
+      const timingData = this.opsTimingData_;
+      let op;
+      let opIndex;
 
-      var opsTimingDataIndexHash_ = {};
-      var timingData = this.opsTimingData_;
-      var op;
-      var opIndex;
-
-      for (var i = 0; i < ops.length; i++) {
-
+      for (let i = 0; i < ops.length; i++) {
         op = ops[i];
 
-        if (op.cmd_time === undefined)
-          continue;
+        if (op.cmd_time === undefined) continue;
 
         // Try to locate the entry for the current operation
         // based on its name. If that fails, then create one for it.
@@ -428,7 +422,6 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
         }
 
         timingData[opIndex].cmd_time += op.cmd_time;
-
       }
 
       timingData.sort(this.sortTimingBucketsByOpTimeDescending_);
@@ -436,14 +429,12 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.collapseTimingBucketsToOther_(4);
     },
 
-    collapseTimingBucketsToOther_: function(count) {
+    collapseTimingBucketsToOther_(count) {
+      const timingData = this.opsTimingData_;
+      const otherSource = timingData.splice(count, timingData.length - count);
+      let otherDestination = null;
 
-      var timingData = this.opsTimingData_;
-      var otherSource = timingData.splice(count, timingData.length - count);
-      var otherDestination = null;
-
-      if (!otherSource.length)
-        return;
+      if (!otherSource.length) return;
 
       timingData.push({
         cmd_time: 0,
@@ -451,22 +442,22 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       });
 
       otherDestination = timingData[timingData.length - 1];
-      for (var i = 0; i < otherSource.length; i++) {
+      for (let i = 0; i < otherSource.length; i++) {
         otherDestination.cmd_time += otherSource[i].cmd_time;
       }
     },
 
-    sortTimingBucketsByOpTimeDescending_: function(a, b) {
+    sortTimingBucketsByOpTimeDescending_(a, b) {
       return b.cmd_time - a.cmd_time;
     },
 
-    resetOpsTimingData_: function() {
+    resetOpsTimingData_() {
       this.opsTimingData_.length = 0;
     }
   };
 
   return {
-    PictureOpsChartSummaryView: PictureOpsChartSummaryView
+    PictureOpsChartSummaryView,
   };
 });
 </script>

@@ -2,33 +2,43 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import BaseHTTPServer
+from __future__ import print_function
+from __future__ import absolute_import
 from collections import namedtuple
 import errno
 import gzip
+import logging
 import mimetypes
 import os
-import SimpleHTTPServer
 import socket
-import SocketServer
-import StringIO
 import sys
-import urlparse
+import traceback
+from io import BytesIO
+
+import six.moves.BaseHTTPServer # pylint: disable=import-error
+import six.moves.SimpleHTTPServer # pylint: disable=import-error
+import six.moves.socketserver # pylint: disable=import-error
+import six.moves.urllib.parse # pylint: disable=import-error
+from six.moves import map # pylint: disable=redefined-builtin
 
 from telemetry.core import local_server
 
 ByteRange = namedtuple('ByteRange', ['from_byte', 'to_byte'])
 ResourceAndRange = namedtuple('ResourceAndRange', ['resource', 'byte_range'])
 
+_MIME_TYPES_FILE = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), 'mime.types'))
 
-class MemoryCacheHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
+
+class MemoryCacheHTTPRequestHandler(
+    six.moves.SimpleHTTPServer.SimpleHTTPRequestHandler):
 
   protocol_version = 'HTTP/1.1'  # override BaseHTTPServer setting
   wbufsize = -1  # override StreamRequestHandler (a base class) setting
 
   def handle(self):
     try:
-      BaseHTTPServer.BaseHTTPRequestHandler.handle(self)
+      six.moves.BaseHTTPServer.BaseHTTPRequestHandler.handle(self)
     except socket.error as e:
       # Connection reset errors happen all the time due to the browser closing
       # without terminating the connection properly.  They can be safely
@@ -43,6 +53,8 @@ class MemoryCacheHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     if not resource_range or not resource_range.resource:
       return
     response = resource_range.resource['response']
+    if not isinstance(response, bytes):
+      response = response.encode('utf-8')
 
     if not resource_range.byte_range:
       self.wfile.write(response)
@@ -63,13 +75,20 @@ class MemoryCacheHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     # Don't spam the console unless it is important.
     pass
 
+  def Response(self, path):
+    """Get the response for the path."""
+    if path not in self.server.resource_map:
+      return None
+
+    return self.server.resource_map[path]
+
   def SendHead(self):
     path = os.path.realpath(self.translate_path(self.path))
-    if path not in self.server.resource_map:
+    resource = self.Response(path)
+    if not resource:
       self.send_error(404, 'File not found')
       return None
 
-    resource = self.server.resource_map[path]
     total_num_of_bytes = resource['content-length']
     byte_range = self.GetByteRange(total_num_of_bytes)
     if byte_range:
@@ -105,8 +124,7 @@ class MemoryCacheHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
       http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html for details.
       If upper range limit is greater than total # of bytes, return upper index.
     """
-
-    range_header = self.headers.getheader('Range')
+    range_header = self.headers.get('Range')
     if range_header is None:
       return None
     if not range_header.startswith('bytes='):
@@ -141,8 +159,8 @@ class MemoryCacheHTTPRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     return ByteRange(from_byte, to_byte)
 
 
-class _MemoryCacheHTTPServerImpl(SocketServer.ThreadingMixIn,
-                                 BaseHTTPServer.HTTPServer):
+class _MemoryCacheHTTPServerImpl(six.moves.socketserver.ThreadingMixIn,
+                                 six.moves.BaseHTTPServer.HTTPServer):
   # Increase the request queue size. The default value, 5, is set in
   # SocketServer.TCPServer (the parent of BaseHTTPServer.HTTPServer).
   # Since we're intercepting many domains through this single server,
@@ -153,8 +171,13 @@ class _MemoryCacheHTTPServerImpl(SocketServer.ThreadingMixIn,
   daemon_threads = True
 
   def __init__(self, host_port, handler, paths):
-    BaseHTTPServer.HTTPServer.__init__(self, host_port, handler)
+    six.moves.BaseHTTPServer.HTTPServer.__init__(self, host_port, handler)
     self.resource_map = {}
+    # Use Telemetry's 'mime.types' file instead of relying on system files to
+    # ensure the mime type inference is deterministic
+    # (also see crbug.com/894868).
+    assert os.path.isfile(_MIME_TYPES_FILE)
+    mimetypes.init([_MIME_TYPES_FILE])
     for path in paths:
       if os.path.isdir(path):
         self.AddDirectoryToResourceMap(path)
@@ -187,12 +210,12 @@ class _MemoryCacheHTTPServerImpl(SocketServer.ThreadingMixIn,
     zipped = False
     if content_type in ['text/html', 'text/css', 'application/javascript']:
       zipped = True
-      sio = StringIO.StringIO()
-      gzf = gzip.GzipFile(fileobj=sio, compresslevel=9, mode='wb')
+      bio = BytesIO()
+      gzf = gzip.GzipFile(fileobj=bio, compresslevel=9, mode='wb')
       gzf.write(response)
       gzf.close()
-      response = sio.getvalue()
-      sio.close()
+      response = bio.getvalue()
+      bio.close()
     self.resource_map[file_path] = {
         'content-type': content_type,
         'content-length': len(response),
@@ -206,6 +229,17 @@ class _MemoryCacheHTTPServerImpl(SocketServer.ThreadingMixIn,
       dir_path = os.path.dirname(file_path)
       self.resource_map[dir_path] = self.resource_map[file_path]
 
+  def handle_error(self, request, client_address):
+    """Handle error in a thread-safe way
+
+    We override handle_error method of our base TCPServer class. It does the
+    same but uses thread-safe logging.error instead of print, because
+    SocketServer.ThreadingMixIn runs network operations on multiple threads and
+    there's a race condition on stdout.
+    """
+    logging.error('Exception happened during processing of request from '
+                  '%s\n%s%s', client_address, traceback.format_exc(), '-'*80)
+
 
 class MemoryCacheHTTPServerBackend(local_server.LocalServerBackend):
 
@@ -213,20 +247,25 @@ class MemoryCacheHTTPServerBackend(local_server.LocalServerBackend):
     super(MemoryCacheHTTPServerBackend, self).__init__()
     self._httpd = None
 
-  def StartAndGetNamedPorts(self, args):
+  def StartAndGetNamedPorts(self, args, handler_class=None):
+    if handler_class:
+      assert issubclass(handler_class, MemoryCacheHTTPRequestHandler)
+
     base_dir = args['base_dir']
     os.chdir(base_dir)
 
     paths = args['paths']
     for path in paths:
       if not os.path.realpath(path).startswith(os.path.realpath(os.getcwd())):
-        print >> sys.stderr, '"%s" is not under the cwd.' % path
+        print('"%s" is not under the cwd.' % path, file=sys.stderr)
         sys.exit(1)
 
     server_address = (args['host'], args['port'])
     MemoryCacheHTTPRequestHandler.protocol_version = 'HTTP/1.1'
     self._httpd = _MemoryCacheHTTPServerImpl(
-        server_address, MemoryCacheHTTPRequestHandler, paths)
+        server_address,
+        handler_class if handler_class else MemoryCacheHTTPRequestHandler,
+        paths)
     return [local_server.NamedPort('http', self._httpd.server_address[1])]
 
   def ServeForever(self):
@@ -265,7 +304,7 @@ class MemoryCacheHTTPServer(local_server.LocalServer):
 
   @property
   def url(self):
-    return self.forwarder.url
+    return 'http://127.0.0.1:%s' % self.port
 
   def UrlOf(self, path):
     if os.path.isabs(path):
@@ -276,4 +315,67 @@ class MemoryCacheHTTPServer(local_server.LocalServer):
     # It doesn't matter in a file path, but it does matter in a URL.
     if path.endswith(os.sep) or (os.altsep and path.endswith(os.altsep)):
       relative_path += '/'
-    return urlparse.urljoin(self.url, relative_path.replace(os.sep, '/'))
+    return six.moves.urllib.parse.urljoin(
+        self.url, relative_path.replace(os.sep, '/'))
+
+
+class MemoryCacheDynamicHTTPRequestHandler(MemoryCacheHTTPRequestHandler):
+  """This class extends MemoryCacheHTTPRequestHandler by adding support for
+  dynamic responses. Inherite this class and register the sub-class to the
+  story set (through StorySet.SetRequestHandlerClass() or the constructor).
+  """
+
+  def ResponseFromHandler(self, path):
+    """Override this method to return dynamic response."""
+    del path  # Unused.
+    return None
+
+  def Response(self, path):
+    """Returns the dynamic response if exists, otherwise, use the resource
+    map.
+    """
+    response = self.ResponseFromHandler(path)
+    if response:
+      return response
+
+    if path not in self.server.resource_map:
+      return None
+
+    return self.server.resource_map[path]
+
+  def MakeResponse(self, content, content_type, zipped):
+    """Helper method to create a response object.
+    """
+    return {
+        'content-type': content_type,
+        'content-length': len(content),
+        'last-modified': None,
+        'response': content,
+        'zipped': zipped
+    }
+
+
+class MemoryCacheDynamicHTTPServer(MemoryCacheHTTPServer):
+  """This class extends MemoryCacheHTTPServer by adding support for returning
+  dynamic responses.
+  """
+
+  def __init__(self, paths, dynamic_request_handler_class):
+    # dynamic_request_handler_class must be a sub-class of
+    # MemoryCacheDynamicHTTPRequestHandler
+    assert issubclass(dynamic_request_handler_class,
+                      MemoryCacheDynamicHTTPRequestHandler)
+    super(MemoryCacheDynamicHTTPServer, self).__init__(paths)
+    self._dynamic_request_handler_class = dynamic_request_handler_class
+
+  @property
+  def dynamic_request_handler_class(self):
+    return self._dynamic_request_handler_class
+
+  def GetBackendStartupArgs(self):
+    args = super(MemoryCacheDynamicHTTPServer, self).GetBackendStartupArgs()
+    args['dynamic_request_handler_module_name'] = \
+        self._dynamic_request_handler_class.__module__
+    args['dynamic_request_handler_class_name'] = \
+        self._dynamic_request_handler_class.__name__
+    return args

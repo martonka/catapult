@@ -14,9 +14,8 @@ found in the LICENSE file.
  * @fileoverview Parses Mali DDK/kernel events in the Linux event trace format.
  */
 tr.exportTo('tr.e.importer.linux_perf', function() {
-
-  var ColorScheme = tr.b.ColorScheme;
-  var Parser = tr.e.importer.linux_perf.Parser;
+  const ColorScheme = tr.b.ColorScheme;
+  const Parser = tr.e.importer.linux_perf.Parser;
 
   /**
    * Parses Mali DDK/kernel trace events.
@@ -39,9 +38,9 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     this.addJMCycles('mali_hwc_GPU_ACTIVE', 'GPU Active');
     this.addJMCycles('mali_hwc_IRQ_ACTIVE', 'IRQ Active');
 
-    for (var i = 0; i < 7; i++) {
-      var jobStr = 'JS' + i;
-      var jobHWCStr = 'mali_hwc_' + jobStr;
+    for (let i = 0; i < 7; i++) {
+      const jobStr = 'JS' + i;
+      const jobHWCStr = 'mali_hwc_' + jobStr;
       this.addJMCounter(jobHWCStr + '_JOBS', jobStr + ' Jobs');
       this.addJMCounter(jobHWCStr + '_TASKS', jobStr + ' Tasks');
       this.addJMCycles(jobHWCStr + '_ACTIVE', jobStr + ' Active');
@@ -217,24 +216,32 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     importer.registerEventHandler('tracing_mark_write:mali_driver',
         MaliParser.prototype.maliDDKEvent.bind(this));
 
+    // Mali job scheduler events from Exynos kernels
+    importer.registerEventHandler('mali_job_systrace_event_start',
+        MaliParser.prototype.maliJobEvent.bind(this));
+    importer.registerEventHandler('mali_job_systrace_event_stop',
+        MaliParser.prototype.maliJobEvent.bind(this));
+
     this.model_ = importer.model_;
+
+    this.deferredJobs_ = {}; // <job type>: [<deferred jobs>]
   }
 
   MaliParser.prototype = {
     __proto__: Parser.prototype,
 
-    maliDDKOpenSlice: function(pid, tid, ts, func, blockinfo) {
-      var thread = this.importer.model_.getOrCreateProcess(pid)
-        .getOrCreateThread(tid);
-      var funcArgs = /^([\w\d_]*)(?:\(\))?:?\s*(.*)$/.exec(func);
+    maliDDKOpenSlice(pid, tid, ts, func, blockinfo) {
+      const thread = this.importer.model_.getOrCreateProcess(pid)
+          .getOrCreateThread(tid);
+      const funcArgs = /^([\w\d_]*)(?:\(\))?:?\s*(.*)$/.exec(func);
       thread.sliceGroup.beginSlice('gpu-driver', funcArgs[1], ts,
           { 'args': funcArgs[2],
-            'blockinfo': blockinfo });
+            blockinfo });
     },
 
-    maliDDKCloseSlice: function(pid, tid, ts, args, blockinfo) {
-      var thread = this.importer.model_.getOrCreateProcess(pid)
-        .getOrCreateThread(tid);
+    maliDDKCloseSlice(pid, tid, ts, args, blockinfo) {
+      const thread = this.importer.model_.getOrCreateProcess(pid)
+          .getOrCreateThread(tid);
       if (!thread.sliceGroup.openSliceCount) {
         // Discard unmatched ends.
         return;
@@ -248,17 +255,19 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
      * @return {RegExp} the regular expression for parsing data when the format
      * is recognized; otherwise null.
      */
-    autoDetectLineRE: function(line) {
+    autoDetectLineRE(line) {
       // Matches Mali perf events with thread info
-      var lineREWithThread =
+      const lineREWithThread =
           /^\s*\(([\w\-]*)\)\s*(\w+):\s*([\w\\\/\.\-]*@\d*):?\s*(.*)$/;
-      if (lineREWithThread.test(line))
+      if (lineREWithThread.test(line)) {
         return lineREWithThread;
+      }
 
       // Matches old-style Mali perf events
-      var lineRENoThread = /^s*()(\w+):\s*([\w\\\/.\-]*):?\s*(.*)$/;
-      if (lineRENoThread.test(line))
+      const lineRENoThread = /^s*()(\w+):\s*([\w\\\/.\-]*):?\s*(.*)$/;
+      if (lineRENoThread.test(line)) {
         return lineRENoThread;
+      }
       return null;
     },
 
@@ -277,15 +286,14 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
      * tracing_mark_write: mali_driver: (mali-012345) cros_trace_print_exit: \
      *   gles/src/texture/mali_gles_texture_slave.c@1505:
      */
-    maliDDKEvent: function(eventName, cpuNumber, pid, ts, eventBase) {
-      if (this.lineRE == null) {
+    maliDDKEvent(eventName, cpuNumber, pid, ts, eventBase) {
+      if (this.lineRE === null) {
         this.lineRE = this.autoDetectLineRE(eventBase.details);
-        if (this.lineRE == null)
-          return false;
+        if (this.lineRE === null) return false;
       }
-      var maliEvent = this.lineRE.exec(eventBase.details);
+      const maliEvent = this.lineRE.exec(eventBase.details);
       // Old-style Mali perf events have no thread id, so make one.
-      var tid = (maliEvent[1] === '' ? 'mali' : maliEvent[1]);
+      const tid = (maliEvent[1] === '' ? 'mali' : maliEvent[1]);
       switch (maliEvent[2]) {
         case 'cros_trace_print_enter':
           this.maliDDKOpenSlice(pid, tid, ts, maliEvent[4],
@@ -297,13 +305,100 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
       return true;
     },
 
+    /**
+     * Parses Mali Job events and sets up state in the importer.
+     * Events come in pairs like this:
+     *
+     * tracing_mark_write: S|7229|vertex-job|62|0|0|0|0|f46aed08|722962164982...
+     * tracing_mark_write: F|7229|vertex-job|62|0|0|0|0|f46aed08|722962164982...
+     *
+     * The '|' separated fields are (numbers correspond to jobEventRE groups
+     * below):
+     *   1:   'S'tart / 'F'inish
+     *   2:   tgid that submitted the job
+     *   3:   job type
+     *   4:   job id
+     *   5,6: dependency 0: job id, dependency type
+     *   7,8: dependency 1: job id, dependency type
+     *   9:   ctx id
+     *   10:  unique job submission id
+     */
+    maliJobEvent(eventName, cpuNumber, pid, ts, eventBase) {
+      const jobEventRE =
+          // eslint-disable-next-line max-len
+          /^.*tracing_mark_write: (S|F)\|(\d+)\|(\w+)-job\|(\d+)\|(\d+)\|(\d+)\|(\d+)\|(\d+)\|([a-z0-9]+)\|(\d+)$/;
+      const jobEvent = jobEventRE.exec(eventBase.details);
+      if (!jobEvent) {
+        this.model_.importWarning({
+          type: 'parse_error',
+          args: 'unexpected mali_job_systrace_event_* event syntax'
+        });
+        return;
+      }
+      const jobType = jobEvent[3];
+      const jobId = jobEvent[4];
+      const thread = this.importer.model_.getOrCreateProcess(0)
+          .getOrCreateThread('mali:' + jobType);
+      switch (jobEvent[1]) {
+        case 'S': {
+          /* The HW has a two-deep ("head", "next") job FIFO for each job
+           * type. Start events indicate when the job was pushed into the FIFO,
+           * *not* when the hardware actually starts executing the job. It
+           * either starts ~immediately if the FIFO was empty, or when the
+           * previous job finishes otherwise.
+           *
+           * So we can get events in the order S|0, S|1, F|0, F|1, but we want
+           * to turn that into a '0' slice from S|0 to F|0, and another '1'
+           * slice from F|0 to F|1. In other words, when there is already a
+           * slice open, we want to defer creating a slice for this job until we
+           * finish the previous slice, then immediately open the slice for this
+           * event using the same timestamp.
+           */
+          const args = {
+            ctx: jobEvent[9],
+            pid: parseInt(jobEvent[2], 10),
+            dep0: parseInt(jobEvent[5], 10),
+            dep1: parseInt(jobEvent[7], 10)
+          };
+          if (thread.sliceGroup.openSliceCount) {
+            if (!(jobType in this.deferredJobs_)) {
+              this.deferredJobs_[jobType] = [];
+            }
+            this.deferredJobs_[jobType].push({id: jobId, args});
+          } else {
+            thread.sliceGroup.beginSlice(null, jobId, ts, args);
+          }
+        } break;
+        case 'F': {
+          if (!thread.sliceGroup.openSliceCount) {
+            // Discard unmatched ends.
+            return;
+          }
+          if (thread.sliceGroup.mostRecentlyOpenedPartialSlice.title !==
+              jobId) {
+            this.model_.importWarning({
+              type: 'invalid event nesting',
+              message: 'non-sequential jobs in same mali job slot'
+            });
+          }
+          thread.sliceGroup.endSlice(ts);
+          const deferredJobs = this.deferredJobs_[jobType];
+          if (deferredJobs && deferredJobs.length) {
+            const job = deferredJobs.shift();
+            thread.sliceGroup.beginSlice(null, job.id, ts, job.args);
+          }
+        } break;
+      }
+      return true;
+    },
+
     /*
      * Kernel event support.
      */
 
-    dvfsSample: function(counterName, seriesName, ts, s) {
-      var value = parseInt(s);
-      var counter = this.model_.kernel.
+    dvfsSample(counterName, seriesName, ts, s) {
+      const value = parseInt(s);
+      const counter = this.model_.kernel.
           getOrCreateCounter('DVFS', counterName);
       if (counter.numSeries === 0) {
         counter.addSeries(new tr.model.CounterSeries(seriesName,
@@ -314,40 +409,36 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
       });
     },
 
-    dvfsEventEvent: function(eventName, cpuNumber, pid, ts, eventBase) {
-      var event = /utilization=(\d+)/.exec(eventBase.details);
-      if (!event)
-        return false;
+    dvfsEventEvent(eventName, cpuNumber, pid, ts, eventBase) {
+      const event = /utilization=(\d+)/.exec(eventBase.details);
+      if (!event) return false;
 
       this.dvfsSample('DVFS Utilization', 'utilization', ts, event[1]);
       return true;
     },
 
-    dvfsSetClockEvent: function(eventName, cpuNumber, pid, ts, eventBase) {
-      var event = /frequency=(\d+)/.exec(eventBase.details);
-      if (!event)
-        return false;
+    dvfsSetClockEvent(eventName, cpuNumber, pid, ts, eventBase) {
+      const event = /frequency=(\d+)/.exec(eventBase.details);
+      if (!event) return false;
 
       this.dvfsSample('DVFS Frequency', 'frequency', ts, event[1]);
       return true;
     },
 
-    dvfsSetVoltageEvent: function(eventName, cpuNumber, pid, ts, eventBase) {
-      var event = /voltage=(\d+)/.exec(eventBase.details);
-      if (!event)
-        return false;
+    dvfsSetVoltageEvent(eventName, cpuNumber, pid, ts, eventBase) {
+      const event = /voltage=(\d+)/.exec(eventBase.details);
+      if (!event) return false;
 
       this.dvfsSample('DVFS Voltage', 'voltage', ts, event[1]);
       return true;
     },
 
-    hwcSample: function(cat, counterName, seriesName, ts, eventBase) {
-      var event = /val=(\d+)/.exec(eventBase.details);
-      if (!event)
-        return false;
-      var value = parseInt(event[1]);
+    hwcSample(cat, counterName, seriesName, ts, eventBase) {
+      const event = /val=(\d+)/.exec(eventBase.details);
+      if (!event) return false;
+      const value = parseInt(event[1]);
 
-      var counter = this.model_.kernel.
+      const counter = this.model_.kernel.
           getOrCreateCounter(cat, counterName);
       if (counter.numSeries === 0) {
         counter.addSeries(new tr.model.CounterSeries(seriesName,
@@ -362,17 +453,17 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * Job Manager block counters.
      */
-    jmSample: function(ctrName, seriesName, ts, eventBase) {
+    jmSample(ctrName, seriesName, ts, eventBase) {
       return this.hwcSample('mali:jm', 'JM: ' + ctrName, seriesName, ts,
           eventBase);
     },
-    addJMCounter: function(hwcEventName, hwcTitle) {
+    addJMCounter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.jmSample(hwcTitle, 'count', ts, eventBase);
       }
       this.importer.registerEventHandler(hwcEventName, handler.bind(this));
     },
-    addJMCycles: function(hwcEventName, hwcTitle) {
+    addJMCycles(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.jmSample(hwcTitle, 'cycles', ts, eventBase);
       }
@@ -382,17 +473,17 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * Tiler block counters.
      */
-    tilerSample: function(ctrName, seriesName, ts, eventBase) {
+    tilerSample(ctrName, seriesName, ts, eventBase) {
       return this.hwcSample('mali:tiler', 'Tiler: ' + ctrName, seriesName,
           ts, eventBase);
     },
-    addTilerCounter: function(hwcEventName, hwcTitle) {
+    addTilerCounter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.tilerSample(hwcTitle, 'count', ts, eventBase);
       }
       this.importer.registerEventHandler(hwcEventName, handler.bind(this));
     },
-    addTilerCycles: function(hwcEventName, hwcTitle) {
+    addTilerCycles(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.tilerSample(hwcTitle, 'cycles', ts, eventBase);
       }
@@ -402,17 +493,17 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * Fragment counters.
      */
-    fragSample: function(ctrName, seriesName, ts, eventBase) {
+    fragSample(ctrName, seriesName, ts, eventBase) {
       return this.hwcSample('mali:fragment', 'Fragment: ' + ctrName,
           seriesName, ts, eventBase);
     },
-    addFragCounter: function(hwcEventName, hwcTitle) {
+    addFragCounter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.fragSample(hwcTitle, 'count', ts, eventBase);
       }
       this.importer.registerEventHandler(hwcEventName, handler.bind(this));
     },
-    addFragCycles: function(hwcEventName, hwcTitle) {
+    addFragCycles(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.fragSample(hwcTitle, 'cycles', ts, eventBase);
       }
@@ -422,17 +513,17 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * Compute counters.
      */
-    computeSample: function(ctrName, seriesName, ts, eventBase) {
+    computeSample(ctrName, seriesName, ts, eventBase) {
       return this.hwcSample('mali:compute', 'Compute: ' + ctrName,
           seriesName, ts, eventBase);
     },
-    addComputeCounter: function(hwcEventName, hwcTitle) {
+    addComputeCounter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.computeSample(hwcTitle, 'count', ts, eventBase);
       }
       this.importer.registerEventHandler(hwcEventName, handler.bind(this));
     },
-    addComputeCycles: function(hwcEventName, hwcTitle) {
+    addComputeCycles(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.computeSample(hwcTitle, 'cycles', ts, eventBase);
       }
@@ -442,7 +533,7 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * Tripipe counters.
      */
-    addTripipeCycles: function(hwcEventName, hwcTitle) {
+    addTripipeCycles(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.hwcSample('mali:shader', 'Tripipe: ' + hwcTitle, 'cycles',
             ts, eventBase);
@@ -453,17 +544,17 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * Arith counters.
      */
-    arithSample: function(ctrName, seriesName, ts, eventBase) {
+    arithSample(ctrName, seriesName, ts, eventBase) {
       return this.hwcSample('mali:arith', 'Arith: ' + ctrName, seriesName, ts,
           eventBase);
     },
-    addArithCounter: function(hwcEventName, hwcTitle) {
+    addArithCounter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.arithSample(hwcTitle, 'count', ts, eventBase);
       }
       this.importer.registerEventHandler(hwcEventName, handler.bind(this));
     },
-    addArithCycles: function(hwcEventName, hwcTitle) {
+    addArithCycles(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.arithSample(hwcTitle, 'cycles', ts, eventBase);
       }
@@ -473,7 +564,7 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * Load/Store counters.
      */
-    addLSCounter: function(hwcEventName, hwcTitle) {
+    addLSCounter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.hwcSample('mali:ls', 'LS: ' + hwcTitle, 'count', ts,
             eventBase);
@@ -484,11 +575,11 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * Texture counters.
      */
-    textureSample: function(ctrName, seriesName, ts, eventBase) {
+    textureSample(ctrName, seriesName, ts, eventBase) {
       return this.hwcSample('mali:texture', 'Texture: ' + ctrName,
           seriesName, ts, eventBase);
     },
-    addTexCounter: function(hwcEventName, hwcTitle) {
+    addTexCounter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.textureSample(hwcTitle, 'count', ts, eventBase);
       }
@@ -498,7 +589,7 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * LSC counters.
      */
-    addLSCCounter: function(hwcEventName, hwcTitle) {
+    addLSCCounter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.hwcSample('mali:lsc', 'LSC: ' + hwcTitle, 'count', ts,
             eventBase);
@@ -509,7 +600,7 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * TLB counters.
      */
-    addAXICounter: function(hwcEventName, hwcTitle) {
+    addAXICounter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.hwcSample('mali:axi', 'AXI: ' + hwcTitle, 'count', ts,
             eventBase);
@@ -520,17 +611,17 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * MMU counters.
      */
-    mmuSample: function(ctrName, seriesName, ts, eventBase) {
+    mmuSample(ctrName, seriesName, ts, eventBase) {
       return this.hwcSample('mali:mmu', 'MMU: ' + ctrName, seriesName, ts,
           eventBase);
     },
-    addMMUCounter: function(hwcEventName, hwcTitle) {
+    addMMUCounter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.mmuSample(hwcTitle, 'count', ts, eventBase);
       }
       this.importer.registerEventHandler(hwcEventName, handler.bind(this));
     },
-    addMMUCycles: function(hwcEventName, hwcTitle) {
+    addMMUCycles(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.mmuSample(hwcTitle, 'cycles', ts, eventBase);
       }
@@ -540,17 +631,17 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
     /*
      * L2 counters.
      */
-    l2Sample: function(ctrName, seriesName, ts, eventBase) {
+    l2Sample(ctrName, seriesName, ts, eventBase) {
       return this.hwcSample('mali:l2', 'L2: ' + ctrName, seriesName, ts,
           eventBase);
     },
-    addL2Counter: function(hwcEventName, hwcTitle) {
+    addL2Counter(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.l2Sample(hwcTitle, 'count', ts, eventBase);
       }
       this.importer.registerEventHandler(hwcEventName, handler.bind(this));
     },
-    addL2Cycles: function(hwcEventName, hwcTitle) {
+    addL2Cycles(hwcEventName, hwcTitle) {
       function handler(eventName, cpuNumber, pid, ts, eventBase) {
         return this.l2Sample(hwcTitle, 'cycles', ts, eventBase);
       }
@@ -561,7 +652,7 @@ tr.exportTo('tr.e.importer.linux_perf', function() {
   Parser.register(MaliParser);
 
   return {
-    MaliParser: MaliParser
+    MaliParser,
   };
 });
 </script>

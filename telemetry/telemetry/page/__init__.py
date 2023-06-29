@@ -1,10 +1,11 @@
 # Copyright 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
 import inspect
 import logging
 import os
-import urlparse
+import six.moves.urllib.parse # pylint: disable=import-error
 
 from py_utils import cloud_storage  # pylint: disable=import-error
 
@@ -18,20 +19,22 @@ from telemetry.internal.actions import action_runner as action_runner_module
 class Page(story.Story):
 
   def __init__(self, url, page_set=None, base_dir=None, name='',
-               credentials_path=None,
-               credentials_bucket=cloud_storage.PUBLIC_BUCKET, labels=None,
-               startup_url='', make_javascript_deterministic=True,
+               tags=None, make_javascript_deterministic=True,
                shared_page_state_class=shared_page_state.SharedPageState,
                grouping_keys=None,
                cache_temperature=cache_temperature_module.ANY,
-               traffic_setting=traffic_setting_module.NONE):
+               traffic_setting=traffic_setting_module.NONE,
+               platform_specific=False,
+               extra_browser_args=None,
+               perform_final_navigation=False):
     self._url = url
+    self._SchemeErrorCheck()
 
     super(Page, self).__init__(
-        shared_page_state_class, name=name, labels=labels,
+        shared_page_state_class, name=name, tags=tags,
         is_local=self._scheme in ['file', 'chrome', 'about'],
         make_javascript_deterministic=make_javascript_deterministic,
-        grouping_keys=grouping_keys)
+        grouping_keys=grouping_keys, platform_specific=platform_specific)
 
     self._page_set = page_set
     # Default value of base_dir is the directory of the file that defines the
@@ -40,36 +43,21 @@ class Page(story.Story):
       base_dir = os.path.dirname(inspect.getfile(self.__class__))
     self._base_dir = base_dir
     self._name = name
-    if credentials_path:
-      credentials_path = os.path.join(self._base_dir, credentials_path)
-      cloud_storage.GetIfChanged(credentials_path, credentials_bucket)
-      if not os.path.exists(credentials_path):
-        logging.error('Invalid credentials path: %s' % credentials_path)
-        credentials_path = None
-    self._credentials_path = credentials_path
     self._cache_temperature = cache_temperature
-    if cache_temperature != cache_temperature_module.ANY:
-      self.grouping_keys['cache_temperature'] = cache_temperature
+    # A "final navigation" is a navigation to about:blank after the
+    # test in order to flush metrics. Some UMA metrics are not output to traces
+    # until the page is navigated away from.
+    self._perform_final_navigation = perform_final_navigation
 
     assert traffic_setting in traffic_setting_module.NETWORK_CONFIGS, (
         'Invalid traffic setting: %s' % traffic_setting)
     self._traffic_setting = traffic_setting
 
-    # Whether to collect garbage on the page before navigating & performing
-    # page actions.
-    self._collect_garbage_before_run = True
-
     # These attributes can be set dynamically by the page.
     self.synthetic_delays = dict()
-    self._startup_url = startup_url
-    self.credentials = None
     self.skip_waits = False
     self.script_to_evaluate_on_commit = None
-    self._SchemeErrorCheck()
-
-  @property
-  def credentials_path(self):
-    return self._credentials_path
+    self._extra_browser_args = extra_browser_args or []
 
   @property
   def cache_temperature(self):
@@ -80,33 +68,29 @@ class Page(story.Story):
     return self._traffic_setting
 
   @property
-  def startup_url(self):
-    return self._startup_url
+  def extra_browser_args(self):
+    return self._extra_browser_args
 
   def _SchemeErrorCheck(self):
     if not self._scheme:
       raise ValueError('Must prepend the URL with scheme (e.g. file://)')
 
-    if self.startup_url:
-      startup_url_scheme = urlparse.urlparse(self.startup_url).scheme
-      if not startup_url_scheme:
-        raise ValueError('Must prepend the URL with scheme (e.g. http://)')
-      if startup_url_scheme == 'file':
-        raise ValueError('startup_url with local file scheme is not supported')
-
   def Run(self, shared_state):
     current_tab = shared_state.current_tab
     # Collect garbage from previous run several times to make the results more
     # stable if needed.
-    if self._collect_garbage_before_run:
-      for _ in xrange(0, 5):
-        current_tab.CollectGarbage()
-    shared_state.page_test.WillNavigateToPage(self, current_tab)
-    shared_state.page_test.RunNavigateSteps(self, current_tab)
-    shared_state.page_test.DidNavigateToPage(self, current_tab)
+    for _ in range(0, 5):
+      current_tab.CollectGarbage()
     action_runner = action_runner_module.ActionRunner(
         current_tab, skip_waits=self.skip_waits)
-    self.RunPageInteractions(action_runner)
+    with shared_state.interval_profiling_controller.SamplePeriod(
+        'story_run', action_runner):
+      shared_state.NavigateToPage(action_runner, self)
+      shared_state.RunPageInteractions(action_runner, self)
+    # Navigate to about:blank in order to force previous page's metrics to
+    # flush. Needed for many UMA metrics reported from PageLoadMetricsObserver.
+    if self._perform_final_navigation:
+      action_runner.Navigate('about:blank')
 
   def RunNavigateSteps(self, action_runner):
     url = self.file_path_url_with_scheme if self.is_file else self.url
@@ -136,11 +120,6 @@ class Page(story.Story):
   def story_set(self):
     return self._page_set
 
-  # TODO(nednguyen, aiolos): deprecate this property.
-  @property
-  def page_set(self):
-    return self._page_set
-
   @property
   def url(self):
     return self._url
@@ -162,12 +141,18 @@ class Page(story.Story):
       return x
     return cmp(self.url, other.url)
 
+  def __eq__(self, other):
+    return self.name == other.name and self.url == other.url
+
+  def __hash__(self):
+    return hash((self.name, self.url))
+
   def __str__(self):
     return self.url
 
   @property
   def _scheme(self):
-    return urlparse.urlparse(self.url).scheme
+    return six.moves.urllib.parse.urlparse(self.url).scheme
 
   @property
   def is_file(self):
@@ -180,7 +165,7 @@ class Page(story.Story):
     assert self.is_file
     # Because ? is a valid character in a filename,
     # we have to treat the URL as a non-file by removing the scheme.
-    parsed_url = urlparse.urlparse(self.url[7:])
+    parsed_url = six.moves.urllib.parse.urlparse(self.url[7:])
     return os.path.normpath(os.path.join(
         self._base_dir, parsed_url.netloc + parsed_url.path))
 
@@ -213,13 +198,3 @@ class Page(story.Story):
       return file_path
     else:
       return os.path.dirname(file_path)
-
-  @property
-  def display_name(self):
-    if self.name:
-      return self.name
-    if self.page_set is None or not self.is_file:
-      return self.url
-    all_urls = [p.url.rstrip('/') for p in self.page_set if p.is_file]
-    common_prefix = os.path.dirname(os.path.commonprefix(all_urls))
-    return self.url[len(common_prefix):].strip('/')

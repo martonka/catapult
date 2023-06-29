@@ -25,10 +25,15 @@ _EXCLUDED_PATHS = (
     r'.*LICENSE$',
     r'.*OWNERS$',
     r'.*README\.md$',
+    r'^dashboard[\\/]dashboard[\\/]api[\\/]examples[\\/].*.js',
     r'^dashboard[\\/]dashboard[\\/]templates[\\/].*',
+    r'^dashboard[\\/]dashboard[\\/]sheriff_config[\\/].*_pb2.py$',
     r'^experimental[\\/]heatmap[\\/].*',
+    r'^experimental[\\/]trace_on_tap[\\/]third_party[\\/].*',
+    r'^experimental[\\/]perf_sheriffing_emailer[\\/].*.js',
     r'^perf_insights[\\/]test_data[\\/].*',
     r'^perf_insights[\\/]third_party[\\/].*',
+    r'^telemetry[\\/]third_party[\\/].*',
     r'^third_party[\\/].*',
     r'^tracing[\\/]\.allow-devtools-save$',
     r'^tracing[\\/]bower\.json$',
@@ -36,73 +41,53 @@ _EXCLUDED_PATHS = (
     r'^tracing[\\/]tracing_examples[\\/]string_convert\.js$',
     r'^tracing[\\/]test_data[\\/].*',
     r'^tracing[\\/]third_party[\\/].*',
-    r'^telemetry[\\/]support[\\/]html_output[\\/]results-template.html',
+    r'^py_vulcanize[\\/]third_party[\\/].*',
+    r'^common/py_vulcanize[\\/].*', # TODO(hjd): Remove after fixing long lines.
 )
 
 
-_CATAPULT_BUG_ID_RE = re.compile(r'#[1-9]\d*')
-_RIETVELD_BUG_ID_RE = re.compile(r'[1-9]\d*')
-_RIETVELD_REPOSITORY_NAMES = frozenset({'chromium', 'v8'})
+_GITHUB_BUG_ID_RE = re.compile(r'#[1-9]\d*')
+_MONORAIL_BUG_ID_RE = re.compile(r'[1-9]\d*')
+_MONORAIL_PROJECT_NAMES = frozenset({'chromium', 'v8', 'angleproject', 'skia'})
 
 def CheckChangeLogBug(input_api, output_api):
-  # Show a presubmit message if there is no BUG= line.
-  if input_api.change.BUG is None:
+  # Show a presubmit message if there is no Bug line or an empty Bug line.
+  if not input_api.change.BugsFromDescription():
     return [output_api.PresubmitNotifyResult(
-        'If this change has associated Catapult and/or Rietveld bug(s), add a '
-        '"BUG=<bug>(, <bug>)*" line to the patch description where <bug> can '
+        'If this change has associated bugs on GitHub or Monorail, add a '
+        '"Bug: <bug>(, <bug>)*" line to the patch description where <bug> can '
         'be one of the following: catapult:#NNNN, ' +
-        ', '.join('%s:NNNNNN' % n for n in _RIETVELD_REPOSITORY_NAMES) + '.')]
-
-  # Throw a presubmit error if the BUG= line is provided but empty.
-  if input_api.change.BUG.strip() == '':
-    return [output_api.PresubmitError(
-        'Empty BUG= line. Either remove it, or, preferably, change it to '
-        '"BUG=<bug>(, <bug>)*" where <bug> can be one of the following: ' +
-        'catapult:#NNNN, ' +
-        ', '.join('%s:NNNNNN' % n for n in _RIETVELD_REPOSITORY_NAMES) + '.')]
+        ', '.join('%s:NNNNNN' % n for n in _MONORAIL_PROJECT_NAMES) + '.')]
 
   # Check that each bug in the BUG= line has the correct format.
   error_messages = []
   catapult_bug_provided = False
-  append_repository_order_error = False
 
-  for index, bug in enumerate(input_api.change.BUG.split(',')):
-    if index > 0:
-      bug = bug.lstrip()  # Allow spaces after commas.
-
+  for index, bug in enumerate(input_api.change.BugsFromDescription()):
     # Check if the bug can be split into a repository name and a bug ID (e.g.
     # 'catapult:#1234' -> 'catapult' and '#1234').
     bug_parts = bug.split(':')
     if len(bug_parts) != 2:
       error_messages.append('Invalid bug "%s". Bugs should be provided in the '
-                            '"<repository-name>:<bug-id>" format.' % bug)
+                            '"<project-name>:<bug-id>" format.' % bug)
       continue
-    repository_name, bug_id = bug_parts
+    project_name, bug_id = bug_parts
 
-    if repository_name == 'catapult':
-      if not _CATAPULT_BUG_ID_RE.match(bug_id):
+    if project_name == 'catapult':
+      if not _GITHUB_BUG_ID_RE.match(bug_id):
         error_messages.append('Invalid bug "%s". Bugs in the Catapult '
                               'repository should be provided in the '
                               '"catapult:#NNNN" format.' % bug)
       catapult_bug_provided = True
-    elif repository_name in _RIETVELD_REPOSITORY_NAMES:
-      if not _RIETVELD_BUG_ID_RE.match(bug_id):
-        error_messages.append('Invalid bug "%s". Bugs in the Rietveld %s '
-                              'repository should be provided in the '
-                              '"%s:NNNNNN" format.' % (bug, repository_name,
-                                                       repository_name))
-      if catapult_bug_provided:
-        append_repository_order_error = True
+    elif project_name in _MONORAIL_PROJECT_NAMES:
+      if not _MONORAIL_BUG_ID_RE.match(bug_id):
+        error_messages.append('Invalid bug "%s". Bugs in the Monorail %s '
+                              'project should be provided in the '
+                              '"%s:NNNNNN" format.' % (bug, project_name,
+                                                       project_name))
     else:
       error_messages.append('Invalid bug "%s". Unknown repository "%s".' % (
-          bug, repository_name))
-
-  if append_repository_order_error:
-    error_messages.append('Please list Rietveld bugs (' +
-                          ', '.join('%s:NNNNNN' % n
-                                    for n in _RIETVELD_REPOSITORY_NAMES) +
-                          ') before Catapult bugs (catapult:#NNNN) so '
-                          'that Rietveld would display them as hyperlinks.')
+          bug, project_name))
 
   return map(output_api.PresubmitError, error_messages)
 
@@ -111,25 +96,44 @@ def CheckChange(input_api, output_api):
   results = []
   try:
     sys.path += [input_api.PresubmitLocalPath()]
-    from catapult_build import js_checks
+
+    from catapult_build import bin_checks
     from catapult_build import html_checks
+    from catapult_build import js_checks
     from catapult_build import repo_checks
+
     results += input_api.canned_checks.PanProjectChecks(
         input_api, output_api, excluded_paths=_EXCLUDED_PATHS)
+    results += input_api.RunTests(
+        input_api.canned_checks.CheckVPythonSpec(input_api, output_api))
     results += CheckChangeLogBug(input_api, output_api)
     results += js_checks.RunChecks(
         input_api, output_api, excluded_paths=_EXCLUDED_PATHS)
+    results += input_api.RunTests(
+      input_api.canned_checks.CheckPatchFormatted(input_api, output_api,
+        check_js=True))
     results += html_checks.RunChecks(
         input_api, output_api, excluded_paths=_EXCLUDED_PATHS)
     results += repo_checks.RunChecks(input_api, output_api)
+    results += bin_checks.RunChecks(
+        input_api, output_api, excluded_paths=_EXCLUDED_PATHS)
   finally:
     sys.path.remove(input_api.PresubmitLocalPath())
   return results
 
 
 def CheckChangeOnUpload(input_api, output_api):
-  return CheckChange(input_api, output_api)
-
+  results = CheckChange(input_api, output_api)
+  cwd = input_api.PresubmitLocalPath()
+  exit_code = input_api.subprocess.call(
+      [input_api.python_executable, 'generate_telemetry_build.py', '--check'],
+      cwd=cwd)
+  if exit_code != 0:
+    results.append(output_api.PresubmitError(
+        'BUILD.gn needs to be re-generated. Please run '
+        '%s/generate_telemetry_build.py and include the changes in this CL' %
+        cwd))
+  return results
 
 def CheckChangeOnCommit(input_api, output_api):
   return CheckChange(input_api, output_api)

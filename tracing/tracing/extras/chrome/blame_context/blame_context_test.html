@@ -12,8 +12,8 @@ found in the LICENSE file.
 'use strict';
 
 tr.b.unittest.testSuite(function() {
-  var BlameContextSnapshot = tr.e.chrome.BlameContextSnapshot;
-  var BlameContextInstance = tr.e.chrome.BlameContextInstance;
+  const BlameContextSnapshot = tr.e.chrome.BlameContextSnapshot;
+  const BlameContextInstance = tr.e.chrome.BlameContextInstance;
 
   function TestBlameContextSnapshot() {
     BlameContextSnapshot.apply(this, arguments);
@@ -28,8 +28,8 @@ tr.b.unittest.testSuite(function() {
   };
 
   tr.model.ObjectSnapshot.subTypes.register(
-    TestBlameContextSnapshot,
-    {typeName: 'Test'});
+      TestBlameContextSnapshot,
+      {typeName: 'Test'});
 
   function TestBlameContextInstance() {
     BlameContextInstance.apply(this, arguments);
@@ -44,18 +44,18 @@ tr.b.unittest.testSuite(function() {
   };
 
   tr.model.ObjectInstance.subTypes.register(
-    TestBlameContextInstance,
-    {typeName: 'Test'});
+      TestBlameContextInstance,
+      {typeName: 'Test'});
 
-  var TestUtils = tr.c.TestUtils;
+  const TestUtils = tr.c.TestUtils;
 
   test('parentContext', function() {
-    var parent;
-    var child;
+    let parent;
+    let child;
     TestUtils.newModel(function(model) {
       parent = TestUtils.newSnapshot(model, {id: '0x1', name: 'Test'});
       child = TestUtils.newSnapshot(model, {id: '0x2', name: 'Test',
-                                            args: {parent: {id_ref: '0x1'}}});
+        args: {parent: {id_ref: '0x1'}}});
     });
 
     assert.isTrue(child.parentContext === parent);

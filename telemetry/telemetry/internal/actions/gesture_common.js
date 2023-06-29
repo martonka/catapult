@@ -6,38 +6,48 @@
 'use strict';
 
 (function() {
-
   // Make sure functions are injected only once.
-  if (window.__GestureCommon_GetBoundingVisibleRect)
+  if (window.__GestureCommon_GetBoundingVisibleRect) {
     return;
+  }
 
-  // Returns the bounding rectangle wrt to the top-most document.
+  // Returns the bounding rectangle wrt to the layout viewport.
   function getBoundingRect(el) {
-    var client_rect = el.getBoundingClientRect();
-    var bound = { left: client_rect.left,
-                  top: client_rect.top,
-                  width: client_rect.width,
-                  height: client_rect.height };
+    const clientRect = el.getBoundingClientRect();
+    const bound = {
+      left: clientRect.left,
+      top: clientRect.top,
+      width: clientRect.width,
+      height: clientRect.height
+    };
 
-    var frame = el.ownerDocument.defaultView.frameElement;
+    let frame = el.ownerDocument.defaultView.frameElement;
     while (frame) {
-      var frame_bound = frame.getBoundingClientRect();
+      const frameBound = frame.getBoundingClientRect();
       // This computation doesn't account for more complex CSS transforms on the
       // frame (e.g. scaling or rotations).
-      bound.left += frame_bound.left;
-      bound.top += frame_bound.top;
+      bound.left += frameBound.left;
+      bound.top += frameBound.top;
 
       frame = frame.ownerDocument.frameElement;
     }
     return bound;
   }
 
-  // TODO(ulan): Remove this function once
-  // chrome.gpuBenchmarking.pageScaleFactor is available in reference builds.
+  // Chrome version before M50 doesn't have `pageScaleFactor` function, to run
+  // benchmark on them we will need this function to fail back gracefully
   function getPageScaleFactor() {
-    if (chrome.gpuBenchmarking.pageScaleFactor)
-      return chrome.gpuBenchmarking.pageScaleFactor();
-    return 1;
+    const pageScaleFactor = chrome.gpuBenchmarking.pageScaleFactor;
+    return pageScaleFactor ? pageScaleFactor.apply(chrome.gpuBenchmarking) : 1;
+  }
+
+  // Get scrollable document height.
+  function getScrollableHeight() {
+    const body = document.body;
+    const doc = document.documentElement;
+
+    return Math.max(body.scrollHeight, body.offsetHeight,
+        doc.clientHeight, doc.scrollHeight, doc.offsetHeight);
   }
 
   // Zoom-independent window height. See crbug.com/627123 for more details.
@@ -50,32 +60,43 @@
     return getPageScaleFactor() * chrome.gpuBenchmarking.visualViewportWidth();
   }
 
+  function clamp(min, value, max) {
+    return Math.min(Math.max(min, value), max);
+  }
+
+  // Returns the bounding rect in the visual viewport's coordinates.
   function getBoundingVisibleRect(el) {
-    var rect = getBoundingRect(el);
-    if (rect.top < 0) {
-      rect.height += rect.top;
-      rect.top = 0;
-    }
-    if (rect.left < 0) {
-      rect.width += rect.left;
-      rect.left = 0;
-    }
+    // Get the element bounding rect in the layout viewport.
+    const rect = getBoundingRect(el);
 
-    var windowHeight = getWindowHeight();
-    var windowWidth = getWindowWidth();
-    var outsideHeight = (rect.top + rect.height) - windowHeight;
-    var outsideWidth = (rect.left + rect.width) - windowWidth;
+    // Apply the visual viewport transform (i.e. pinch-zoom) to the bounding
+    // rect. The viewportX|Y values are in CSS pixels so they don't change
+    // with page scale. We first translate so that the viewport offset is
+    // at the origin and then we apply the scaling factor.
+    const scale = getPageScaleFactor();
+    const visualViewportX = chrome.gpuBenchmarking.visualViewportX();
+    const visualViewportY = chrome.gpuBenchmarking.visualViewportY();
+    rect.top = (rect.top - visualViewportY) * scale;
+    rect.left = (rect.left - visualViewportX) * scale;
+    rect.width *= scale;
+    rect.height *= scale;
 
-    if (outsideHeight > 0) {
-      rect.height -= outsideHeight;
-    }
-    if (outsideWidth > 0) {
-      rect.width -= outsideWidth;
-    }
+    // Get the window dimensions.
+    const windowHeight = getWindowHeight();
+    const windowWidth = getWindowWidth();
+
+    // Then clip the rect to the screen size.
+    rect.top = clamp(0, rect.top, windowHeight);
+    rect.left = clamp(0, rect.left, windowWidth);
+    rect.height = clamp(0, rect.height, windowHeight - rect.top);
+    rect.width = clamp(0, rect.width, windowWidth - rect.left);
+
     return rect;
-  };
+  }
 
   window.__GestureCommon_GetBoundingVisibleRect = getBoundingVisibleRect;
   window.__GestureCommon_GetWindowHeight = getWindowHeight;
   window.__GestureCommon_GetWindowWidth = getWindowWidth;
+  window.__GestureCommon_GetPageScaleFactor = getPageScaleFactor;
+  window.__GestureCommon_GetScrollableHeight = getScrollableHeight;
 })();

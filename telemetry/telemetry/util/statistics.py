@@ -4,8 +4,13 @@
 
 """A collection of statistical utility functions to be used by metrics."""
 
+from __future__ import division
+from __future__ import absolute_import
 import math
+from six.moves import map # pylint: disable=redefined-builtin
 
+# 2To3-division: the / operations here are not converted to // as the results
+# are expected floats.
 
 def Clamp(value, low=0.0, high=1.0):
   """Clamp a value between some low and high value."""
@@ -34,8 +39,8 @@ def NormalizeSamples(samples):
   if high-low == 0.0:
     return [0.5] * len(samples), 1.0
   scale = (new_high - new_low) / (high - low)
-  for i in xrange(0, len(samples)):
-    samples[i] = float(samples[i] - low) * scale + new_low
+  for i, val in enumerate(samples):
+    samples[i] = float(val - low) * scale + new_low
   return samples, scale
 
 
@@ -63,7 +68,7 @@ def Discrepancy(samples, location_count=None):
   if location_count:
     # Generate list of equally spaced locations.
     sample_index = 0
-    for i in xrange(0, int(location_count)):
+    for i in range(int(location_count)):
       location = float(i) / (location_count-1)
       locations.append(location)
       while sample_index < len(samples) and samples[sample_index] < location:
@@ -78,8 +83,8 @@ def Discrepancy(samples, location_count=None):
       locations.append(0.0)
       count_less.append(0)
       count_less_equal.append(0)
-    for i in xrange(0, len(samples)):
-      locations.append(samples[i])
+    for i, val in enumerate(samples):
+      locations.append(val)
       count_less.append(i)
       count_less_equal.append(i+1)
     if samples[-1] < 1.0:
@@ -102,7 +107,7 @@ def Discrepancy(samples, location_count=None):
   max_diff = 0
   # The minimum of (count_open(k, i-1)/N - length(k, i-1)) for any k < i-1.
   min_diff = 0
-  for i in xrange(1, len(locations)):
+  for i in range(1, len(locations)):
     length = locations[i] - locations[i - 1]
     count_closed = count_less_equal[i] - count_less[i - 1]
     count_open = count_less[i] - count_less_equal[i - 1]
@@ -176,31 +181,6 @@ def TimestampsDiscrepancy(timestamps, absolute=True,
   return discrepancy
 
 
-def DurationsDiscrepancy(durations, absolute=True,
-                         location_count=None):
-  """A discrepancy based metric for measuring duration jank.
-
-  DurationsDiscrepancy computes a jank metric which measures how irregular a
-  given sequence of intervals is. In order to minimize jank, each duration
-  should be equally long. This is similar to how timestamp jank works,
-  and we therefore reuse the timestamp discrepancy function above to compute a
-  similar duration discrepancy number.
-
-  Because timestamp discrepancy is defined in terms of timestamps, we first
-  convert the list of durations to monotonically increasing timestamps.
-
-  Args:
-    durations: List of interval lengths in milliseconds.
-    absolute: See TimestampsDiscrepancy.
-    interval_multiplier: See TimestampsDiscrepancy.
-  """
-  if not durations:
-    return 0.0
-
-  timestamps = reduce(lambda x, y: x + [x[-1] + y], durations, [0])
-  return TimestampsDiscrepancy(timestamps, absolute, location_count)
-
-
 def ArithmeticMean(data):
   """Calculates arithmetic mean.
 
@@ -264,11 +244,11 @@ def TrapezoidalRule(data, dx):
 
 def Total(data):
   """Returns the float value of a number or the sum of a list."""
-  if type(data) == float:
+  if isinstance(data, float):
     total = data
-  elif type(data) == int:
+  elif isinstance(data, int):
     total = float(data)
-  elif type(data) == list:
+  elif isinstance(data, list):
     total = float(sum(data))
   else:
     raise TypeError
@@ -287,7 +267,7 @@ def GeneralizedMean(values, exponent):
   sum_of_powers = 0.0
   for v in values:
     sum_of_powers += v ** exponent
-  return (sum_of_powers / len(values)) ** (1.0/exponent)
+  return (sum_of_powers / len(values)) ** (1.0 / exponent)
 
 
 def Median(values):
@@ -320,7 +300,7 @@ def Percentile(values, percentile):
   elif percentile >= (n - 0.5) / n:
     return sorted_values[-1]
   else:
-    floor_index = int(math.floor(n * percentile -  0.5))
+    floor_index = int(math.floor(n * percentile - 0.5))
     floor_value = sorted_values[floor_index]
     ceil_value = sorted_values[floor_index+1]
     alpha = n * percentile - 0.5 - floor_index

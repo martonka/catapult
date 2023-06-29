@@ -5,7 +5,7 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="import" href="/tracing/base/iteration_helpers.html">
+<link rel="import" href="/tracing/base/utils.html">
 <link rel="import" href="/tracing/ui/analysis/analysis_sub_view.html">
 <link rel="import" href="/tracing/ui/base/table.html">
 
@@ -27,26 +27,26 @@ found in the LICENSE file.
 <script>
 'use strict';
 (function() {
-  var COUNTER_SAMPLE_TABLE_COLUMNS = [
+  const COUNTER_SAMPLE_TABLE_COLUMNS = [
     {
       title: 'Counter',
       width: '150px',
-      value: function(row) { return row.counter; }
+      value(row) { return row.counter; }
     },
     {
       title: 'Series',
       width: '150px',
-      value: function(row) { return row.series; }
+      value(row) { return row.series; }
     },
     {
       title: 'Time',
       width: '150px',
-      value: function(row) { return row.start; }
+      value(row) { return row.start; }
     },
     {
       title: 'Value',
       width: '100%',
-      value: function(row) { return row.value; }
+      value(row) { return row.value; }
     }
   ];
 
@@ -54,7 +54,7 @@ found in the LICENSE file.
     is: 'tr-ui-a-counter-sample-sub-view',
     behaviors: [tr.ui.analysis.AnalysisSubView],
 
-    ready: function() {
+    ready() {
       this.currentSelection_ = undefined;
       this.$.table.tableColumns = COUNTER_SAMPLE_TABLE_COLUMNS;
     },
@@ -68,7 +68,7 @@ found in the LICENSE file.
       this.updateContents_();
     },
 
-    updateContents_: function() {
+    updateContents_() {
       this.$.table.tableRows =
           this.selection ? this.getRows_(this.selection.toArray()) : [];
       this.$.table.rebuild();
@@ -84,19 +84,17 @@ found in the LICENSE file.
      * Each series can be collapsed. In the expanded state, all samples
      * are shown. In the collapsed state, only the first sample is displayed.
      */
-    getRows_: function(samples) {
-      var samplesByCounter = tr.b.group(samples, function(sample) {
-        return sample.series.counter.guid;
-      });
+    getRows_(samples) {
+      const samplesByCounter = tr.b.groupIntoMap(
+          samples, sample => sample.series.counter.guid);
 
-      var rows = [];
-      tr.b.iterItems(samplesByCounter, function(unused, counterSamples) {
-        var samplesBySeries = tr.b.group(counterSamples, function(sample) {
-          return sample.series.guid;
-        });
+      const rows = [];
+      for (const counterSamples of samplesByCounter.values()) {
+        const samplesBySeries = tr.b.groupIntoMap(
+            counterSamples, sample => sample.series.guid);
 
-        tr.b.iterItems(samplesBySeries, function(unused, seriesSamples) {
-          var seriesRows = this.getRowsForSamples_(seriesSamples);
+        for (const seriesSamples of samplesBySeries.values()) {
+          const seriesRows = this.getRowsForSamples_(seriesSamples);
           seriesRows[0].counter = seriesSamples[0].series.counter.name;
           seriesRows[0].series = seriesSamples[0].series.name;
 
@@ -106,13 +104,13 @@ found in the LICENSE file.
           }
 
           rows.push(seriesRows[0]);
-        }, this);
-      }, this);
+        }
+      }
 
       return rows;
     },
 
-    getRowsForSamples_: function(samples) {
+    getRowsForSamples_(samples) {
       return samples.map(function(sample) {
         return {
           start: sample.timestamp,

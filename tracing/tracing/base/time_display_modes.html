@@ -14,41 +14,39 @@ found in the LICENSE file.
  * @fileoverview Time currentDisplayUnit
  */
 tr.exportTo('tr.b', function() {
-  var msDisplayMode = {
+  const msDisplayMode = {
     scale: 1e-3,
     suffix: 'ms',
     // Compares a < b with adjustments to precision errors.
-    roundedLess: function(a, b) {
+    roundedLess(a, b) {
       return Math.round(a * 1000) < Math.round(b * 1000);
     },
     formatSpec: {
-      unit: 's',
-      unitPrefix: tr.b.UnitScale.Metric.MILLI,
+      unitScale: [tr.b.UnitScale.TIME.MILLI_SEC],
       minimumFractionDigits: 3,
     }
   };
 
-  var nsDisplayMode = {
+  const nsDisplayMode = {
     scale: 1e-9,
     suffix: 'ns',
     // Compares a < b with adjustments to precision errors.
-    roundedLess: function(a, b) {
+    roundedLess(a, b) {
       return Math.round(a * 1000000) < Math.round(b * 1000000);
     },
     formatSpec: {
-      unit: 's',
-      unitPrefix: tr.b.UnitScale.Metric.NANO,
+      unitScale: [tr.b.UnitScale.TIME.NANO_SEC],
       maximumFractionDigits: 0
     }
   };
 
-  var TimeDisplayModes = {
+  const TimeDisplayModes = {
     ns: nsDisplayMode,
     ms: msDisplayMode
   };
 
   return {
-    TimeDisplayModes: TimeDisplayModes
+    TimeDisplayModes,
   };
 });
 </script>

@@ -1,164 +1,153 @@
-# Copyright 2015 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+"""The database model for an "Anomaly", which represents a step up or down."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
-"""Model for a group of alerts."""
-
-import logging
+import uuid
 
 from google.appengine.ext import ndb
 
-from dashboard import quick_logger
-from dashboard import utils
+# Move import of protobuf-dependent code here so that all AppEngine work-arounds
+# have a chance to be live before we import any proto code.
+from dashboard import sheriff_config_client
 
-# Max number of AlertGroup entities to fetch.
-_MAX_GROUPS_TO_FETCH = 2000
+
+class RevisionRange(ndb.Model):
+  repository = ndb.StringProperty()
+  start = ndb.IntegerProperty()
+  end = ndb.IntegerProperty()
+
+  def IsOverlapping(self, b):
+    if not b or self.repository != b.repository:
+      return False
+    return max(self.start, b.start) <= min(self.end, b.end)
+
+
+class BugInfo(ndb.Model):
+  project = ndb.StringProperty(indexed=True)
+  bug_id = ndb.IntegerProperty(indexed=True)
 
 
 class AlertGroup(ndb.Model):
-  """Represents a group of alerts that are likely to have the same cause."""
+  name = ndb.StringProperty(indexed=True)
+  domain = ndb.StringProperty(indexed=True)
+  subscription_name = ndb.StringProperty(indexed=True)
+  created = ndb.DateTimeProperty(indexed=False, auto_now_add=True)
+  updated = ndb.DateTimeProperty(indexed=False, auto_now_add=True)
 
-  # Issue tracker id.
-  bug_id = ndb.IntegerProperty(indexed=True)
+  class Status(object):
+    unknown = 0
+    untriaged = 1
+    triaged = 2
+    bisected = 3
+    closed = 4
 
-  # The minimum start of the revision range where the anomaly occurred.
-  start_revision = ndb.IntegerProperty(indexed=True)
+  status = ndb.IntegerProperty(indexed=False)
 
-  # The minimum end of the revision range where the anomaly occurred.
-  end_revision = ndb.IntegerProperty(indexed=False)
+  class Type(object):
+    test_suite = 0
+    logical = 1
+    reserved = 2
 
-  # A list of test suites.
-  test_suites = ndb.StringProperty(repeated=True, indexed=False)
+  group_type = ndb.IntegerProperty(
+      indexed=False,
+      choices=[Type.test_suite, Type.logical, Type.reserved],
+      default=Type.test_suite,
+  )
+  active = ndb.BooleanProperty(indexed=True)
+  revision = ndb.LocalStructuredProperty(RevisionRange)
+  bug = ndb.StructuredProperty(BugInfo, indexed=True)
+  project_id = ndb.StringProperty(indexed=True, default='chromium')
+  bisection_ids = ndb.StringProperty(repeated=True)
+  anomalies = ndb.KeyProperty(repeated=True)
+  # Key of canonical AlertGroup. If not None the group is considered to be
+  # duplicate.
+  canonical_group = ndb.KeyProperty(indexed=True)
 
-  # The kind of the alerts in this group. Each group only has one kind.
-  alert_kind = ndb.StringProperty(indexed=False)
+  def IsOverlapping(self, b):
+    return (self.name == b.name and self.domain == b.domain
+            and self.subscription_name == b.subscription_name
+            and self.project_id == b.project_id
+            and self.group_type == b.group_type
+            and self.revision.IsOverlapping(b.revision))
 
-  def UpdateRevisionRange(self, grouped_alerts):
-    """Sets this group's revision range the minimum of the given group.
+  @classmethod
+  def GetType(cls, anomaly_entity):
+    if anomaly_entity.alert_grouping:
+      return cls.Type.logical
+    return cls.Type.test_suite
 
-    Args:
-      grouped_alerts: Alert entities that belong to this group. These
-          are only given here so that they don't need to be fetched.
-    """
-    min_rev_range = utils.MinimumAlertRange(grouped_alerts)
-    start, end = min_rev_range if min_rev_range else (None, None)
-    if self.start_revision != start or self.end_revision != end:
-      self.start_revision = start
-      self.end_revision = end
-      self.put()
+  @classmethod
+  def GenerateAllGroupsForAnomaly(cls,
+                                  anomaly_entity,
+                                  sheriff_config=None,
+                                  subscriptions=None):
+    if subscriptions is None:
+      sheriff_config = (sheriff_config
+                        or sheriff_config_client.GetSheriffConfigClient())
+      subscriptions, _ = sheriff_config.Match(anomaly_entity.test.string_id(),
+                                              check=True)
+    names = anomaly_entity.alert_grouping or [anomaly_entity.benchmark_name]
 
+    return [
+        cls(
+            id=str(uuid.uuid4()),
+            name=group_name,
+            domain=anomaly_entity.master_name,
+            subscription_name=s.name,
+            project_id=s.monorail_project_id,
+            status=cls.Status.untriaged,
+            group_type=cls.GetType(anomaly_entity),
+            active=True,
+            revision=RevisionRange(
+                repository='chromium',
+                start=anomaly_entity.start_revision,
+                end=anomaly_entity.end_revision,
+            ),
+        ) for s in subscriptions for group_name in names
+    ]
 
-def GroupAlerts(alerts, test_suite, kind):
-  """Groups alerts with matching criteria.
+  @classmethod
+  def GetGroupsForAnomaly(cls, anomaly_entity, subscriptions):
+    names = anomaly_entity.alert_grouping or [anomaly_entity.benchmark_name]
+    group_type = cls.GetType(anomaly_entity)
+    # all_possible_groups including all groups for the anomaly. Some of groups
+    # may havn't been created yet.
+    all_possible_groups = cls.GenerateAllGroupsForAnomaly(
+        anomaly_entity,
+        subscriptions=subscriptions,
+    )
+    # existing_groups are groups which have been created and overlaped with at
+    # least one of the possible group.
+    existing_groups = [
+        g1 for name in names
+        for g1 in cls.Get(name, group_type)
+        if any(g1.IsOverlapping(g2) for g2 in all_possible_groups)]
+    # If any of the group in the all_possible_groups doesn't overlap with any
+    # of the existing group, we put it into a special group for creating the
+    # non-existent group in next iteration.
+    if not existing_groups or not all(
+        any(g1.IsOverlapping(g2) for g2 in existing_groups)
+        for g1 in all_possible_groups):
+      existing_groups += cls.Get('Ungrouped', cls.Type.reserved)
+    return [g.key for g in existing_groups]
 
-  Assigns a bug_id or a group_id if there is a matching group,
-  otherwise creates a new group for that anomaly.
+  @classmethod
+  def GetByID(cls, group_id):
+    return ndb.Key('AlertGroup', group_id).get()
 
-  Args:
-    alerts: A list of Alerts.
-    test_suite: The test suite name for |alerts|.
-    kind: The kind string of the given alert entity.
-  """
-  if not alerts:
-    return
-  alerts = [a for a in alerts if not getattr(a, 'is_improvement', False)]
-  alerts = sorted(alerts, key=lambda a: a.end_revision)
-  if not alerts:
-    return
-  groups = _FetchAlertGroups(alerts[-1].end_revision)
-  for alert_entity in alerts:
-    if not _FindAlertGroup(alert_entity, groups, test_suite, kind):
-      _CreateGroupForAlert(alert_entity, test_suite, kind)
+  @classmethod
+  def Get(cls, group_name, group_type, active=True):
+    query = cls.query(
+        cls.active == active,
+        cls.name == group_name,
+    )
+    return [g for g in query.fetch() if g.group_type == group_type]
 
-
-def _FetchAlertGroups(max_start_revision):
-  """Fetches AlertGroup entities up to a given revision."""
-  query = AlertGroup.query(AlertGroup.start_revision <= max_start_revision)
-  query = query.order(-AlertGroup.start_revision)
-  groups = query.fetch(limit=_MAX_GROUPS_TO_FETCH)
-
-  return groups
-
-
-def _FindAlertGroup(alert_entity, groups, test_suite, kind):
-  """Finds and assigns a group for |alert_entity|.
-
-  An alert should only be assigned an existing group if the group if
-  the other alerts in the group are of the same kind, which should be
-  the case if the alert_kind property of the group matches the alert's
-  kind.
-
-  Args:
-    alert_entity: Alert to find group for.
-    groups: List of AlertGroup.
-    test_suite: The test suite of |alert_entity|.
-    kind: The kind string of the given alert entity.
-
-  Returns:
-    True if a group is found and assigned, False otherwise.
-  """
-  for group in groups:
-    if (_IsOverlapping(alert_entity, group.start_revision, group.end_revision)
-        and group.alert_kind == kind
-        and test_suite in group.test_suites):
-      _AddAlertToGroup(alert_entity, group)
-      return True
-  return False
-
-
-def _CreateGroupForAlert(alert_entity, test_suite, kind):
-  """Creates an AlertGroup for |alert_entity|."""
-  group = AlertGroup()
-  group.start_revision = alert_entity.start_revision
-  group.end_revision = alert_entity.end_revision
-  group.test_suites = [test_suite]
-  group.alert_kind = kind
-  group.put()
-  alert_entity.group = group.key
-  logging.debug('Auto triage: Created group %s.', group)
-
-
-def _AddAlertToGroup(alert_entity, group):
-  """Adds an anomaly to group and updates the group's properties."""
-  update_group = False
-  if alert_entity.start_revision > group.start_revision:
-    # TODO(qyearsley): Add test coverage. See catapult:#1346.
-    group.start_revision = alert_entity.start_revision
-    update_group = True
-  if alert_entity.end_revision < group.end_revision:
-    group.end_revision = alert_entity.end_revision
-    update_group = True
-  if update_group:
-    group.put()
-
-  if group.bug_id:
-    alert_entity.bug_id = group.bug_id
-    _AddLogForBugAssociate(alert_entity, group.bug_id)
-  alert_entity.group = group.key
-  logging.debug('Auto triage: Associated anomaly on %s with %s.',
-                utils.TestPath(alert_entity.GetTestMetadataKey()),
-                group.key.urlsafe())
-
-
-def _IsOverlapping(alert_entity, start, end):
-  """Whether |alert_entity| overlaps with |start| and |end| revision range."""
-  return (alert_entity.start_revision <= end and
-          alert_entity.end_revision >= start)
-
-
-def _AddLogForBugAssociate(anomaly_entity, bug_id):
-  """Adds a log for associating alert with a bug."""
-  sheriff = anomaly_entity.GetTestMetadataKey().get().sheriff
-  if not sheriff:
-    return
-  # TODO(qyearsley): Add test coverage. See catapult:#1346.
-  sheriff = sheriff.string_id()
-  bug_url = ('https://chromeperf.appspot.com/group_report?bug_id=' +
-             str(bug_id))
-  test_path = utils.TestPath(anomaly_entity.GetTestMetadataKey())
-  html_str = ('Associated alert on %s with bug <a href="%s">%s</a>.' %
-              (test_path, bug_url, bug_id))
-  formatter = quick_logger.Formatter()
-  logger = quick_logger.QuickLogger('auto_triage', sheriff, formatter)
-  logger.Log(html_str)
-  logger.Save()
+  @classmethod
+  def GetAll(cls, active=True):
+    groups = cls.query(cls.active == active).fetch()
+    return groups or []

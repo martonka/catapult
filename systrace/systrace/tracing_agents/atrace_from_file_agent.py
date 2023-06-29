@@ -2,9 +2,16 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
 import os
-import py_utils
 import re
+import stat
+import subprocess
+import sys
+from six.moves.urllib.request import urlopen  # pylint: disable=import-error
+from six.moves.urllib.error import URLError   # pylint: disable=import-error
+
+import py_utils
 
 from systrace import trace_result
 from systrace import tracing_agents
@@ -12,17 +19,61 @@ from systrace.tracing_agents import atrace_agent
 
 
 # ADB sends this text to indicate the beginning of the trace data.
-TRACE_START_REGEXP = r'TRACE\:'
+TRACE_START_REGEXP = br'TRACE\:'
 # Text that ADB sends, but does not need to be displayed to the user.
-ADB_IGNORE_REGEXP = r'^capturing trace\.\.\. done|^capturing trace\.\.\.'
+ADB_IGNORE_REGEXP = br'^capturing trace\.\.\. done|^capturing trace\.\.\.'
 
+T2T_OUTPUT = 'trace.systrace'
 
 def try_create_agent(options):
   if options.from_file is not None:
+    with open(options.from_file, 'rb') as f_in:
+      if is_perfetto(f_in):
+        if convert_perfetto_trace(options.from_file):
+          options.from_file = T2T_OUTPUT
+        else:
+          print ('Perfetto trace file: ' + options.from_file +
+                 ' could not be converted.')
+          sys.exit(1)
     return AtraceFromFileAgent(options)
   else:
     return False
 
+def convert_perfetto_trace(in_file):
+  traceconv_path = os.path.abspath(os.path.join(os.path.dirname(__file__),
+                                          '../traceconv'))
+  try:
+    traceconv = urlopen('https://get.perfetto.dev/traceconv')
+    with open(traceconv_path, 'w') as out:
+      out.write(traceconv.read())
+  except URLError:
+    print('Could not download traceconv to convert the Perfetto trace.')
+    sys.exit(1)
+  os.chmod(traceconv_path, stat.S_IXUSR | stat.S_IRUSR | stat.S_IWUSR)
+  return subprocess.call([traceconv_path, 'systrace', in_file, T2T_OUTPUT]) == 0
+
+def is_perfetto(from_file):
+  # Starts with a preamble for field ID=1 (TracePacket)
+  if ord(from_file.read(1)) != 0x0a:
+    return False
+  for _ in range(10): # Check the first 10 packets are structured correctly
+    # Then a var int that specifies field size
+    field_size = 0
+    shift = 0
+    while True:
+      c = ord(from_file.read(1))
+      field_size |= (c & 0x7f) << shift
+      shift += 7
+      if not c & 0x80:
+        break
+    # The packet itself
+    from_file.seek(field_size, os.SEEK_CUR)
+    # The preamble for the next field ID=1 (TracePacket)
+    if ord(from_file.read(1)) != 0x0a:
+      return False
+  # Go back to the beginning of the file
+  from_file.seek(0)
+  return True
 
 class AtraceFromFileConfig(tracing_agents.TracingConfig):
   def __init__(self, from_file):
@@ -66,7 +117,7 @@ class AtraceFromFileAgent(tracing_agents.TracingAgent):
     return trace_result.TraceResult('trace-data', self._trace_data)
 
   def _read_trace_data(self):
-    with open(self._filename, 'r') as f:
+    with open(self._filename, 'rb') as f:
       result = f.read()
     data_start = re.search(TRACE_START_REGEXP, result).end(0)
     data = re.sub(ADB_IGNORE_REGEXP, '', result[data_start:])

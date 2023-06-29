@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
 import optparse
 import tempfile
 
@@ -32,7 +33,7 @@ class FakeAgent2(object):
     return trace_result.TraceResult('fakeDataTwo', trace_data)
 
   def _PullTrace(self):
-    with tempfile.NamedTemporaryFile(delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode='w+', delete=False) as f:
       self.filename = f.name
       f.write(self.contents)
       return f.name

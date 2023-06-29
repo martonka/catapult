@@ -1,6 +1,7 @@
 # Copyright 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
 import os
 import shutil
 import unittest
@@ -67,12 +68,12 @@ class CrxIdUnittest(unittest.TestCase):
                      'fegemedmbnhglnecjgbdhekaghkccplm')
 
     # Test drive letter normalization.
-    kWinPathId = 'aiinlcdagjihibappcdnnhcccdokjlaf'
+    k_win_path_id = 'aiinlcdagjihibappcdnnhcccdokjlaf'
     self.assertEqual(crx_id.GetCRXAppID(r'c:\temp_extension',
                                         from_file_path=True,
                                         is_win_path=True),
-                     kWinPathId)
+                     k_win_path_id)
     self.assertEqual(crx_id.GetCRXAppID(r'C:\temp_extension',
                                         from_file_path=True,
                                         is_win_path=True),
-                     kWinPathId)
+                     k_win_path_id)

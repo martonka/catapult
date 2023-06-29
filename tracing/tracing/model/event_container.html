@@ -7,13 +7,12 @@ found in the LICENSE file.
 
 <link rel="import" href="/tracing/base/base.html">
 <link rel="import" href="/tracing/base/guid.html">
-<link rel="import" href="/tracing/base/range.html">
+<link rel="import" href="/tracing/base/math/range.html">
 
 <script>
 'use strict';
 
 tr.exportTo('tr.model', function() {
-
   /**
    * EventContainer is a base class for any class in the trace model that
    * contains child events or child EventContainers.
@@ -26,7 +25,7 @@ tr.exportTo('tr.model', function() {
   function EventContainer() {
     this.guid_ = tr.b.GUID.allocateSimple();
     this.important = true;
-    this.bounds_ = new tr.b.Range();
+    this.bounds_ = new tr.b.math.Range();
   }
 
   EventContainer.prototype = {
@@ -58,7 +57,7 @@ tr.exportTo('tr.model', function() {
      * Updates the bounds of the event container. After updating, this.bounds
      * will describe the range of timestamps of all ancestor events.
      */
-    updateBounds: function() {
+    updateBounds() {
       throw new Error('Not implemented');
     },
 
@@ -67,7 +66,7 @@ tr.exportTo('tr.model', function() {
     /**
      * Shifts the timestamps for ancestor events by 'amount' milliseconds.
      */
-    shiftTimestampsForward: function(amount) {
+    shiftTimestampsForward(amount) {
       throw new Error('Not implemented');
     },
 
@@ -75,39 +74,65 @@ tr.exportTo('tr.model', function() {
     /**
     * Returns an iterable of all child events.
     */
-    childEvents: function*() {
+    * childEvents() {
     },
 
     /**
      * Returns an iterable of all events in this and descendant
      * event containers.
      */
-    getDescendantEvents: function*() {
-      yield * this.childEvents();
-      for (var container of this.childEventContainers())
-        yield * container.getDescendantEvents();
+    * getDescendantEvents() {
+      yield* this.childEvents();
+      for (const container of this.childEventContainers()) {
+        yield* container.getDescendantEvents();
+      }
     },
 
     /**
      * Returns an iterable of all child event containers.
      */
-    childEventContainers: function*() {
+    * childEventContainers() {
     },
 
     /**
-    * Returns an iterable containing this and all descendant event containers.
-    */
-    getDescendantEventContainers: function*() {
+     * Returns an iterable containing this and all descendant event containers.
+     */
+    * getDescendantEventContainers() {
       yield this;
-      for (var container of this.childEventContainers())
-        yield * container.getDescendantEventContainers();
+      for (const container of this.childEventContainers()) {
+        yield* container.getDescendantEventContainers();
+      }
+    },
+
+    /**
+     * Returns an iterable of all events in this and descendant event containers
+     * in a given set of ranges.
+     *
+     * This base class provides a default implementation with no assumptions
+     * about the order of events. A container can override this implementation
+     * with a more efficient one, for example if its events are sorted.
+     */
+    * getDescendantEventsInSortedRanges(ranges, opt_containerPredicate) {
+      if (opt_containerPredicate === undefined ||
+          opt_containerPredicate(this)) {
+        for (const event of this.childEvents()) {
+          const i = tr.b.findFirstTrueIndexInSortedArray(
+              ranges, range => event.start <= range.max);
+          if (i < ranges.length && event.end >= ranges[i].min) yield event;
+        }
+      }
+
+      for (const container of this.childEventContainers()) {
+        yield* container.getDescendantEventsInSortedRanges(
+            ranges, opt_containerPredicate);
+      }
     },
 
     /**
      * Finds topmost slices in this container (see docstring for
      * findTopmostSlices).
      */
-    findTopmostSlicesInThisContainer: function*(eventPredicate, opt_this) {
+    * findTopmostSlicesInThisContainer(eventPredicate, opt_this) {
     },
 
     /**
@@ -124,18 +149,19 @@ tr.exportTo('tr.model', function() {
      * the  left is not the topmost C, and the right one is, even though it is
      * not itself a top-level slice.
      */
-    findTopmostSlices: function*(eventPredicate) {
-      for (var ec of this.getDescendantEventContainers())
-        yield * ec.findTopmostSlicesInThisContainer(eventPredicate);
+    * findTopmostSlices(eventPredicate) {
+      for (const ec of this.getDescendantEventContainers()) {
+        yield* ec.findTopmostSlicesInThisContainer(eventPredicate);
+      }
     },
 
-    findTopmostSlicesNamed: function*(name) {
-      yield * this.findTopmostSlices(e => e.title === name);
+    * findTopmostSlicesNamed(name) {
+      yield* this.findTopmostSlices(e => e.title === name);
     }
   };
 
   return {
-    EventContainer: EventContainer
+    EventContainer,
   };
 });
 </script>

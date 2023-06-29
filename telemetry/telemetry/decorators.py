@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 # pylint: disable=protected-access
 
+from __future__ import absolute_import
 import datetime
 import functools
 import os
@@ -25,6 +26,7 @@ def Cache(obj):
   Cached methods maintain their cache for the lifetime of the /instance/, while
   cached functions maintain their cache for the lifetime of the /module/.
   """
+
   @functools.wraps(obj)
   def Cacher(*args, **kwargs):
     cacher = args[0] if inspect.getargspec(obj).args[:1] == ['self'] else obj
@@ -33,6 +35,7 @@ def Cache(obj):
     if key not in cacher.__cache:
       cacher.__cache[key] = obj(*args, **kwargs)
     return cacher.__cache[key]
+
   return Cacher
 
 
@@ -48,13 +51,13 @@ class Deprecated(object):
       target_str = 'Function %s' % target.__name__
     else:
       target_str = 'Class %s' % target.__name__
-    warnings.warn('%s is deprecated. It will no longer be supported on %s. '
-                  'Please remove it or switch to an alternative before '
-                  'that time. %s\n'
-                  % (target_str,
-                     self._date_of_support_removal.strftime('%B %d, %Y'),
-                     self._extra_guidance),
-                  stacklevel=self._ComputeStackLevel())
+    warnings.warn(
+        '%s is deprecated. It will no longer be supported on %s. '
+        'Please remove it or switch to an alternative before '
+        'that time. %s\n' %
+        (target_str, self._date_of_support_removal.strftime('%B %d, %Y'),
+         self._extra_guidance),
+        stacklevel=self._ComputeStackLevel())
 
   def _ComputeStackLevel(self):
     this_file, _ = os.path.splitext(__file__)
@@ -69,10 +72,12 @@ class Deprecated(object):
 
   def __call__(self, target):
     if isinstance(target, types.FunctionType):
+
       @functools.wraps(target)
-      def wrapper(*args, **kwargs):
+      def wrapper(*args, **kwargs): # pylint: disable=invalid-name
         self._DisplayWarningMessage(target)
         return target(*args, **kwargs)
+
       return wrapper
     elif inspect.isclass(target):
       original_ctor = target.__init__
@@ -81,12 +86,14 @@ class Deprecated(object):
       # since object.__init__ does not have __module__ defined, which
       # cause functools.wraps() to raise exception.
       if original_ctor == object.__init__:
-        def new_ctor(*args, **kwargs):
+
+        def new_ctor(*args, **kwargs): # pylint: disable=invalid-name
           self._DisplayWarningMessage(target)
           return original_ctor(*args, **kwargs)
       else:
+
         @functools.wraps(original_ctor)
-        def new_ctor(*args, **kwargs):
+        def new_ctor(*args, **kwargs): # pylint: disable=invalid-name
           self._DisplayWarningMessage(target)
           return original_ctor(*args, **kwargs)
 
@@ -99,16 +106,21 @@ class Deprecated(object):
 def Disabled(*args):
   """Decorator for disabling tests/benchmarks.
 
-
   If args are given, the test will be disabled if ANY of the args match the
-  browser type, OS name or OS version:
-    @Disabled('canary')        # Disabled for canary browsers
-    @Disabled('win')           # Disabled on Windows.
-    @Disabled('win', 'linux')  # Disabled on both Windows and Linux.
-    @Disabled('mavericks')     # Disabled on Mac Mavericks (10.9) only.
-    @Disabled('all')  # Unconditionally disabled.
+  browser type, OS name, OS version, or any tags returned by a PossibleBrowser's
+  GetTypExpectationsTags():
+    @Disabled('canary')          # Disabled for canary browsers
+    @Disabled('win')             # Disabled on Windows.
+    @Disabled('win', 'linux')    # Disabled on both Windows and Linux.
+    @Disabled('mavericks')       # Disabled on Mac Mavericks (10.9) only.
+    @Disabled('all')             # Unconditionally disabled.
+    @Disabled('chromeos-local')  # Disabled in ChromeOS local mode.
   """
+
   def _Disabled(func):
+    if inspect.isclass(func):
+      raise TypeError('Decorators cannot disable classes. '
+                      'You need to place them on the test methods instead.')
     disabled_attr_name = DisabledAttributeName(func)
     if not hasattr(func, disabled_attr_name):
       setattr(func, disabled_attr_name, set())
@@ -116,6 +128,7 @@ def Disabled(*args):
     disabled_set.update(disabled_strings)
     setattr(func, disabled_attr_name, disabled_set)
     return func
+
   assert args, (
       "@Disabled(...) requires arguments. Use @Disabled('all') if you want to "
       'unconditionally disable the test.')
@@ -130,14 +143,20 @@ def Disabled(*args):
 def Enabled(*args):
   """Decorator for enabling tests/benchmarks.
 
-  The test will be enabled if ANY of the args match the browser type, OS name
-  or OS version:
-    @Enabled('canary')        # Enabled only for canary browsers
-    @Enabled('win')           # Enabled only on Windows.
-    @Enabled('win', 'linux')  # Enabled only on Windows or Linux.
-    @Enabled('mavericks')     # Enabled only on Mac Mavericks (10.9).
+  The test will be enabled if ANY of the args match the browser type, OS name,
+  OS version, or any tags returned by a PossibleBrowser's
+  GetTypExpectationsTags():
+    @Enabled('canary')          # Enabled only for canary browsers
+    @Enabled('win')             # Enabled only on Windows.
+    @Enabled('win', 'linux')    # Enabled only on Windows or Linux.
+    @Enabled('mavericks')       # Enabled only on Mac Mavericks (10.9).
+    @Enabled('chromeos-local')  # Enabled only in ChromeOS local mode.
   """
+
   def _Enabled(func):
+    if inspect.isclass(func):
+      raise TypeError('Decorators cannot enable classes. '
+                      'You need to place them on the test methods instead.')
     enabled_attr_name = EnabledAttributeName(func)
     if not hasattr(func, enabled_attr_name):
       setattr(func, enabled_attr_name, set())
@@ -145,6 +164,7 @@ def Enabled(*args):
     enabled_set.update(enabled_strings)
     setattr(func, enabled_attr_name, enabled_set)
     return func
+
   assert args, '@Enabled(..) requires arguments'
   assert not callable(args[0]), 'Please use @Enabled(..).'
   enabled_strings = list(args)
@@ -154,21 +174,69 @@ def Enabled(*args):
   return _Enabled
 
 
+def Info(emails=None, component=None, documentation_url=None, info_blurb=None):
+  """Decorator for specifying the benchmark_info of a benchmark."""
+
+  def _Info(func):
+    info_attr_name = InfoAttributeName(func)
+    assert inspect.isclass(func), '@Info(...) can only be used on classes'
+    if not hasattr(func, info_attr_name):
+      setattr(func, info_attr_name, {})
+    info_dict = getattr(func, info_attr_name)
+    if emails:
+      assert 'emails' not in info_dict, 'emails can only be set once'
+      info_dict['emails'] = emails
+    if component:
+      assert 'component' not in info_dict, 'component can only be set once'
+      info_dict['component'] = component
+    if documentation_url:
+      assert 'documentation_url' not in info_dict, (
+          'document link can only be set once')
+      info_dict['documentation_url'] = documentation_url
+    if info_blurb:
+      assert 'info_blurb' not in info_dict, (
+          'info_blurb can only be set once')
+      info_dict['info_blurb'] = info_blurb
+
+    setattr(func, info_attr_name, info_dict)
+    return func
+
+  help_text = '@Info(...) requires emails and/or a component'
+  assert emails or component, help_text
+  if emails:
+    assert isinstance(emails, list), 'emails must be a list of strs'
+    for e in emails:
+      assert isinstance(e, str), 'emails must be a list of strs'
+  if documentation_url:
+    assert isinstance(documentation_url, str), (
+        'Documentation link must be a str')
+    assert (documentation_url.startswith('http://') or
+            documentation_url.startswith('https://')), (
+                'Documentation url is malformed')
+  if info_blurb:
+    assert isinstance(info_blurb, str), ('info_blurb must be a str')
+  return _Info
+
+
 # TODO(dpranke): Remove if we don't need this.
 def Isolated(*args):
   """Decorator for noting that tests must be run in isolation.
 
   The test will be run by itself (not concurrently with any other tests)
   if ANY of the args match the browser type, OS name, or OS version."""
+
   def _Isolated(func):
     if not isinstance(func, types.FunctionType):
       func._isolated_strings = isolated_strings
       return func
+
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args, **kwargs): # pylint: disable=invalid-name
       func(*args, **kwargs)
+
     wrapper._isolated_strings = isolated_strings
     return wrapper
+
   if len(args) == 1 and callable(args[0]):
     isolated_strings = []
     return _Isolated(args[0])
@@ -179,7 +247,8 @@ def Isolated(*args):
   return _Isolated
 
 
-# TODO(nednguyen): Remove this and have call site just use ShouldSkip directly.
+# TODO(crbug.com/1111556): Remove this and have call site just use ShouldSkip
+# directly.
 def IsEnabled(test, possible_browser):
   """Returns True iff |test| is enabled given the |possible_browser|.
 
@@ -192,11 +261,6 @@ def IsEnabled(test, possible_browser):
   """
   should_skip, msg = ShouldSkip(test, possible_browser)
   return (not should_skip, msg)
-
-
-def IsBenchmarkEnabled(benchmark, possible_browser):
-  return (not benchmark.ShouldDisable(possible_browser) and
-          IsEnabled(benchmark, possible_browser)[0])
 
 
 def _TestName(test):
@@ -235,6 +299,42 @@ def EnabledAttributeName(test):
   return '_%s_%s_enabled_strings' % (test.__module__, name)
 
 
+def InfoAttributeName(test):
+  name = _TestName(test)
+  return '_%s_%s_info' % (test.__module__, name)
+
+
+def GetEmails(test):
+  info_attr_name = InfoAttributeName(test)
+  benchmark_info = getattr(test, info_attr_name, {})
+  if 'emails' in benchmark_info:
+    return benchmark_info['emails']
+  return None
+
+
+def GetComponent(test):
+  info_attr_name = InfoAttributeName(test)
+  benchmark_info = getattr(test, info_attr_name, {})
+  if 'component' in benchmark_info:
+    return benchmark_info['component']
+  return None
+
+
+def GetDocumentationLink(test):
+  info_attr_name = InfoAttributeName(test)
+  benchmark_info = getattr(test, info_attr_name, {})
+  if 'documentation_url' in benchmark_info:
+    return benchmark_info['documentation_url']
+  return None
+
+def GetInfoBlurb(test):
+  info_attr_name = InfoAttributeName(test)
+  benchmark_info = getattr(test, info_attr_name, {})
+  if 'info_blurb' in benchmark_info:
+    return benchmark_info['info_blurb']
+  return None
+
+
 def ShouldSkip(test, possible_browser):
   """Returns whether the test should be skipped and the reason for it."""
   platform_attributes = _PlatformAttributes(possible_browser)
@@ -250,7 +350,7 @@ def ShouldSkip(test, possible_browser):
       return (True, '%s it is unconditionally disabled.' % skip)
     if set(disabled_strings) & set(platform_attributes):
       return (True, '%s it is disabled for %s. %s' %
-                      (skip, ' and '.join(disabled_strings), running))
+              (skip, ' and '.join(disabled_strings), running))
 
   enabled_attr_name = EnabledAttributeName(test)
   if hasattr(test, enabled_attr_name):
@@ -259,7 +359,7 @@ def ShouldSkip(test, possible_browser):
       return False, None  # No arguments to @Enabled means always enable.
     if not set(enabled_strings) & set(platform_attributes):
       return (True, '%s it is only enabled for %s. %s' %
-                      (skip, ' or '.join(enabled_strings), running))
+              (skip, ' or '.join(enabled_strings), running))
 
   return False, None
 
@@ -269,7 +369,7 @@ def ShouldBeIsolated(test, possible_browser):
   if hasattr(test, '_isolated_strings'):
     isolated_strings = test._isolated_strings
     if not isolated_strings:
-      return True # No arguments to @Isolated means always isolate.
+      return True  # No arguments to @Isolated means always isolate.
     for isolated_string in isolated_strings:
       if isolated_string in platform_attributes:
         return True
@@ -279,11 +379,14 @@ def ShouldBeIsolated(test, possible_browser):
 
 def _PlatformAttributes(possible_browser):
   """Returns a list of platform attribute strings."""
-  attributes = [a.lower() for a in [
-      possible_browser.browser_type,
-      possible_browser.platform.GetOSName(),
-      possible_browser.platform.GetOSVersionName(),
-  ]]
+  attributes = [
+      a.lower()
+      for a in [
+          possible_browser.browser_type,
+          possible_browser.platform.GetOSName(),
+          possible_browser.platform.GetOSVersionName(),
+      ]
+  ]
   if possible_browser.supports_tab_control:
     attributes.append('has tabs')
   if 'content-shell' in possible_browser.browser_type:
@@ -294,4 +397,5 @@ def _PlatformAttributes(possible_browser):
       if attribute != 'reference':
         ref_attributes.append('%s-reference' % attribute)
     attributes.extend(ref_attributes)
+  attributes.extend(possible_browser.GetTypExpectationsTags())
   return attributes

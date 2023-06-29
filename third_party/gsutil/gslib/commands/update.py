@@ -15,6 +15,9 @@
 """Implementation of update command for updating gsutil."""
 
 from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import division
+from __future__ import unicode_literals
 
 import os
 import shutil
@@ -24,20 +27,21 @@ import tarfile
 import tempfile
 import textwrap
 
+from six.moves import input
 import gslib
 from gslib.command import Command
 from gslib.cs_api_map import ApiSelector
 from gslib.exception import CommandException
+from gslib.metrics import CheckAndMaybePromptForAnalyticsEnabling
 from gslib.sig_handling import RegisterSignalHandler
-from gslib.util import CERTIFICATE_VALIDATION_ENABLED
-from gslib.util import CompareVersions
-from gslib.util import GetBotoConfigFileList
-from gslib.util import GSUTIL_PUB_TARBALL
-from gslib.util import IS_CYGWIN
-from gslib.util import IS_WINDOWS
-from gslib.util import LookUpGsutilVersion
-from gslib.util import RELEASE_NOTES_URL
-
+from gslib.utils import system_util
+from gslib.utils.boto_util import GetConfigFilePaths
+from gslib.utils.boto_util import CERTIFICATE_VALIDATION_ENABLED
+from gslib.utils.constants import GSUTIL_PUB_TARBALL
+from gslib.utils.constants import RELEASE_NOTES_URL
+from gslib.utils.text_util import CompareVersions
+from gslib.utils.update_util import DisallowUpdateIfDataInGsutilDir
+from gslib.utils.update_util import LookUpGsutilVersion
 
 _SYNOPSIS = """
   gsutil update [-f] [-n] [url]
@@ -51,7 +55,8 @@ _DETAILED_HELP_TEXT = ("""
 <B>DESCRIPTION</B>
   The gsutil update command downloads the latest gsutil release, checks its
   version, and offers to let you update to it if it differs from the version
-  you're currently running.
+  you're currently running. Note that this functionality is not available if
+  you're using a gsutil installation from a package manager or the Cloud SDK.
 
   Once you say "Y" to the prompt of whether to install the update, the gsutil
   update command locates where the running copy of gsutil is installed,
@@ -117,53 +122,7 @@ class UpdateCommand(Command):
       subcommand_help_text={},
   )
 
-  def _DisallowUpdataIfDataInGsutilDir(self):
-    """Disallows the update command if files not in the gsutil distro are found.
-
-    This prevents users from losing data if they are in the habit of running
-    gsutil from the gsutil directory and leaving data in that directory.
-
-    This will also detect someone attempting to run gsutil update from a git
-    repo, since the top-level directory will contain git files and dirs (like
-    .git) that are not distributed with gsutil.
-
-    Raises:
-      CommandException: if files other than those distributed with gsutil found.
-    """
-    # Manifest includes recursive-includes of gslib. Directly add
-    # those to the list here so we will skip them in os.listdir() loop without
-    # having to build deeper handling of the MANIFEST file here. Also include
-    # 'third_party', which isn't present in manifest but gets added to the
-    # gsutil distro by the gsutil submodule configuration; and the MANIFEST.in
-    # and CHANGES.md files.
-    manifest_lines = ['gslib', 'third_party', 'MANIFEST.in', 'CHANGES.md']
-
-    try:
-      with open(os.path.join(gslib.GSUTIL_DIR, 'MANIFEST.in'), 'r') as fp:
-        for line in fp:
-          if line.startswith('include '):
-            manifest_lines.append(line.split()[-1])
-    except IOError:
-      self.logger.warn('MANIFEST.in not found in %s.\nSkipping user data '
-                       'check.\n', gslib.GSUTIL_DIR)
-      return
-
-    # Look just at top-level directory. We don't try to catch data dropped into
-    # subdirs (like gslib) because that would require deeper parsing of
-    # MANFFEST.in, and most users who drop data into gsutil dir do so at the top
-    # level directory.
-    for filename in os.listdir(gslib.GSUTIL_DIR):
-      if filename.endswith('.pyc'):
-        # Ignore compiled code.
-        continue
-      if filename not in manifest_lines:
-        raise CommandException('\n'.join(textwrap.wrap(
-            'A file (%s) that is not distributed with gsutil was found in '
-            'the gsutil directory. The update command cannot run with user '
-            'data in the gsutil directory.' %
-            os.path.join(gslib.GSUTIL_DIR, filename))))
-
-  def _ExplainIfSudoNeeded(self, tf, dirs_to_remove):
+  def _ExplainIfSudoNeeded(self, tf, dirs_to_remove, old_cwd):
     """Explains what to do if sudo needed to update gsutil software.
 
     Happens if gsutil was previously installed by a different user (typically if
@@ -172,12 +131,17 @@ class UpdateCommand(Command):
     Args:
       tf: Opened TarFile.
       dirs_to_remove: List of directories to remove.
+      old_cwd: Path to the working directory we should chdir back to if sudo is
+          needed. It's possible that we've chdir'd to a temp directory that's
+          been deleted, which can cause odd behavior (e.g. OSErrors when opening
+          the metrics subprocess). If this is not truthy, we won't attempt to
+          chdir back to this value.
 
     Raises:
       CommandException: if errors encountered.
     """
     # If running under Windows or Cygwin we don't need (or have) sudo.
-    if IS_CYGWIN or IS_WINDOWS:
+    if system_util.IS_CYGWIN or system_util.IS_WINDOWS:
       return
 
     user_id = os.getuid()
@@ -186,9 +150,9 @@ class UpdateCommand(Command):
 
     # Won't fail - this command runs after main startup code that insists on
     # having a config file.
-    config_file_list = GetBotoConfigFileList()
+    config_file_list = GetConfigFilePaths()
     config_files = ' '.join(config_file_list)
-    self._CleanUpUpdateCommand(tf, dirs_to_remove)
+    self._CleanUpUpdateCommand(tf, dirs_to_remove, old_cwd)
 
     # Pick current protection of each boto config file for command that restores
     # protection (rather than fixing at 600) to support use cases like how GCE
@@ -198,24 +162,61 @@ class UpdateCommand(Command):
       mode = oct(stat.S_IMODE((os.stat(config_file)[stat.ST_MODE])))
       chmod_cmds.append('\n\tsudo chmod %s %s' % (mode, config_file))
 
-    raise CommandException('\n'.join(textwrap.wrap(
-        'Since it was installed by a different user previously, you will need '
-        'to update using the following commands. You will be prompted for your '
-        'password, and the install will run as "root". If you\'re unsure what '
-        'this means please ask your system administrator for help:')) + (
-            '\n\tsudo chmod 0644 %s\n\tsudo env BOTO_CONFIG="%s" %s update'
-            '%s') % (config_files, config_files, self.gsutil_path,
-                     ' '.join(chmod_cmds)), informational=True)
+    raise CommandException('\n'.join(
+        textwrap.wrap(
+            'Since it was installed by a different user previously, you will need '
+            'to update using the following commands. You will be prompted for your '
+            'password, and the install will run as "root". If you\'re unsure what '
+            'this means please ask your system administrator for help:')) + (
+                '\n\tsudo chmod 0644 %s\n\tsudo env BOTO_CONFIG="%s" %s update'
+                '%s') % (config_files, config_files, self.gsutil_path,
+                         ' '.join(chmod_cmds)),
+                           informational=True)
 
   # This list is checked during gsutil update by doing a lowercased
   # slash-left-stripped check. For example "/Dev" would match the "dev" entry.
   unsafe_update_dirs = [
-      'applications', 'auto', 'bin', 'boot', 'desktop', 'dev',
-      'documents and settings', 'etc', 'export', 'home', 'kernel', 'lib',
-      'lib32', 'library', 'lost+found', 'mach_kernel', 'media', 'mnt', 'net',
-      'null', 'network', 'opt', 'private', 'proc', 'program files', 'python',
-      'root', 'sbin', 'scripts', 'srv', 'sys', 'system', 'tmp', 'users', 'usr',
-      'var', 'volumes', 'win', 'win32', 'windows', 'winnt',
+      'applications',
+      'auto',
+      'bin',
+      'boot',
+      'desktop',
+      'dev',
+      'documents and settings',
+      'etc',
+      'export',
+      'home',
+      'kernel',
+      'lib',
+      'lib32',
+      'library',
+      'lost+found',
+      'mach_kernel',
+      'media',
+      'mnt',
+      'net',
+      'null',
+      'network',
+      'opt',
+      'private',
+      'proc',
+      'program files',
+      'python',
+      'root',
+      'sbin',
+      'scripts',
+      'srv',
+      'sys',
+      'system',
+      'tmp',
+      'users',
+      'usr',
+      'var',
+      'volumes',
+      'win',
+      'win32',
+      'windows',
+      'winnt',
   ]
 
   def _EnsureDirsSafeForUpdate(self, dirs):
@@ -239,13 +240,17 @@ class UpdateCommand(Command):
         raise CommandException('EnsureDirsSafeForUpdate: encountered unsafe '
                                'directory (%s); aborting update' % d)
 
-  def _CleanUpUpdateCommand(self, tf, dirs_to_remove):
+  def _CleanUpUpdateCommand(self, tf, dirs_to_remove, old_cwd):
     """Cleans up temp files etc. from running update command.
 
     Args:
       tf: Opened TarFile, or None if none currently open.
       dirs_to_remove: List of directories to remove.
-
+      old_cwd: Path to the working directory we should chdir back to. It's
+          possible that we've chdir'd to a temp directory that's been deleted,
+          which can cause odd behavior (e.g. OSErrors when opening the metrics
+          subprocess). If this is not truthy, we won't attempt to chdir back
+          to this value.
     """
     if tf:
       tf.close()
@@ -258,8 +263,13 @@ class UpdateCommand(Command):
         # happen because of Windows exclusive file locking, and the update
         # actually succeeds but just leaves the old versions around in the
         # user's temp dir.
-        if not IS_WINDOWS:
+        if not system_util.IS_WINDOWS:
           raise
+    if old_cwd:
+      try:
+        os.chdir(old_cwd)
+      except OSError:
+        pass
 
   def RunCommand(self):
     """Command entry point for the update command."""
@@ -270,7 +280,7 @@ class UpdateCommand(Command):
           'tarball. If you installed gsutil via another method, use the same '
           'method to update it.')
 
-    if os.environ.get('CLOUDSDK_WRAPPER') == '1':
+    if system_util.InvokedViaCloudSdk():
       raise CommandException(
           'The update command is disabled for Cloud SDK installs. Please run '
           '"gcloud components update" to update it. Note: the Cloud SDK '
@@ -285,7 +295,7 @@ class UpdateCommand(Command):
           'Your boto configuration has https_validate_certificates = False.\n'
           'The update command cannot be run this way, for security reasons.')
 
-    self._DisallowUpdataIfDataInGsutilDir()
+    DisallowUpdateIfDataInGsutilDir()
 
     force_update = False
     no_prompt = False
@@ -299,6 +309,7 @@ class UpdateCommand(Command):
     dirs_to_remove = []
     tmp_dir = tempfile.mkdtemp()
     dirs_to_remove.append(tmp_dir)
+    old_cwd = os.getcwd()
     os.chdir(tmp_dir)
 
     if not no_prompt:
@@ -338,34 +349,39 @@ class UpdateCommand(Command):
         tarball_version = ver_file.read().strip()
 
     if not force_update and gslib.VERSION == tarball_version:
-      self._CleanUpUpdateCommand(tf, dirs_to_remove)
+      self._CleanUpUpdateCommand(tf, dirs_to_remove, old_cwd)
       if self.args:
         raise CommandException('You already have %s installed.' %
-                               update_from_url_str, informational=True)
+                               update_from_url_str,
+                               informational=True)
       else:
-        raise CommandException('You already have the latest gsutil release '
-                               'installed.', informational=True)
+        raise CommandException(
+            'You already have the latest gsutil release '
+            'installed.',
+            informational=True)
 
     if not no_prompt:
+      CheckAndMaybePromptForAnalyticsEnabling()
       (_, major) = CompareVersions(tarball_version, gslib.VERSION)
       if major:
-        print('\n'.join(textwrap.wrap(
-            'This command will update to the "%s" version of gsutil at %s. '
-            'NOTE: This a major new version, so it is strongly recommended '
-            'that you review the release note details at %s before updating to '
-            'this version, especially if you use gsutil in scripts.'
-            % (tarball_version, gslib.GSUTIL_DIR, RELEASE_NOTES_URL))))
+        print(('\n'.join(
+            textwrap.wrap(
+                'This command will update to the "%s" version of gsutil at %s. '
+                'NOTE: This a major new version, so it is strongly recommended '
+                'that you review the release note details at %s before updating to '
+                'this version, especially if you use gsutil in scripts.' %
+                (tarball_version, gslib.GSUTIL_DIR, RELEASE_NOTES_URL)))))
       else:
-        print('This command will update to the "%s" version of\ngsutil at %s'
-              % (tarball_version, gslib.GSUTIL_DIR))
-    self._ExplainIfSudoNeeded(tf, dirs_to_remove)
+        print(('This command will update to the "%s" version of\ngsutil at %s' %
+               (tarball_version, gslib.GSUTIL_DIR)))
+    self._ExplainIfSudoNeeded(tf, dirs_to_remove, old_cwd)
 
     if no_prompt:
       answer = 'y'
     else:
-      answer = raw_input('Proceed? [y/N] ')
+      answer = input('Proceed? [y/N] ')
     if not answer or answer.lower()[0] != 'y':
-      self._CleanUpUpdateCommand(tf, dirs_to_remove)
+      self._CleanUpUpdateCommand(tf, dirs_to_remove, old_cwd)
       raise CommandException('Not running update.', informational=True)
 
     if not tf:
@@ -390,8 +406,8 @@ class UpdateCommand(Command):
     self._EnsureDirsSafeForUpdate(dirs_to_remove)
     try:
       tf.extractall(path=new_dir)
-    except Exception, e:
-      self._CleanUpUpdateCommand(tf, dirs_to_remove)
+    except Exception as e:
+      self._CleanUpUpdateCommand(tf, dirs_to_remove, old_cwd)
       raise CommandException('Update failed: %s.' % e)
 
     # For enterprise mode (shared/central) installation, users with
@@ -400,39 +416,45 @@ class UpdateCommand(Command):
     # here. Since enterprise mode is not not supported for Windows
     # users, we can skip this step when running on Windows, which
     # avoids the problem that Windows has no find or xargs command.
-    if not IS_WINDOWS:
+    if not system_util.IS_WINDOWS:
       # Make all files and dirs in updated area owner-RW and world-R, and make
       # all directories owner-RWX and world-RX.
       for dirname, subdirs, filenames in os.walk(new_dir):
         for filename in filenames:
           fd = os.open(os.path.join(dirname, filename), os.O_RDONLY)
-          os.fchmod(fd, stat.S_IWRITE | stat.S_IRUSR |
-                    stat.S_IRGRP | stat.S_IROTH)
+          os.fchmod(fd,
+                    stat.S_IWRITE | stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
           os.close(fd)
         for subdir in subdirs:
           fd = os.open(os.path.join(dirname, subdir), os.O_RDONLY)
-          os.fchmod(fd, stat.S_IRWXU | stat.S_IXGRP | stat.S_IXOTH |
-                    stat.S_IRGRP | stat.S_IROTH)
+          os.fchmod(
+              fd, stat.S_IRWXU | stat.S_IXGRP | stat.S_IXOTH | stat.S_IRGRP |
+              stat.S_IROTH)
           os.close(fd)
 
       # Make main gsutil script owner-RWX and world-RX.
       fd = os.open(os.path.join(new_dir, 'gsutil', 'gsutil'), os.O_RDONLY)
-      os.fchmod(fd, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP |
-                stat.S_IROTH | stat.S_IXOTH)
+      os.fchmod(
+          fd, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH |
+          stat.S_IXOTH)
       os.close(fd)
 
     # Move old installation aside and new into place.
     os.rename(gslib.GSUTIL_DIR, os.path.join(old_dir, 'old'))
     os.rename(os.path.join(new_dir, 'gsutil'), gslib.GSUTIL_DIR)
-    self._CleanUpUpdateCommand(tf, dirs_to_remove)
+    self._CleanUpUpdateCommand(tf, dirs_to_remove, old_cwd)
     RegisterSignalHandler(signal.SIGINT, signal.SIG_DFL)
     self.logger.info('Update complete.')
     return 0
 
   def _FetchAndOpenGsutilTarball(self, update_from_url_str):
     self.command_runner.RunNamedCommand(
-        'cp', [update_from_url_str, 'file://gsutil.tar.gz'], self.headers,
-        self.debug, skip_update_check=True)
+        'cp',
+        [update_from_url_str, 'file://gsutil.tar.gz'],
+        self.headers,
+        self.debug,
+        skip_update_check=True,
+    )
     # Note: tf is closed in _CleanUpUpdateCommand.
     tf = tarfile.open('gsutil.tar.gz')
     tf.errorlevel = 1  # So fatal tarball unpack errors raise exceptions.

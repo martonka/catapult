@@ -2,29 +2,33 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import re
+import six
+from six.moves import map # pylint: disable=redefined-builtin
 
 from telemetry.timeline import chrome_trace_category_filter
 
+TRACE_BUFFER_SIZE_IN_KB = 'trace_buffer_size_in_kb'
 
-RECORD_MODE_PARAM = 'record_mode'
+RECORD_MODE = 'record_mode'
 
-ECHO_TO_CONSOLE = 'trace-to-console'
-RECORD_AS_MUCH_AS_POSSIBLE = 'record-as-much-as-possible'
 RECORD_CONTINUOUSLY = 'record-continuously'
 RECORD_UNTIL_FULL = 'record-until-full'
+RECORD_AS_MUCH_AS_POSSIBLE = 'record-as-much-as-possible'
+ECHO_TO_CONSOLE = 'trace-to-console'
 
-# Map telemetry's tracing record_mode to the DevTools API string.
-# (The keys happen to be the same as the values.)
-RECORD_MODE_MAP = {
-  RECORD_UNTIL_FULL: 'record-until-full',
-  RECORD_CONTINUOUSLY: 'record-continuously',
-  RECORD_AS_MUCH_AS_POSSIBLE: 'record-as-much-as-possible',
-  ECHO_TO_CONSOLE: 'trace-to-console'
+RECORD_MODES = {
+    RECORD_UNTIL_FULL,
+    RECORD_CONTINUOUSLY,
+    RECORD_AS_MUCH_AS_POSSIBLE,
+    ECHO_TO_CONSOLE,
 }
 
+ENABLE_SYSTRACE_PARAM = 'enable_systrace'
+UMA_HISTOGRAM_NAMES_PARAM = 'histogram_names'
 
-def ConvertStringToCamelCase(string):
+def _ConvertStringToCamelCase(string):
   """Convert an underscore/hyphen-case string to its camel-case counterpart.
 
   This function is the inverse of Chromium's ConvertFromCamelCase function
@@ -33,19 +37,19 @@ def ConvertStringToCamelCase(string):
   parts = re.split(r'[-_]', string)
   return parts[0] + ''.join([p.title() for p in parts[1:]])
 
-
-def ConvertDictKeysToCamelCaseRecursively(data):
+# TODO(crbug.com/971471): Don't do this anymore.
+def _ConvertDictKeysToCamelCaseRecursively(data):
   """Recursively convert dictionary keys from underscore/hyphen- to camel-case.
 
   This function is the inverse of Chromium's ConvertDictKeyStyle function
   in src/content/browser/devtools/protocol/tracing_handler.cc.
   """
   if isinstance(data, dict):
-    return {ConvertStringToCamelCase(k):
-            ConvertDictKeysToCamelCaseRecursively(v)
-            for k, v in data.iteritems()}
+    return {_ConvertStringToCamelCase(k):
+            _ConvertDictKeysToCamelCaseRecursively(v)
+            for k, v in six.iteritems(data)}
   elif isinstance(data, list):
-    return map(ConvertDictKeysToCamelCaseRecursively, data)
+    return list(map(_ConvertDictKeysToCamelCaseRecursively, data))
   else:
     return data
 
@@ -53,19 +57,33 @@ def ConvertDictKeysToCamelCaseRecursively(data):
 class ChromeTraceConfig(object):
   """Stores configuration options specific to the Chrome tracing agent.
 
-    This produces the trace config JSON string for tracing in Chrome.
+  This produces the trace config JSON string for tracing in Chrome.
 
-    record_mode: can be any mode in RECORD_MODE_MAP. This corresponds to
+  Attributes:
+    record_mode: can be any mode in RECORD_MODES. This corresponds to
         record modes in chrome.
     category_filter: Object that specifies which tracing categories to trace.
-    memory_dump_config: Stores the triggers for memory dumps.
   """
 
   def __init__(self):
-    self._record_mode = RECORD_AS_MUCH_AS_POSSIBLE
+    self._record_mode = RECORD_CONTINUOUSLY
     self._category_filter = (
         chrome_trace_category_filter.ChromeTraceCategoryFilter())
     self._memory_dump_config = None
+    self._enable_systrace = False
+    self._uma_histogram_names = []
+    self._trace_buffer_size_in_kb = None
+    self._trace_format = None
+
+  @property
+  def trace_format(self):
+    return self._trace_format
+
+  def SetProtoTraceFormat(self):
+    self._trace_format = 'proto'
+
+  def SetJsonTraceFormat(self):
+    self._trace_format = 'json'
 
   def SetLowOverheadFilter(self):
     self._category_filter = (
@@ -83,6 +101,10 @@ class ChromeTraceConfig(object):
   def category_filter(self):
     return self._category_filter
 
+  @property
+  def enable_systrace(self):
+    return self._enable_systrace
+
   def SetCategoryFilter(self, cf):
     if isinstance(cf, chrome_trace_category_filter.ChromeTraceCategoryFilter):
       self._category_filter = cf
@@ -91,11 +113,25 @@ class ChromeTraceConfig(object):
           'Must pass SetCategoryFilter a ChromeTraceCategoryFilter instance')
 
   def SetMemoryDumpConfig(self, dump_config):
+    """Memory dump config stores the triggers for memory dumps."""
     if isinstance(dump_config, MemoryDumpConfig):
       self._memory_dump_config = dump_config
     else:
       raise TypeError(
           'Must pass SetMemoryDumpConfig a MemoryDumpConfig instance')
+
+  def SetEnableSystrace(self):
+    self._enable_systrace = True
+
+  def SetTraceBufferSizeInKb(self, size):
+    self._trace_buffer_size_in_kb = size
+
+  def EnableUMAHistograms(self, *args):
+    for uma_histogram_name in args:
+      self._uma_histogram_names.append(uma_histogram_name)
+
+  def HasUMAHistograms(self):
+    return len(self._uma_histogram_names) != 0
 
   @property
   def record_mode(self):
@@ -103,7 +139,7 @@ class ChromeTraceConfig(object):
 
   @record_mode.setter
   def record_mode(self, value):
-    assert value in RECORD_MODE_MAP
+    assert value in RECORD_MODES
     self._record_mode = value
 
   def GetChromeTraceConfigForStartupTracing(self):
@@ -114,34 +150,18 @@ class ChromeTraceConfig(object):
     (e.g. 'record-until-full').
     """
     result = {
-        RECORD_MODE_PARAM: RECORD_MODE_MAP[self._record_mode]
+        RECORD_MODE: self._record_mode
     }
     result.update(self._category_filter.GetDictForChromeTracing())
     if self._memory_dump_config:
       result.update(self._memory_dump_config.GetDictForChromeTracing())
+    if self._enable_systrace:
+      result[ENABLE_SYSTRACE_PARAM] = True
+    if self._uma_histogram_names:
+      result[UMA_HISTOGRAM_NAMES_PARAM] = self._uma_histogram_names
+    if self._trace_buffer_size_in_kb:
+      result[TRACE_BUFFER_SIZE_IN_KB] = self._trace_buffer_size_in_kb
     return result
-
-  @property
-  def requires_modern_devtools_tracing_start_api(self):
-    """Returns True iff the config CANNOT be passed via the legacy DevTools API.
-
-    Legacy DevTools Tracing.start API:
-      Available since:    the introduction of the Tracing.start request.
-      Parameters:         categories (string), options (string),
-                          bufferUsageReportingInterval (number),
-                          transferMode (enum).
-      TraceConfig method: GetChromeTraceCategoriesAndOptionsStringsForDevTools()
-
-    Modern DevTools Tracing.start API:
-      Available since:    Chrome 51.0.2683.0.
-      Parameters:         traceConfig (dict),
-                          bufferUsageReportingInterval (number),
-                          transferMode (enum).
-      TraceConfig method: GetChromeTraceConfigDictForDevTools()
-    """
-    # Memory dump config cannot be passed via the 'options' string (legacy API)
-    # in the DevTools Tracing.start request.
-    return bool(self._memory_dump_config)
 
   def GetChromeTraceConfigForDevTools(self):
     """Map the config to a DevTools API config dictionary.
@@ -152,17 +172,12 @@ class ChromeTraceConfig(object):
     underscore/hyphen-delimited mapping performed in Chromium devtools.
     """
     result = self.GetChromeTraceConfigForStartupTracing()
-    if result[RECORD_MODE_PARAM]:
-      result[RECORD_MODE_PARAM] = ConvertStringToCamelCase(
-          result[RECORD_MODE_PARAM])
-    return ConvertDictKeysToCamelCaseRecursively(result)
-
-  def GetChromeTraceCategoriesAndOptionsForDevTools(self):
-    """Map the categories and options to their DevTools API counterparts."""
-    assert not self.requires_modern_devtools_tracing_start_api
-    options_parts = [RECORD_MODE_MAP[self._record_mode]]
-    return (self._category_filter.stable_filter_string,
-            ','.join(options_parts))
+    if result[RECORD_MODE]:
+      result[RECORD_MODE] = _ConvertStringToCamelCase(
+          result[RECORD_MODE])
+    if self._enable_systrace:
+      result.update({ENABLE_SYSTRACE_PARAM: True})
+    return _ConvertDictKeysToCamelCaseRecursively(result)
 
 
 class MemoryDumpConfig(object):

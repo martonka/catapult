@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import unittest
 
 import mock
@@ -25,63 +26,13 @@ class FakeTest(object):
 
 class TestDisableDecorators(unittest.TestCase):
 
-  def testDisabledStringOnFunction(self):
+  def testCannotDisableClasses(self):
 
-    @decorators.Disabled('bar')
-    def Sum():
-      return 1 + 1
-
-    self.assertEquals({'bar'}, decorators.GetDisabledAttributes(Sum))
-
-    @decorators.Disabled('bar')
-    @decorators.Disabled('baz')
-    @decorators.Disabled('bart', 'baz')
-    def Product():
-      return 1 * 1
-
-    self.assertEquals({'bar', 'bart', 'baz'},
-                      decorators.GetDisabledAttributes(Product))
-
-  def testDisabledStringOnClass(self):
-
-    @decorators.Disabled('windshield')
     class Ford(object):
       pass
 
-    self.assertEquals({'windshield'}, decorators.GetDisabledAttributes(Ford))
-
-    @decorators.Disabled('windows', 'Drive')
-    @decorators.Disabled('wheel')
-    @decorators.Disabled('windows')
-    class Honda(object):
-      pass
-
-    self.assertEquals({'windshield'}, decorators.GetDisabledAttributes(Ford))
-    self.assertEquals({'wheel', 'Drive', 'windows'},
-                      decorators.GetDisabledAttributes(Honda))
-
-  def testDisabledStringOnSubClass(self):
-
-    @decorators.Disabled('windshield')
-    class Car(object):
-      pass
-
-    class Ford(Car):
-      pass
-
-    self.assertEquals({'windshield'}, decorators.GetDisabledAttributes(Car))
-    self.assertFalse(decorators.GetDisabledAttributes(Ford))
-
-    @decorators.Disabled('windows', 'Drive')
-    @decorators.Disabled('wheel')
-    @decorators.Disabled('windows')
-    class Honda(Car):
-      pass
-
-    self.assertFalse(decorators.GetDisabledAttributes(Ford))
-    self.assertEquals({'windshield'}, decorators.GetDisabledAttributes(Car))
-    self.assertEquals({'wheel', 'Drive', 'windows'},
-                      decorators.GetDisabledAttributes(Honda))
+    with self.assertRaises(TypeError):
+      decorators.Disabled('example')(Ford)
 
   def testDisabledStringOnMethod(self):
 
@@ -126,65 +77,13 @@ class TestDisableDecorators(unittest.TestCase):
 
 class TestEnableDecorators(unittest.TestCase):
 
-  def testEnabledStringOnFunction(self):
+  def testCannotEnableClasses(self):
 
-    @decorators.Enabled('minus', 'power')
-    def Sum():
-      return 1 + 1
-
-    self.assertEquals({'minus', 'power'}, decorators.GetEnabledAttributes(Sum))
-
-    @decorators.Enabled('dot')
-    @decorators.Enabled('product')
-    @decorators.Enabled('product', 'dot')
-    def Product():
-      return 1 * 1
-
-    self.assertEquals({'dot', 'product'},
-                      decorators.GetEnabledAttributes(Product))
-
-  def testEnabledStringOnClass(self):
-
-    @decorators.Enabled('windshield', 'light')
     class Ford(object):
       pass
 
-    self.assertEquals({'windshield', 'light'},
-                      decorators.GetEnabledAttributes(Ford))
-
-    @decorators.Enabled('wheel', 'Drive')
-    @decorators.Enabled('wheel')
-    @decorators.Enabled('windows')
-    class Honda(object):
-      pass
-
-    self.assertEquals({'wheel', 'Drive', 'windows'},
-                      decorators.GetEnabledAttributes(Honda))
-    self.assertEquals({'windshield', 'light'},
-                      decorators.GetEnabledAttributes(Ford))
-
-  def testEnabledStringOnSubClass(self):
-
-    @decorators.Enabled('windshield')
-    class Car(object):
-      pass
-
-    class Ford(Car):
-      pass
-
-    self.assertEquals({'windshield'}, decorators.GetEnabledAttributes(Car))
-    self.assertFalse(decorators.GetEnabledAttributes(Ford))
-
-    @decorators.Enabled('windows', 'Drive')
-    @decorators.Enabled('wheel')
-    @decorators.Enabled('windows')
-    class Honda(Car):
-      pass
-
-    self.assertFalse(decorators.GetEnabledAttributes(Ford))
-    self.assertEquals({'windshield'}, decorators.GetEnabledAttributes(Car))
-    self.assertEquals({'wheel', 'Drive', 'windows'},
-                      decorators.GetEnabledAttributes(Honda))
+    with self.assertRaises(TypeError):
+      decorators.Disabled('example')(Ford)
 
   def testEnabledStringOnMethod(self):
 
@@ -225,6 +124,61 @@ class TestEnableDecorators(unittest.TestCase):
     self.assertFalse(decorators.GetEnabledAttributes(Accord().Drive))
 
 
+class TestInfoDecorators(unittest.TestCase):
+
+  def testInfoStringOnClass(self):
+
+    @decorators.Info(emails=['owner@chromium.org'],
+                     documentation_url='http://foo.com')
+    class Ford(object):
+      pass
+
+    self.assertEquals(['owner@chromium.org'], decorators.GetEmails(Ford))
+
+    @decorators.Info(emails=['owner2@chromium.org'])
+    @decorators.Info(component='component',
+                     documentation_url='http://bar.com',
+                     info_blurb='Has CVT Transmission')
+    class Honda(object):
+      pass
+
+
+    self.assertEquals(['owner2@chromium.org'], decorators.GetEmails(Honda))
+    self.assertEquals('http://bar.com', decorators.GetDocumentationLink(Honda))
+    self.assertEquals('component', decorators.GetComponent(Honda))
+    self.assertEquals(['owner@chromium.org'], decorators.GetEmails(Ford))
+    self.assertEquals('http://foo.com', decorators.GetDocumentationLink(Ford))
+    self.assertEquals('Has CVT Transmission', decorators.GetInfoBlurb(Honda))
+
+
+  def testInfoStringOnSubClass(self):
+
+    @decorators.Info(emails=['owner@chromium.org'], component='comp',
+                     documentation_url='https://car.com')
+    class Car(object):
+      pass
+
+    class Ford(Car):
+      pass
+
+    self.assertEquals(['owner@chromium.org'], decorators.GetEmails(Car))
+    self.assertEquals('comp', decorators.GetComponent(Car))
+    self.assertEquals('https://car.com', decorators.GetDocumentationLink(Car))
+    self.assertFalse(decorators.GetEmails(Ford))
+    self.assertFalse(decorators.GetComponent(Ford))
+    self.assertFalse(decorators.GetDocumentationLink(Ford))
+
+
+  def testInfoWithDuplicateAttributeSetting(self):
+    # The class Car below is unused. It just throws an error.
+    #pylint: disable=unused-variable
+    with self.assertRaises(AssertionError):
+      @decorators.Info(emails=['owner2@chromium.org'])
+      @decorators.Info(emails=['owner@chromium.org'], component='comp')
+      class Car(object):
+        pass
+
+
 class TestShouldSkip(unittest.TestCase):
 
   def setUp(self):
@@ -236,6 +190,7 @@ class TestShouldSkip(unittest.TestCase):
     self.possible_browser.browser_type = 'browser_type'
     self.possible_browser.platform = fake_platform
     self.possible_browser.supports_tab_control = False
+    self.possible_browser.GetTypExpectationsTags.return_value = []
 
   def testEnabledStrings(self):
     test = FakeTest()
@@ -326,6 +281,10 @@ class TestShouldSkip(unittest.TestCase):
                              'another_os_version_name-reference'])
     self.assertFalse(decorators.ShouldSkip(test, self.possible_browser)[0])
 
+    self.possible_browser.GetTypExpectationsTags.return_value = ['typ_value']
+    test.SetDisabledStrings(['typ_value'])
+    self.assertTrue(decorators.ShouldSkip(test, self.possible_browser)[0])
+
   def testReferenceEnabledStrings(self):
     self.possible_browser.browser_type = 'reference'
     test = FakeTest()
@@ -351,6 +310,11 @@ class TestShouldSkip(unittest.TestCase):
     test.SetEnabledStrings(['another_os_name-reference',
                             'another_os_version_name-reference'])
     self.assertTrue(decorators.ShouldSkip(test, self.possible_browser)[0])
+
+    test.SetEnabledStrings(['typ_value'])
+    self.assertTrue(decorators.ShouldSkip(test, self.possible_browser)[0])
+    self.possible_browser.GetTypExpectationsTags.return_value = ['typ_value']
+    self.assertFalse(decorators.ShouldSkip(test, self.possible_browser)[0])
 
   def testReferenceDisabledStrings(self):
     self.possible_browser.browser_type = 'reference'

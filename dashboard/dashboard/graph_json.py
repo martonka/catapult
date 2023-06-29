@@ -1,27 +1,30 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Serves JSON for a graph.
 
 This serves the JSON in the format consumed by Flot:
 https://github.com/flot/flot/blob/master/API.md
 """
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import copy
 import datetime
 import json
 import logging
+import math
 import re
 
 from google.appengine.ext import ndb
 
 from dashboard import alerts
 from dashboard import can_bisect
-from dashboard import datastore_hooks
 from dashboard import list_tests
-from dashboard import request_handler
-from dashboard import utils
+from dashboard.common import datastore_hooks
+from dashboard.common import request_handler
+from dashboard.common import utils
 from dashboard.models import anomaly
 from dashboard.models import graph_data
 
@@ -81,25 +84,53 @@ class GraphJsonHandler(request_handler.RequestHandler):
       logging.error('Invalid JSON string for graphs')
       return None
 
-    if not graphs.get('test_path_dict'):
-      logging.error('No test_path_dict specified')
+    test_path_dict = graphs.get('test_path_dict')
+    test_path_list = graphs.get('test_path_list')
+    is_selected = graphs.get('is_selected')
+
+    if test_path_dict and test_path_list:
+      logging.error(
+          'Only one of test_path_dict and test_path_list may be specified')
+      return None
+    elif test_path_dict:
+      test_paths = _ResolveTestPathDict(test_path_dict, is_selected)
+    elif test_path_list:
+      test_paths = test_path_list
+    else:
+      logging.error(
+          'Exactly one of test_path_dict or test_path_list must be specified')
       return None
 
     arguments = {
-        'test_path_dict': graphs['test_path_dict'],
+        'test_paths': test_paths,
         'rev': _PositiveIntOrNone(graphs.get('rev')),
         'num_points': (_PositiveIntOrNone(graphs.get('num_points'))
                        or _DEFAULT_NUM_POINTS),
-        'is_selected': graphs.get('is_selected'),
+        'is_selected': is_selected,
         'start_rev': _PositiveIntOrNone(graphs.get('start_rev')),
         'end_rev': _PositiveIntOrNone(graphs.get('end_rev')),
     }
     return arguments
 
 
-def GetGraphJson(
-    test_path_dict, rev=None, num_points=None,
-    is_selected=True, start_rev=None, end_rev=None):
+def _ResolveTestPathDict(test_path_dict, is_selected):
+  # TODO(eakuefner): These are old-style test path dicts which means that []
+  # doesn't mean 'no tests' but rather 'all tests'. Remove this hack.
+  if is_selected:
+    for test, selected in test_path_dict.items():
+      if selected == []:
+        test_path_dict[test] = 'all'
+
+  return list_tests.GetTestsForTestPathDict(test_path_dict,
+                                            bool(is_selected))['tests']
+
+
+def GetGraphJson(test_paths,
+                 rev=None,
+                 num_points=None,
+                 is_selected=True,
+                 start_rev=None,
+                 end_rev=None):
   """Makes a JSON serialization of data for one chart with multiple series.
 
   This function can return data for one chart (with multiple data series
@@ -108,7 +139,7 @@ def GetGraphJson(
   with the arguments rev, num_points, start_rev, and end_rev.
 
   Args:
-    test_path_dict: Dictionary of test path to list of selected series.
+    test_paths: A list of test paths.
     rev: A revision number that the chart may be clamped relative to.
     num_points: Number of points to plot.
     is_selected: Whether this request is for selected or un-selected series.
@@ -118,23 +149,15 @@ def GetGraphJson(
   Returns:
     JSON serialization of a dict with info that will be used to plot a chart.
   """
-  # TODO(qyearsley): Parallelize queries if possible.
-
-  if is_selected:
-    test_paths = _GetTestPathFromDict(test_path_dict)
-  else:
-    test_paths = _GetUnselectedTestPathFromDict(test_path_dict)
-
   # If a particular test has a lot of children, then a request will be made
   # for data for a lot of unselected series, which may be very slow and may
-  # time out. In this case, return nothing.
-  # TODO(qyearsley): Stop doing this when there's a better solution (#1876).
+  # time out. In this case, return nothing; see issue #1876.
   if not is_selected and len(test_paths) > _MAX_UNSELECTED_TESTS:
     return json.dumps({'data': {}, 'annotations': {}, 'error_bars': {}})
 
-  test_keys = map(utils.TestKey, test_paths)
+  test_keys = list(map(utils.TestKey, test_paths))
   test_entities = ndb.get_multi(test_keys)
-  test_entities = [t for t in test_entities if t is not None]
+  test_entities = [t for t in test_entities if t is not None and t.has_rows]
 
   # Filter out deprecated tests, but only if not all the tests are deprecated.
   all_deprecated = all(t.deprecated for t in test_entities)
@@ -166,12 +189,17 @@ def _PositiveIntOrNone(input_str):
 
 def _GetAnomalyAnnotationMap(test):
   """Gets a map of revision numbers to Anomaly entities."""
-  anomalies = anomaly.Anomaly.GetAlertsForTest(test)
+  anomalies, _, _ = anomaly.Anomaly.QueryAsync(
+      test=test, limit=1000).get_result()
   return dict((a.end_revision, a) for a in anomalies)
 
 
-def _UpdateRevisionMap(revision_map, parent_test, rev, num_points,
-                       start_rev=None, end_rev=None):
+def _UpdateRevisionMap(revision_map,
+                       parent_test,
+                       rev,
+                       num_points,
+                       start_rev=None,
+                       end_rev=None):
   """Updates a dict of revisions to data point information for one test.
 
   Depending on which arguments are given, there are several ways that
@@ -192,20 +220,17 @@ def _UpdateRevisionMap(revision_map, parent_test, rev, num_points,
     end_rev: End revision number (optional).
   """
   anomaly_annotation_map = _GetAnomalyAnnotationMap(parent_test.key)
-  assert(datastore_hooks.IsUnalteredQueryPermitted() or
-         not parent_test.internal_only)
+  assert (datastore_hooks.IsUnalteredQueryPermitted()
+          or not parent_test.internal_only)
 
   if start_rev and end_rev:
-    rows = graph_data.GetRowsForTestInRange(
-        parent_test.key, start_rev, end_rev, True)
+    rows = graph_data.GetRowsForTestInRange(parent_test.key, start_rev, end_rev)
   elif rev:
     assert num_points
-    rows = graph_data.GetRowsForTestAroundRev(
-        parent_test.key, rev, num_points, True)
+    rows = graph_data.GetRowsForTestAroundRev(parent_test.key, rev, num_points)
   else:
     assert num_points
-    rows = graph_data.GetLatestRowsForTest(
-        parent_test.key, num_points, privileged=True)
+    rows = graph_data.GetLatestRowsForTest(parent_test.key, num_points)
 
   parent_test_key = parent_test.key.urlsafe()
   for row in rows:
@@ -219,7 +244,6 @@ def _PointInfoDict(row, anomaly_annotation_map):
   """Makes a dict of properties of one Row."""
   point_info = {
       'value': row.value,
-      'a_trace_rerun_options': _GetTracingRerunOptions(row),
   }
 
   tracing_uri = _GetTracingUri(row)
@@ -232,24 +256,7 @@ def _PointInfoDict(row, anomaly_annotation_map):
     anomaly_entity = anomaly_annotation_map.get(row.revision)
     point_info['g_anomaly'] = alerts.GetAnomalyDict(anomaly_entity)
   row_dict = row.to_dict()
-  for name, val in row_dict.iteritems():
-    # TODO(sullivan): Remove this hack when data containing these broken links
-    # is sufficiently stale, after June 2016.
-    if (_IsMarkdownLink(val) and
-        val.find('(None') != -1 and
-        'a_stdio_uri_prefix' in row_dict):
-      # Many data points have been added with a stdio prefix expanded out to
-      # 'None' when 'a_stdio_uri_prefix' is set correctly. Fix them up.
-      # Add in the master name as well; if the waterfall is 'CamelCase' it
-      # should be 'camel.client.case'.
-      master_camel_case = utils.TestPath(row.parent_test).split('/')[0]
-      master_parts = re.findall('([A-Z][a-z0-9]+)', master_camel_case)
-      if master_parts and len(master_parts) == 2:
-        master_name = '%s.client.%s' % (
-            master_parts[1].lower(), master_parts[0].lower())
-        val = val.replace('(None', '(%s/%s/' % (
-            row_dict['a_stdio_uri_prefix'], master_name))
-
+  for name, val in row_dict.items():
     if name.startswith('r_'):
       point_info[name] = val
     elif name == 'a_default_rev':
@@ -325,8 +332,7 @@ def _ClampRevisionMap(revision_map, rev, num_points):
   clamp_before = max(index - rows_before, 0)
   rows_after = int(num_points / 2) if rev is not None else 0
   clamp_after = index + rows_after + 1
-  for rev_to_delete in (
-      revisions[:clamp_before] + revisions[clamp_after:]):
+  for rev_to_delete in revisions[:clamp_before] + revisions[clamp_after:]:
     del revision_map[rev_to_delete]
 
 
@@ -344,20 +350,6 @@ def _GetTracingUri(point):
   return point.a_tracing_uri
 
 
-def _GetTracingRerunOptions(point):
-  """Gets the trace rerun options, if available.
-
-  Args:
-    point: A Row entity.
-
-  Returns:
-    A dict of {description: params} strings, or None.
-  """
-  if not hasattr(point, 'a_trace_rerun_options'):
-    return None
-  return point.a_trace_rerun_options.to_dict()
-
-
 def _GetFlotJson(revision_map, tests):
   """Constructs JSON in the format expected by Flot.
 
@@ -370,11 +362,9 @@ def _GetFlotJson(revision_map, tests):
     (This data may not be passed exactly as-is to the Flot plot function, but
     it will all be used when plotting.)
   """
-  # TODO(qyearsley): Break this function into smaller functions.
-
   # Each entry in the following dict is one Flot series object. The actual
   # x-y values will be put into the 'data' properties for each object.
-  cols = {i: _FlotSeries(i) for i in range(len(tests))}
+  cols = {i: _FlotSeries(i, test) for i, test in enumerate(tests)}
 
   flot_annotations = {}
   flot_annotations['series'] = _GetSeriesAnnotations(tests)
@@ -382,8 +372,8 @@ def _GetFlotJson(revision_map, tests):
   # For each TestMetadata (which corresponds to a trace line), the shaded error
   # region is specified by two series objects. For a demo, see:
   # http://www.flotcharts.org/flot/examples/percentiles/index.html
-  error_bars = {x: [
-      {
+  error_bars = {
+      x: [{
           'id': 'bottom_%d' % x,
           'data': [],
           'color': x,
@@ -395,8 +385,7 @@ def _GetFlotJson(revision_map, tests):
               'fill': 0.2,
           },
           'fillBetween': 'line_%d' % x,
-      },
-      {
+      }, {
           'id': 'top_%d' % x,
           'data': [],
           'color': x,
@@ -408,8 +397,8 @@ def _GetFlotJson(revision_map, tests):
               'fill': 0.2,
           },
           'fillBetween': 'line_%d' % x,
-      }
-  ] for x, _ in enumerate(tests)}
+      }] for x, _ in enumerate(tests)
+  }
 
   test_keys = [t.key.urlsafe() for t in tests]
   for revision in sorted(revision_map.keys()):
@@ -419,10 +408,15 @@ def _GetFlotJson(revision_map, tests):
         continue
 
       timestamp = point_info.get('timestamp')
-      if timestamp and type(timestamp) is datetime.datetime:
+      if timestamp and isinstance(timestamp, datetime.datetime):
         point_info['timestamp'] = utils.TimestampMilliseconds(timestamp)
 
+      # TODO(simonhatch): Need to filter out NaN values.
+      # https://github.com/catapult-project/catapult/issues/3474
       point_list = [revision, point_info['value']]
+      if math.isnan(point_info['value']):
+        continue
+
       if 'error' in point_info:
         error = point_info['error']
         error_bars[series_index][0]['data'].append(
@@ -445,146 +439,10 @@ def _GetFlotJson(revision_map, tests):
       allow_nan=False)
 
 
-def _FlotSeries(index):
+def _FlotSeries(index, test):
   return {
       'data': [],
       'color': index,
-      'id': 'line_%d' % index
+      'id': 'line_%d' % index,
+      'testpath': test.test_path,
   }
-
-
-def _GetTestPathFromDict(test_path_dict):
-  """Gets a list of test paths from a test path dictionary.
-
-  This function looks up series and the corresponding list of selected
-  series and returns test paths of those that contain rows.
-
-  Args:
-    test_path_dict: Dictionary of test path to list of selected series.
-
-  Returns:
-    List of test paths with rows.
-  """
-  test_paths_with_rows = []
-  for test_path in test_path_dict:
-    parent_test_name = test_path.split('/')[-1]
-    selected_traces = test_path_dict[test_path]
-    if not selected_traces:
-      sub_test_dict = _GetSubTestDict([test_path])
-      selected_traces = _GetTraces(test_path, sub_test_dict)
-    for trace in selected_traces:
-      if trace == parent_test_name:
-        test_paths_with_rows.append(test_path)
-      else:
-        test_paths_with_rows.append(test_path + '/' + trace)
-  return test_paths_with_rows
-
-
-def _GetUnselectedTestPathFromDict(test_path_dict):
-  """Gets a list of test paths for unselected series for a test path dictionary.
-
-  This function looks up series that are directly under provided test path
-  that are also not in the list of selected series.
-
-  Args:
-    test_path_dict: Dictionary of test path to list of selected sub-series.
-
-  Returns:
-    List of test paths of Tests that have rows.
-  """
-  test_paths = []
-  sub_test_dict = _GetSubTestDict(t for t in test_path_dict)
-  for test_path in test_path_dict:
-    parent_test_name = test_path.split('/')[-1]
-    selected_traces = test_path_dict[test_path]
-    # Add sub-tests not in selected traces.
-    unselected_traces = _GetTraces(test_path, sub_test_dict)
-    for trace in unselected_traces:
-      if trace not in selected_traces:
-        if trace == parent_test_name:
-          test_paths.append(test_path)
-        else:
-          test_paths.append(test_path + '/' + trace)
-  return test_paths
-
-
-def _GetSubTestDict(test_paths):
-  """Gets a dict of test suite path to sub test dict.
-
-  Args:
-    test_paths: List of test paths.
-
-  Returns:
-    Dictionary of test suite path to sub-test tree (see
-    list_tests.GetSubTests).
-  """
-  subtests = {}
-  for test_path in test_paths:
-    path_parts = test_path.split('/')
-    bot_path = '/'.join(path_parts[0:2])
-    test_suite_path = '/'.join(path_parts[0:3])
-    test_suite = path_parts[2]
-    if test_suite_path not in subtests:
-      subtests[test_suite_path] = {}
-    subtests[test_suite_path] = list_tests.GetSubTests(test_suite, [bot_path])
-  return subtests
-
-
-def _GetTraces(test_path, sub_test_dict):
-  """Gets summary and sub-test traces directly underneath test_path.
-
-  Args:
-    test_path: A test path.
-    sub_test_dict: Dictionary of test suite path to sub-test tree.
-
-  Returns:
-    List of trace names.
-  """
-  traces = []
-  test_parts = test_path.split('/')
-  test_suite_path = '/'.join(test_parts[0:3])
-
-  if test_suite_path not in sub_test_dict:
-    return []
-  sub_test_tree = sub_test_dict[test_suite_path]
-
-  if len(test_parts) > 3:
-    return _GetSubTestTraces(test_parts, sub_test_tree)
-
-  for key, value in sub_test_tree.iteritems():
-    if value['has_rows']:
-      traces.append(key)
-  return traces
-
-
-def _GetSubTestTraces(test_parts, sub_test_tree):
-  """Gets summary and sub-test traces after the test suite.
-
-  Args:
-    test_parts: List of parts of a test path.
-    sub_test_tree: Nested dictionary of test data (see list_tests.GetSubTests).
-
-  Returns:
-    List of trace names.
-  """
-  traces = []
-  target_trace = test_parts[-1]
-
-  for part in test_parts[3:-1]:
-    if part in sub_test_tree:
-      sub_test_tree = sub_test_tree[part]['sub_tests']
-    else:
-      return []
-  if target_trace not in sub_test_tree:
-    return []
-
-  # Add target trace.
-  target_sub_test_tree = sub_test_tree[target_trace]
-  if target_sub_test_tree['has_rows']:
-    traces.append(target_trace)
-
-  # Add direct sub-tests.
-  for key, value in target_sub_test_tree['sub_tests'].iteritems():
-    if value['has_rows']:
-      traces.append(key)
-  return traces

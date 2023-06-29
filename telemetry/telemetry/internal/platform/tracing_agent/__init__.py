@@ -2,21 +2,30 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
+import six
+from py_trace_event import trace_event
 
-class TracingAgent(object):
+
+class TracingAgent(six.with_metaclass(trace_event.TracedMetaClass, object)):
   """A tracing agent provided by the platform.
 
-  A tracing agent can gather data with Start() until Stop().
+  A tracing agent can gather data from StartAgentTracing() until
+  StopAgentTracing(), the trade data itself should then be collected with
+  CollectAgentTraceData(). Note, after calling StartAgentTracing, clients
+  *must* also make sure to call StopAgentTracing + CollectAgentTraceData in
+  order to free up any resources that the agents might hold.
+
   Before constructing an TracingAgent, check whether it's supported on the
   platform with IsSupported method first.
 
   NOTE: All subclasses of TracingAgent must not change the constructor's
   parameters so the agents can be dynamically constructed in
   tracing_controller_backend.
-
   """
 
-  def __init__(self, platform_backend):
+  def __init__(self, platform_backend, config):
+    del config  # unused
     self._platform_backend = platform_backend
 
   @classmethod

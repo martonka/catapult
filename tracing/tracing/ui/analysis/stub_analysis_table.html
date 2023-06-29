@@ -22,9 +22,9 @@ tr.exportTo('tr.ui.analysis', function() {
       return this.ownerDocument_;
     },
 
-    appendChild: function(node) {
-      if (node.tagName == 'TFOOT' || node.tagName == 'THEAD' ||
-              node.tagName == 'TBODY') {
+    appendChild(node) {
+      if (node.tagName === 'TFOOT' || node.tagName === 'THEAD' ||
+              node.tagName === 'TBODY') {
         node.__proto__ = StubAnalysisTable.prototype;
         node.nodes_ = [];
         node.ownerDocument_ = document;
@@ -42,7 +42,7 @@ tr.exportTo('tr.ui.analysis', function() {
   };
 
   return {
-    StubAnalysisTable: StubAnalysisTable
+    StubAnalysisTable,
   };
 });
 </script>

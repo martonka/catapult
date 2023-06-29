@@ -6,6 +6,7 @@ found in the LICENSE file.
 -->
 
 <link rel="import" href="/tracing/base/base64.html">
+<link rel="import" href="/tracing/extras/importer/pako.html">
 <link rel="import" href="/tracing/importer/import.html">
 <link rel="import" href="/tracing/ui/base/file.html">
 <link rel="import" href="/tracing/ui/base/hotkey_controller.html">
@@ -22,8 +23,8 @@ found in the LICENSE file.
 
 <style>
 x-profiling-view {
-  -webkit-flex-direction: column;
-  display: -webkit-flex;
+  flex-direction: column;
+  display: flex;
   padding: 0;
 }
 
@@ -32,7 +33,7 @@ x-profiling-view .controls #save-button {
 }
 
 x-profiling-view > tr-ui-timeline-view {
-  -webkit-flex: 1 1 auto;
+  flex: 1 1 auto;
   min-height: 0;
 }
 
@@ -71,13 +72,13 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
    * @constructor
    * @extends {HTMLDivElement}
    */
-  var ProfilingView = tr.ui.b.define('x-profiling-view');
-  var THIS_DOC = document.currentScript.ownerDocument;
+  const ProfilingView = tr.ui.b.define('x-profiling-view');
+  const THIS_DOC = document.currentScript.ownerDocument;
 
   ProfilingView.prototype = {
     __proto__: HTMLDivElement.prototype,
 
-    decorate: function(tracingControllerClient) {
+    decorate(tracingControllerClient) {
       Polymer.dom(this).appendChild(
           tr.ui.b.instantiateTemplate('#profiling-view-template', THIS_DOC));
 
@@ -93,7 +94,8 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
       this.loadButton_ = Polymer.dom(this).querySelector('#load-button');
       this.saveButton_ = Polymer.dom(this).querySelector('#save-button');
 
-      var buttons = Polymer.dom(this).querySelector('x-timeline-view-buttons');
+      const buttons = Polymer.dom(this).querySelector(
+          'x-timeline-view-buttons');
       Polymer.dom(buttons.parentElement).removeChild(buttons);
       Polymer.dom(this.timelineView_.leftControls).appendChild(buttons);
       this.initButtons_();
@@ -101,7 +103,7 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
       this.timelineView_.hotkeyController.addHotKey(new tr.ui.b.HotKey({
         eventType: 'keypress',
         keyCode: 'r'.charCodeAt(0),
-        callback: function(e) {
+        callback(e) {
           this.beginRecording();
           event.stopPropagation();
         },
@@ -114,7 +116,8 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
         this.tracingControllerClient_ = tracingControllerClient;
       } else if (window.DevToolsHost !== undefined) {
         this.tracingControllerClient_ =
-            new tr.ui.e.about_tracing.InspectorTracingControllerClient();
+            new tr.ui.e.about_tracing.InspectorTracingControllerClient(
+                new tr.ui.e.about_tracing.InspectorConnection(window));
       } else {
         this.tracingControllerClient_ =
             new tr.ui.e.about_tracing.XhrBasedTracingControllerClient();
@@ -128,7 +131,7 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
 
     // Detach all document event listeners. Without this the tests can get
     // confused as the element may still be listening when the next test runs.
-    detach_: function() {
+    detach_() {
       this.detachDragAndDrop_();
     },
 
@@ -141,34 +144,36 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
       this.updateTracingControllerSpecificState_();
     },
 
-    updateTracingControllerSpecificState_: function() {
-      var isInspector = this.tracingControllerClient_ instanceof
+    updateTracingControllerSpecificState_() {
+      const isInspector = this.tracingControllerClient_ instanceof
           tr.ui.e.about_tracing.InspectorTracingControllerClient;
 
       if (isInspector) {
         this.infoBarGroup_.addMessage(
             'This about:tracing is connected to a remote device...',
-            [{buttonText: 'Wow!', onClick: function() {}}]);
+            [{buttonText: 'Wow!', onClick() {}}]);
       }
     },
 
-    beginRecording: function() {
-      if (this.isRecording_)
+    beginRecording() {
+      if (this.isRecording_) {
         throw new Error('Already recording');
+      }
       this.isRecording_ = true;
-      var resultPromise = tr.ui.e.about_tracing.beginRecording(
+      const resultPromise = tr.ui.e.about_tracing.beginRecording(
           this.tracingControllerClient_);
       resultPromise.then(
           function(data) {
             this.isRecording_ = false;
-            var traceName = tr.ui.e.about_tracing.defaultTraceName(
+            const traceName = tr.ui.e.about_tracing.defaultTraceName(
                 this.tracingControllerClient_);
-            this.setActiveTrace(traceName, data, false);
+            this.setActiveTrace(traceName, data);
           }.bind(this),
           function(err) {
             this.isRecording_ = false;
-            if (err instanceof tr.ui.e.about_tracing.UserCancelledError)
+            if (err instanceof tr.ui.e.about_tracing.UserCancelledError) {
               return;
+            }
             tr.ui.b.Overlay.showError('Error while recording', err);
           }.bind(this));
       return resultPromise;
@@ -180,15 +185,20 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
 
     ///////////////////////////////////////////////////////////////////////////
 
-    clearActiveTrace: function() {
+    clearActiveTrace() {
       this.saveButton_.disabled = true;
       this.activeTrace_ = undefined;
     },
 
-    setActiveTrace: function(filename, data) {
+    setActiveTrace(filename, data) {
+      const isProtobufTrace = this.isProtobufTrace_(data);
+      if (isProtobufTrace) {
+        filename = filename.replace('.json', '.pftrace');
+      }
+
       this.activeTrace_ = {
-        filename: filename,
-        data: data
+        filename,
+        data
       };
 
       this.infoBarGroup_.clearMessages();
@@ -196,9 +206,28 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
       this.saveButton_.disabled = false;
       this.timelineView_.viewTitle = filename;
 
-      var m = new tr.Model();
-      var i = new tr.importer.Import(m);
-      var p = i.importTracesWithProgressDialog([data]);
+      // Bypass the standard importer pipeline for protobuf-format traces and
+      // redirect the user to the Perfetto UI instead. Note that we can't
+      // actually open the trace for the user due to chrome:// protocol
+      // restrictions.
+      if (isProtobufTrace) {
+        this.timelineView_.model = new tr.Model();
+        this.timelineView_.updateDocumentFavicon();
+        this.infoBarGroup_.addMessage(
+            'Cannot display protobuf format trace. Please save the trace ' +
+              'and view it in Perfetto UI instead.',
+            [{
+              buttonText: 'Open Perfetto UI',
+              onClick(event, infobar) {
+                window.open('https://ui.perfetto.dev');
+              }
+            }]);
+        return;
+      }
+
+      const m = new tr.Model();
+      const i = new tr.importer.Import(m);
+      const p = i.importTracesWithProgressDialog([data]);
       p.then(
           function() {
             this.timelineView_.model = m;
@@ -211,7 +240,44 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
 
     ///////////////////////////////////////////////////////////////////////////
 
-    initButtons_: function() {
+    // Detects a (possibly gzipped) Perfetto protobuf trace.
+    isProtobufTrace_(data) {
+      // We only look at the first ~4 KB to avoid reading the entire trace.
+      data = new Uint8Array(data, 0, 4096);
+
+      // If the trace is gzipped, decompress the beginning first.
+      const GZIP_HEADER_ID1 = 0x1f;
+      const GZIP_HEADER_ID2 = 0x8b;
+      const GZIP_DEFLATE_COMPRESSION = 8;
+      if (data.length > 3 &&
+          data[0] === GZIP_HEADER_ID1 &&
+          data[1] === GZIP_HEADER_ID2 &&
+          data[2] === GZIP_DEFLATE_COMPRESSION) {
+        data = pako.ungzip(data);
+      }
+
+      // Look for Perfetto's sync marker.
+      const syncMarker = new Uint8Array([0x82, 0x47, 0x7a, 0x76, 0xb2, 0x8d,
+        0x42, 0xba, 0x81, 0xdc, 0x33, 0x32, 0x6d, 0x57, 0xa0, 0x79]);
+      for (let i = 0; i < data.length; i++) {
+        let match = true;
+        for (let j = 0; j < syncMarker.length; j++) {
+          if (i + j >= data.length) {
+            return false;
+          }
+          if (data[i + j] !== syncMarker[j]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) {
+          return true;
+        }
+      }
+      return false;
+    },
+
+    initButtons_() {
       this.recordButton_.addEventListener(
           'click', function(event) {
             event.stopPropagation();
@@ -225,83 +291,95 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
           }.bind(this));
 
       this.saveButton_.addEventListener('click',
-                                        this.onSaveClicked_.bind(this));
+          this.onSaveClicked_.bind(this));
       this.saveButton_.disabled = true;
     },
 
-    requestFilename_: function() {
-
-      // unsafe filename patterns:
-      var illegalRe = /[\/\?<>\\:\*\|":]/g;
-      var controlRe = /[\x00-\x1f\x80-\x9f]/g;
-      var reservedRe = /^\.+$/;
-
-      var filename;
-      var defaultName = this.activeTrace_.filename;
-      var fileExtension = '.json';
-      var fileRegex = /\.json$/;
-      if (/[.]gz$/.test(defaultName)) {
+    detectFileExtension_(filename) {
+      let fileExtension = /[.]pftrace/.test(filename) ? '.pftrace' : '.json';
+      if (/[.]gz$/.test(filename)) {
         fileExtension += '.gz';
-        fileRegex = /\.json\.gz$/;
-      } else if (/[.]zip$/.test(defaultName)) {
-        fileExtension = '.zip';
-        fileRegex = /\.zip$/;
+      } else if (/[.]zip$/.test(filename)) {
+        fileExtension += '.zip';
+      }
+      return fileExtension;
+    },
+
+    requestFilename_() {
+      // unsafe filename patterns:
+      const illegalRe = /[\/\?<>\\:\*\|":]/g;
+      const controlRe = /[\x00-\x1f\x80-\x9f]/g;
+      const reservedRe = /^\.+$/;
+      const defaultName = this.activeTrace_.filename;
+
+      const fileExtension = this.detectFileExtension_(defaultName);
+      const escapedExtension = fileExtension.replace('.', '\\.');
+      const extensionRegex = new RegExp(escapedExtension + '$');
+      // |defaultName| is usually trace.json.gz, so |defaultNameWithoutExt|
+      // becomes 'trace'.
+      const defaultNameWithoutExt = defaultName.replace(extensionRegex, '');
+
+      // If |custom| is 'foo', the final name eventually becomes
+      // something like 'trace_foo.json.gz'.
+      const custom = prompt('Filename? (' + fileExtension +
+                          ' appended) Or leave blank:');
+      if (custom === null) {
+        return undefined;
       }
 
-      var custom = prompt('Filename? (' + fileExtension +
-                          ' appended) Or leave blank:');
-      if (custom === null)
-        return undefined;
-
-      var name;
+      let name;
       if (custom) {
-        name = ' ' + custom;
+        // Strip the extension from |custom| if it matches up with default
+        // extension of the trace. If |custom| is 'foo.json.gz', we don't
+        // want filename to be 'foo.json.gz.json.gz'.
+        name = custom.replace(extensionRegex, '');
       } else {
-        var date = new Date();
-        var dateText = ' ' + date.toDateString() +
+        const date = new Date();
+        const dateText = date.toDateString() +
                        ' ' + date.toLocaleTimeString();
         name = dateText;
       }
 
-      filename = defaultName.replace(fileRegex, name) + fileExtension;
+      // filename will be something like 'trace foo.json.gz'. All spaces will be
+      // changed to '_' later.
+      const filename = defaultNameWithoutExt + ' ' + name + fileExtension;
 
       return filename
-              .replace(illegalRe, '.')
-              .replace(controlRe, '\u2022')
-              .replace(reservedRe, '')
-              .replace(/\s+/g, '_');
+          .replace(illegalRe, '.')
+          .replace(controlRe, '\u2022')
+          .replace(reservedRe, '')
+          .replace(/\s+/g, '_');
     },
 
-    onSaveClicked_: function() {
+    onSaveClicked_() {
       // Create a blob URL from the binary array.
-      var blob = new Blob([this.activeTrace_.data],
-                          {type: 'application/octet-binary'});
-      var blobUrl = window.webkitURL.createObjectURL(blob);
+      const blob = new Blob([this.activeTrace_.data],
+          {type: 'application/octet-binary'});
+      const blobUrl = window.webkitURL.createObjectURL(blob);
 
       // Create a link and click on it. BEST API EVAR!
-      var link = document.createElementNS('http://www.w3.org/1999/xhtml', 'a');
+      const link = document.createElementNS('http://www.w3.org/1999/xhtml', 'a');
       link.href = blobUrl;
-      var filename = this.requestFilename_();
+      const filename = this.requestFilename_();
       if (filename) {
         link.download = filename;
         link.click();
       }
     },
 
-    onLoadClicked_: function() {
-      var inputElement = document.createElement('input');
+    onLoadClicked_() {
+      const inputElement = document.createElement('input');
       inputElement.type = 'file';
       inputElement.multiple = false;
 
-      var changeFired = false;
+      let changeFired = false;
       inputElement.addEventListener(
           'change',
           function(e) {
-            if (changeFired)
-              return;
+            if (changeFired) return;
             changeFired = true;
 
-            var file = inputElement.files[0];
+            const file = inputElement.files[0];
             tr.ui.b.readFile(file).then(
                 function(data) {
                   this.setActiveTrace(file.name, data);
@@ -315,7 +393,7 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
 
     ///////////////////////////////////////////////////////////////////////////
 
-    initDragAndDrop_: function() {
+    initDragAndDrop_() {
       this.dropHandler_ = this.dropHandler_.bind(this);
       this.ignoreDragEvent_ = this.ignoreDragEvent_.bind(this);
       document.addEventListener('dragstart', this.ignoreDragEvent_, false);
@@ -326,7 +404,7 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
       document.addEventListener('drop', this.dropHandler_, false);
     },
 
-    detachDragAndDrop_: function() {
+    detachDragAndDrop_() {
       document.removeEventListener('dragstart', this.ignoreDragEvent_);
       document.removeEventListener('dragend', this.ignoreDragEvent_);
       document.removeEventListener('dragenter', this.ignoreDragEvent_);
@@ -335,19 +413,18 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
       document.removeEventListener('drop', this.dropHandler_);
     },
 
-    ignoreDragEvent_: function(e) {
+    ignoreDragEvent_(e) {
       e.preventDefault();
       return false;
     },
 
-    dropHandler_: function(e) {
-      if (this.isAnyDialogUp_)
-        return;
+    dropHandler_(e) {
+      if (this.isAnyDialogUp_) return;
 
       e.stopPropagation();
       e.preventDefault();
 
-      var files = e.dataTransfer.files;
+      const files = e.dataTransfer.files;
       if (files.length !== 1) {
         tr.ui.b.Overlay.showError('1 file supported at a time.');
         return;
@@ -365,7 +442,7 @@ tr.exportTo('tr.ui.e.about_tracing', function() {
   };
 
   return {
-    ProfilingView: ProfilingView
+    ProfilingView,
   };
 });
 </script>

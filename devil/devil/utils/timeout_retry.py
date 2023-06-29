@@ -1,7 +1,6 @@
 # Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """A utility to run functions with timeouts and retries."""
 # pylint: disable=W0702
 
@@ -16,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 class TimeoutRetryThreadGroup(reraiser_thread.ReraiserThreadGroup):
-
   def __init__(self, timeout, threads=None):
     super(TimeoutRetryThreadGroup, self).__init__(threads)
     self._watcher = watchdog_timer.WatchdogTimer(timeout)
@@ -28,7 +26,7 @@ class TimeoutRetryThreadGroup(reraiser_thread.ReraiserThreadGroup):
   def GetElapsedTime(self):
     return self._watcher.GetElapsed()
 
-  def GetRemainingTime(self, required=0, msg=None):
+  def GetRemainingTime(self, required=0, suffix=None):
     """Get the remaining time before the thread times out.
 
     Useful to send as the |timeout| parameter of async IO operations.
@@ -48,11 +46,9 @@ class TimeoutRetryThreadGroup(reraiser_thread.ReraiserThreadGroup):
     """
     remaining = self._watcher.GetRemaining()
     if remaining is not None and remaining < required:
-      if msg is None:
-        msg = 'Timeout expired'
-      if remaining > 0:
-        msg += (', wait of %.1f secs required but only %.1f secs left'
-                % (required, remaining))
+      msg = 'Timeout of %.1f secs expired' % self._watcher.GetTimeout()
+      if suffix:
+        msg += suffix
       raise reraiser_thread.TimeoutError(msg)
     return remaining
 
@@ -109,9 +105,10 @@ def WaitFor(condition, wait_period=5, max_tries=None):
       return result
     if timeout_thread_group:
       # pylint: disable=no-member
-      timeout_thread_group.GetRemainingTime(wait_period,
-          msg='Timed out waiting for %r' % condition_name)
-    time.sleep(wait_period)
+      timeout_thread_group.GetRemainingTime(
+          wait_period, suffix=' waiting for condition %r' % condition_name)
+    if wait_period:
+      time.sleep(wait_period)
   return None
 
 
@@ -119,8 +116,14 @@ def AlwaysRetry(_exception):
   return True
 
 
-def Run(func, timeout, retries, args=None, kwargs=None, desc=None,
-        error_log_func=logging.critical, retry_if_func=AlwaysRetry):
+def Run(func,
+        timeout,
+        retries,
+        args=None,
+        kwargs=None,
+        desc=None,
+        error_log_func=logging.critical,
+        retry_if_func=AlwaysRetry):
   """Runs the passed function in a separate thread with timeouts and retries.
 
   Args:
@@ -149,15 +152,17 @@ def Run(func, timeout, retries, args=None, kwargs=None, desc=None,
   while True:
     thread_name = 'TimeoutThread-%d-for-%s' % (num_try,
                                                threading.current_thread().name)
-    child_thread = reraiser_thread.ReraiserThread(lambda: func(*args, **kwargs),
-                                                  name=thread_name)
+    child_thread = reraiser_thread.ReraiserThread(
+        lambda: func(*args, **kwargs), name=thread_name)
     try:
       thread_group = TimeoutRetryThreadGroup(timeout, threads=[child_thread])
       thread_group.StartAll(will_block=True)
       while True:
-        thread_group.JoinAll(watcher=thread_group.GetWatcher(), timeout=60,
-                             error_log_func=error_log_func)
-        if thread_group.IsAlive():
+        thread_group.JoinAll(
+            watcher=thread_group.GetWatcher(),
+            timeout=60,
+            error_log_func=error_log_func)
+        if thread_group.is_alive():
           logger.info('Still working on %s', desc)
         else:
           return thread_group.GetAllReturnValues()[0]
@@ -169,7 +174,6 @@ def Run(func, timeout, retries, args=None, kwargs=None, desc=None,
     except Exception as e:  # pylint: disable=broad-except
       if num_try > retries or not retry_if_func(e):
         raise
-      error_log_func(
-          '(%s) Exception on %s, attempt %d of %d: %r',
-          thread_name, desc, num_try, retries + 1, e)
+      error_log_func('(%s) Exception on %s, attempt %d of %d: %r', thread_name,
+                     desc, num_try, retries + 1, e, exc_info=True)
     num_try += 1

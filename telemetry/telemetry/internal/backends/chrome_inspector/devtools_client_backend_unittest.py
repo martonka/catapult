@@ -2,11 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry import decorators
 from telemetry.testing import browser_test_case
-from telemetry.timeline import model
-from telemetry.timeline import trace_data
-from telemetry.timeline import tracing_config
 
 
 class DevToolsClientBackendTest(browser_test_case.BrowserTestCase):
@@ -26,8 +24,10 @@ class DevToolsClientBackendTest(browser_test_case.BrowserTestCase):
   def testIsAlive(self):
     self.assertTrue(self._devtools_client.IsAlive())
 
+  # https://github.com/catapult-project/catapult/issues/3099 (Android)
+  # crbug.com/483212 (CrOS)
   @decorators.Enabled('has tabs')
-  @decorators.Disabled('chromeos')  # crbug.com/483212
+  @decorators.Disabled('android', 'chromeos')
   def testGetUpdatedInspectableContexts(self):
     self._browser.tabs.New()
     c1 = self._devtools_client.GetUpdatedInspectableContexts()
@@ -62,7 +62,9 @@ class DevToolsClientBackendTest(browser_test_case.BrowserTestCase):
     self.assertEqual(tabs4[0], tabs3[0])
     self.assertEqual(tabs4[1], tabs3[2])
 
-  @decorators.Disabled('chromeos')  # crbug.com/483212
+  # https://github.com/catapult-project/catapult/issues/3099 (Android)
+  # crbug.com/483212 (CrOS)
+  @decorators.Disabled('android', 'chromeos')
   def testGetUpdatedInspectableContextsUpdateContextsData(self):
     c1 = self._devtools_client.GetUpdatedInspectableContexts()
     self.assertEqual(len(c1.contexts), 1)
@@ -75,19 +77,3 @@ class DevToolsClientBackendTest(browser_test_case.BrowserTestCase):
     self.assertEqual(len(c2.contexts), 1)
     self.assertTrue('blank.html' in c2.contexts[0]['url'])
     self.assertEqual(c2.GetInspectorBackend(context_id), backend)
-
-  def testTracing(self):
-    devtools_client = self._devtools_client
-    if not devtools_client.IsChromeTracingSupported():
-      self.skipTest('Browser does not support tracing, skipping test.')
-
-    # Start Chrome tracing.
-    config = tracing_config.TracingConfig()
-    config.enable_chrome_trace = True
-    devtools_client.StartChromeTracing(config)
-
-    # Stop Chrome tracing and check that the resulting data is valid.
-    builder = trace_data.TraceDataBuilder()
-    devtools_client.StopChromeTracing()
-    devtools_client.CollectChromeTracingData(builder)
-    model.TimelineModel(builder.AsData())

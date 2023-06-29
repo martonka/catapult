@@ -5,9 +5,6 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="stylesheet"
-      href="/tracing/ui/extras/chrome/cc/layer_tree_host_impl_view.css">
-
 <link rel="import" href="/tracing/extras/chrome/cc/layer_tree_host_impl.html">
 <link rel="import" href="/tracing/extras/chrome/cc/tile.html">
 <link rel="import" href="/tracing/ui/analysis/object_snapshot_view.html">
@@ -23,19 +20,29 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
    * Displays a LayerTreeHostImpl snapshot in a human readable form.
    * @constructor
    */
-  var LayerTreeHostImplSnapshotView = tr.ui.b.define(
+  const LayerTreeHostImplSnapshotView = tr.ui.b.define(
       'tr-ui-e-chrome-cc-layer-tree-host-impl-snapshot-view',
       tr.ui.analysis.ObjectSnapshotView);
 
   LayerTreeHostImplSnapshotView.prototype = {
     __proto__: tr.ui.analysis.ObjectSnapshotView.prototype,
 
-    decorate: function() {
+    decorate() {
       Polymer.dom(this).classList.add('tr-ui-e-chrome-cc-lthi-s-view');
+      this.style.display = 'flex';
+      this.style.flexDirection = 'row';
+      this.style.flexGrow = 1;
+      this.style.flexShrink = 1;
+      this.style.flexBasis = 'auto';
+      this.style.minWidth = 0;
 
       this.selection_ = undefined;
 
       this.layerPicker_ = new tr.ui.e.chrome.cc.LayerPicker();
+      this.layerPicker_.style.flexGrow = 0;
+      this.layerPicker_.style.flexShrink = 0;
+      this.layerPicker_.style.flexBasis = 'auto';
+      this.layerPicker_.style.minWidth = '200px';
       this.layerPicker_.addEventListener(
           'selection-change',
           this.onLayerPickerSelectionChanged_.bind(this));
@@ -44,9 +51,17 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       this.layerView_.addEventListener(
           'selection-change',
           this.onLayerViewSelectionChanged_.bind(this));
+      this.layerView_.style.flexGrow = 1;
+      this.layerView_.style.flexShrink = 1;
+      this.layerView_.style.flexBasis = 'auto';
+      this.layerView_.style.minWidth = 0;
+
       this.dragHandle_ = document.createElement('tr-ui-b-drag-handle');
+      this.dragHandle_.style.flexGrow = 0;
+      this.dragHandle_.style.flexShrink = 0;
+      this.dragHandle_.style.flexBasis = 'auto';
       this.dragHandle_.horizontal = false;
-      this.dragHandle_.target = this.layerView_;
+      this.dragHandle_.target = this.layerPicker_;
 
       Polymer.dom(this).appendChild(this.layerPicker_);
       Polymer.dom(this).appendChild(this.dragHandle_);
@@ -56,7 +71,6 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       // since those might have been created before we added the listener.
       this.onLayerViewSelectionChanged_();
       this.onLayerPickerSelectionChanged_();
-
     },
 
     get objectSnapshot() {
@@ -66,17 +80,18 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
     set objectSnapshot(objectSnapshot) {
       this.objectSnapshot_ = objectSnapshot;
 
-      var lthi = this.objectSnapshot;
-      var layerTreeImpl;
-      if (lthi)
+      const lthi = this.objectSnapshot;
+      let layerTreeImpl;
+      if (lthi) {
         layerTreeImpl = lthi.getTree(this.layerPicker_.whichTree);
+      }
 
       this.layerPicker_.lthiSnapshot = lthi;
       this.layerView_.layerTreeImpl = layerTreeImpl;
       this.layerView_.regenerateContent();
 
-      if (!this.selection_)
-        return;
+      if (!this.selection_) return;
+
       this.selection = this.selection_.findEquivalent(lthi);
     },
 
@@ -85,15 +100,15 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
     },
 
     set selection(selection) {
-      if (this.selection_ == selection)
-        return;
+      if (this.selection_ === selection) return;
+
       this.selection_ = selection;
       this.layerPicker_.selection = selection;
       this.layerView_.selection = selection;
       tr.b.dispatchSimpleEvent(this, 'cc-selection-change');
     },
 
-    onLayerPickerSelectionChanged_: function() {
+    onLayerPickerSelectionChanged_() {
       this.selection_ = this.layerPicker_.selection;
       this.layerView_.selection = this.selection;
       this.layerView_.layerTreeImpl = this.layerPicker_.layerTreeImpl;
@@ -102,7 +117,7 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       tr.b.dispatchSimpleEvent(this, 'cc-selection-change');
     },
 
-    onLayerViewSelectionChanged_: function() {
+    onLayerViewSelectionChanged_() {
       this.selection_ = this.layerView_.selection;
       this.layerPicker_.selection = this.selection;
       tr.b.dispatchSimpleEvent(this, 'cc-selection-change');
@@ -121,7 +136,7 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       LayerTreeHostImplSnapshotView, {typeName: 'cc::LayerTreeHostImpl'});
 
   return {
-    LayerTreeHostImplSnapshotView: LayerTreeHostImplSnapshotView
+    LayerTreeHostImplSnapshotView,
   };
 });
 </script>

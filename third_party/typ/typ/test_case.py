@@ -16,6 +16,8 @@ import fnmatch
 import shlex
 import unittest
 
+from typ import python_2_3_compat
+
 
 def convert_newlines(msg):
     """A routine that mimics Python's universal_newlines conversion."""
@@ -26,6 +28,13 @@ class TestCase(unittest.TestCase):
     child = None
     context = None
     maxDiff = 80 * 66
+    artifacts = None
+
+    def set_artifacts(self, artifacts):
+        # We need this setter instead of setting artifacts directly so that
+        # subclasses can override it to be notified when the artifacts
+        # implementation is set.
+        self.artifacts = artifacts
 
 
 class MainTestCase(TestCase):
@@ -36,7 +45,7 @@ class MainTestCase(TestCase):
         for path, contents in list(files.items()):
             dirname = host.dirname(path)
             if dirname:
-                host.maybe_mkdir(dirname)
+                host.maybe_make_directory(dirname)
             host.write_text_file(path, contents)
 
     def _read_files(self, host, tmpdir):
@@ -100,6 +109,8 @@ class MainTestCase(TestCase):
             result = self.call(host, prog + argv, stdin=stdin, env=env)
 
             actual_ret, actual_out, actual_err = result
+            actual_out = python_2_3_compat.bytes_to_str(actual_out)
+            actual_err = python_2_3_compat.bytes_to_str(actual_err)
             actual_files = self._read_files(host, tmpdir)
         finally:
             host.chdir(orig_wd)
@@ -108,8 +119,11 @@ class MainTestCase(TestCase):
 
         if universal_newlines:
             actual_out = convert_newlines(actual_out)
-        if universal_newlines:
             actual_err = convert_newlines(actual_err)
+
+        # Ignore the new logging added for timing.
+        if actual_out.startswith('Start running tests'):
+            actual_out = '\n'.join(actual_out.split('\n')[1:])
 
         if ret is not None:
             self.assertEqual(ret, actual_ret)

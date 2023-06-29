@@ -11,7 +11,6 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.model', function() {
-
   /**
    * Indicates how much of a compound-event is selected [if any].
    *
@@ -21,7 +20,7 @@ tr.exportTo('tr.model', function() {
    * selected states other than just "yes, no". This enum encodes those
    * various possible states.
    */
-  var CompoundEventSelectionState = {
+  const CompoundEventSelectionState = {
     // Basic bit states.
     NOT_SELECTED: 0,
     EVENT_SELECTED: 0x1,
@@ -34,7 +33,7 @@ tr.exportTo('tr.model', function() {
   };
 
   return {
-    CompoundEventSelectionState: CompoundEventSelectionState
+    CompoundEventSelectionState,
   };
 });
 </script>

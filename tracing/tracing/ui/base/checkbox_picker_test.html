@@ -13,7 +13,7 @@ found in the LICENSE file.
 
 tr.b.unittest.testSuite(function() {
   test('basicAllCheckboxUnchecked', function() {
-    var cp = document.createElement('tr-ui-b-checkbox-picker');
+    const cp = document.createElement('tr-ui-b-checkbox-picker');
     cp.items = [
       {key: 'Toyota', label: 'I want to drive Toyota'},
       {key: 'Boeing', label: 'I want to fly'}
@@ -23,7 +23,7 @@ tr.b.unittest.testSuite(function() {
   });
 
   test('basicSomeCheckboxChecked', function() {
-    var cp = document.createElement('tr-ui-b-checkbox-picker');
+    const cp = document.createElement('tr-ui-b-checkbox-picker');
     cp.items = [
       {key: 'Toyota', label: 'I want to drive Toyota'},
       {key: 'Honda', label: 'I want to drive Honda'},
@@ -39,7 +39,7 @@ tr.b.unittest.testSuite(function() {
   });
 
   test('duplicateKeys', function() {
-    var cp = document.createElement('tr-ui-b-checkbox-picker');
+    const cp = document.createElement('tr-ui-b-checkbox-picker');
     assert.throws(function() {
       cp.items = [
         {key: 'Toyota', label: 'I want to drive Toyota'},
@@ -50,7 +50,7 @@ tr.b.unittest.testSuite(function() {
   });
 
   test('selectAndUnselectNonExistingKey', function() {
-    var cp = document.createElement('tr-ui-b-checkbox-picker');
+    const cp = document.createElement('tr-ui-b-checkbox-picker');
     cp.items = [
       {key: 'Toyota', label: 'I want to drive Toyota'},
       {key: 'Honda', label: 'I want to drive Honda'},
@@ -64,15 +64,15 @@ tr.b.unittest.testSuite(function() {
   });
 
   test('testPersistentStateOneSetSettingsKeyBeforeSettingItems', function() {
-    var container1 = tr.ui.b.createDiv({textContent: 'Checkbox Picker One'});
+    const container1 = tr.ui.b.createDiv({textContent: 'Checkbox Picker One'});
     container1.style.border = 'solid';
-    var cp = document.createElement('tr-ui-b-checkbox-picker');
+    const cp = document.createElement('tr-ui-b-checkbox-picker');
     cp.settingsKey = 'checkbox-picker-test-one';
     cp.items = [
-        {key: 'Toyota', label: 'I want to drive Toyota'},
-        {key: 'Honda', label: 'I want to drive Honda'},
-        {key: 'Tesla', label: 'I want to drive electric car'},
-      ];
+      {key: 'Toyota', label: 'I want to drive Toyota'},
+      {key: 'Honda', label: 'I want to drive Honda'},
+      {key: 'Tesla', label: 'I want to drive electric car'},
+    ];
     cp.selectCheckbox('Toyota');
     cp.selectCheckbox('Tesla');
     Polymer.dom(container1).appendChild(cp);
@@ -82,31 +82,31 @@ tr.b.unittest.testSuite(function() {
 
     this.addHTMLOutput(document.createElement('br'));
 
-    var container2 = tr.ui.b.createDiv(
+    const container2 = tr.ui.b.createDiv(
         {textContent:
             'Checkbox Picker Two (Same settingsKey as Checkbox Picker One)'});
     container2.style.border = 'solid #0000FF';
-    var cp2 = document.createElement('tr-ui-b-checkbox-picker');
+    const cp2 = document.createElement('tr-ui-b-checkbox-picker');
     cp2.settingsKey = 'checkbox-picker-test-one';
     cp2.items = [
-        {key: 'Toyota', label: 'I want to drive Toyota'},
-        {key: 'Honda', label: 'I want to drive Honda'},
-        {key: 'Tesla', label: 'I want to drive electric car'},
-      ];
+      {key: 'Toyota', label: 'I want to drive Toyota'},
+      {key: 'Honda', label: 'I want to drive Honda'},
+      {key: 'Tesla', label: 'I want to drive electric car'},
+    ];
     Polymer.dom(container2).appendChild(cp2);
     this.addHTMLOutput(container2);
     assert.deepEqual(cp2.checkedKeys, ['Toyota']);
   });
 
   test('testPersistentStateTwoSetSettingsKeyAfterSettingItems', function() {
-    var container1 = tr.ui.b.createDiv({textContent: 'Checkbox Picker One'});
+    const container1 = tr.ui.b.createDiv({textContent: 'Checkbox Picker One'});
     container1.style.border = 'solid';
-    var cp = document.createElement('tr-ui-b-checkbox-picker');
+    const cp = document.createElement('tr-ui-b-checkbox-picker');
     cp.items = [
-        {key: 'Toyota', label: 'I want to drive Toyota'},
-        {key: 'Honda', label: 'I want to drive Honda'},
-        {key: 'Tesla', label: 'I want to drive electric car'},
-      ];
+      {key: 'Toyota', label: 'I want to drive Toyota'},
+      {key: 'Honda', label: 'I want to drive Honda'},
+      {key: 'Tesla', label: 'I want to drive electric car'},
+    ];
     cp.settingsKey = 'checkbox-picker-test-one';
     cp.selectCheckbox('Toyota');
     cp.selectCheckbox('Tesla');
@@ -116,24 +116,20 @@ tr.b.unittest.testSuite(function() {
 
     this.addHTMLOutput(document.createElement('br'));
 
-    var container2 = tr.ui.b.createDiv(
+    const container2 = tr.ui.b.createDiv(
         {textContent:
             'Checkbox Picker Two (Same settingsKey as Checkbox Picker One)'});
     container2.style.border = 'solid #0000FF';
-    var cp2 = document.createElement('tr-ui-b-checkbox-picker');
+    const cp2 = document.createElement('tr-ui-b-checkbox-picker');
     cp2.items = [
-        {key: 'Toyota', label: 'I want to drive Toyota'},
-        {key: 'Honda', label: 'I want to drive Honda'},
-        {key: 'Tesla', label: 'I want to drive electric car'},
-      ];
+      {key: 'Toyota', label: 'I want to drive Toyota'},
+      {key: 'Honda', label: 'I want to drive Honda'},
+      {key: 'Tesla', label: 'I want to drive electric car'},
+    ];
     Polymer.dom(container2).appendChild(cp2);
     this.addHTMLOutput(container2);
     cp2.settingsKey = 'checkbox-picker-test-one';
     assert.deepEqual(cp2.checkedKeys.sort(), ['Tesla', 'Toyota']);
-
   });
-
-
-
 });
 </script>

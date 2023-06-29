@@ -18,10 +18,13 @@ This enables Boto API auth in Developer Shell environment.
 """
 
 from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import division
+from __future__ import unicode_literals
 
-import oauth2client.devshell as devshell
 from boto.auth_handler import AuthHandler
 from boto.auth_handler import NotReadyToAuthenticate
+import oauth2client.contrib.devshell as devshell
 
 
 class DevshellAuth(AuthHandler):
@@ -30,11 +33,16 @@ class DevshellAuth(AuthHandler):
   capability = ['s3']
 
   def __init__(self, path, config, provider):
+    # Provider here is a boto.provider.Provider object (as opposed to the
+    # provider attribute of CloudApi objects, which is a string).
+    if provider.name != 'google':
+      # Devshell credentials are valid for Google only and can't be used for s3.
+      raise NotReadyToAuthenticate()
     try:
       self.creds = devshell.DevshellCredentials()
     except:
       raise NotReadyToAuthenticate()
 
   def add_auth(self, http_request):
-    http_request.headers['Authorization'] = 'Bearer %s' % self.creds.access_token
-
+    http_request.headers['Authorization'] = ('Bearer %s' %
+                                             self.creds.access_token)

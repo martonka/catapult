@@ -1,3 +1,752 @@
+Release 4.46 (release date: 2019-10-31)
+=======================================
+Bug Fixes
+------------------
+ - Fixed issue with domain permissions functionality.
+
+Release 4.45 (release date: 2019-10-18)
+=======================================
+Bug Fixes
+------------------
+ - Fixed exception when using CMEK with resumable uploads.
+ - Fixed alias for new ubla command.
+ - Fixed default RDNS behavior for backwards compatibility with 4.42 and earlier.
+ 
+Other Changes
+------------------
+- Improvements to continuous integration workflow.
+
+Release 4.44 (release date: 2019-10-02)
+=======================================
+New Features
+------------------
+- Added support for service account impersonation through a new `-i` option to
+  specify a service account to impersonate.
+- Added support for members using the deleted syntax (i.e. `deleted:user:...`,
+  `deleted:group:...`, `deleted:serviceAccount:...`).
+- Added support for the new uniform bucket-level access (`ubla`) command
+  (currently an alias of `bucketpolicyonly`).
+- Added `-w` flag to `kms` command, which shows a warning rather than failing
+  when updating key permissions does not succeed.
+
+Bug Fixes
+------------------
+- Fixed regression in cp where a statement like
+  `cp my-file gs://my-bucket/non-existent-folder/` would create a file called
+  `non-existent-folder` rather than `non-existent-folder/my-file`.
+- Fixed streaming uploads for Python 3.
+
+
+Release 4.43 (release date: 2019-09-20)
+=======================================
+New Features
+------------------
+- Added support for socks proxies, including socks4 and socks5.
+
+Bug Fixes
+------------------
+- Fixed cp/mv errors that occur when  destination directory is a substring of
+  another directory. Behavior now more closely matches OS cp/mv commands.
+- Fixed issue where set IAM policy on objects threw errors.
+- Fixed issue when showing help in a pager in Python 3 environments.
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+Release 4.42 (release date: 2019-08-05)
+=======================================
+ Bug Fixes
+------------------
+- Fixed some text encoding/decoding issues in certain Python 3 environments.
+- Fixed issue where bundled crcmod for macOS could not be imported and would
+  crash gsutil on Python 3.
+- Fixed issue where trying to run gsutil on an unsupported version of Python 3
+  (3.4 or below) would crash instead of presenting an informative error.
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+
+Release 4.41 (release date: 2019-07-16)
+=======================================
+New Features
+------------------
+- Added HMAC key management for service accounts. This includes a new "hmac"
+  command to create/get/list/update/delete HMAC keys on service accounts.
+  Currently, your project must be whitelisted for use with this new HMAC
+  functionality. This restriction will be lifted in the near future.
+
+ Bug Fixes
+------------------
+- Fixed bug where copying files > 100MiB from GCS to S3 was hanging.
+- Fixed issue where content type was sometimes set improperly.
+
+
+Release 4.40 (release date: 2019-07-01)
+=======================================
+New Features
+------------------
+- Added support for running gsutil on Python 3.5+. Python 2 will reach its EOL
+  (End of Life) on Jan. 1, 2020, and gsutil will stop supporting Python 2.7 at
+  some point afterward (TBD).
+
+ Bug Fixes
+------------------
+- Fixed bug introduced in v4.39 where rsync would not correctly sync object/file
+  names containing some special URL-encodable characters (e.g. "+" and
+  whitespace characters).
+- Fixed the update command so that it no longer fails when it detects the
+  presence of additional top-level files that were added in the v4.39 release.
+
+ Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+
+Release 4.39 (release date: 2019-06-13)
+=======================================
+New Features
+------------------
+- Compression level is now configurable by setting "gzip_compression_level"
+  under the "GSUtil" section in the boto config file. The default value is 9.
+
+ Bug Fixes
+------------------
+- Fixed bug where IAM operations failed on buckets whose names lacked any
+  letters.
+
+ Other Changes
+------------------
+- Revised contribution guidelines to direct developers to submit GitHub pull
+  requests instead of using the Rietveld code review tool.
+- Several code changes to work toward Python 3 support (coming in a subsequent
+  release).
+- Several documentation and command help improvements.
+- Various improvements to test stability and feedback.
+
+
+Release 4.38 (release date: 2019-03-25)
+=======================================
+Bug Fixes
+------------------
+- Fixed issue where multiprocessing check would raise an exception if
+  /etc/os-release was not in the expected format.
+
+Other Changes
+------------------
+- Improved error message for trying to retrieve default object ACLs on a bucket
+  with Bucket Policy Only enabled.
+- When running "gsutil -D rsync ..." and encountering an error listing local
+  files, gsutil will now print a stack trace as debug-level output.
+- Several documentation updates and clarifications.
+
+
+Release 4.37 (release date: 2019-02-26)
+=======================================
+Bug Fixes
+------------------
+- Fixed a bug where XML API requests would sometimes fail with SSLError
+  exceptions due to SNI not being used for https connections.
+- Fixed "du" output spacing for 6-digit sizes.
+
+Other Changes
+------------------
+- Updated crcmod installation instructions for CentOS 6.
+
+
+Release 4.36 (release date: 2019-01-28)
+=======================================
+New features
+------------------
+- Added Bucket Policy Only support to gsutil. This includes a new
+  "bucketpolicyonly" command to get/set BPO on existing buckets, as well adding
+  the ability to set BPO at bucket creation time with "mb -b". Currently, your
+  project must be whitelisted for use with the new BPO functionality. This
+  restriction will be lifted in the near future.
+
+Bug Fixes
+------------------
+- Fixed a bug where "cp -n" would overwrite a local file at the destination if
+  its size differed from the source's size.
+
+Other Changes
+------------------
+- Updated crcmod installation instructions for enterprise SUSE systems.
+
+
+Release 4.35 (release date: 2018-12-18)
+=======================================
+New features
+------------------
+- Added -u option to rsync; this will skip copying files/objects that are newer
+  (as determined by checking mtime) at the destination.
+
+Bug Fixes
+------------------
+- The "iam ch" command now allows supplying custom IAM roles.
+- Fixed an issue where debug output was not displaying all of the loaded config
+  files under the "config path(s)" label.
+- Disabled running with multiple processes when running on Alpine Linux, as this
+  would sometimes cause gsutil to hang forever. Running with multiple threads is
+  still allowed.
+- The "rsync" command now prints log messages during synchronization to indicate
+  when symlinks are being skipped.
+- The "Boto:ca_certificates_file" config option can now be overridden using
+  the -o option.
+
+Other Changes
+------------------
+- Disallowed installing gsutil on Python versions != 2.7.
+- Several documentation updates and clarifications.
+
+
+Release 4.34 (release date: 2018-09-11)
+=======================================
+New features
+------------------
+- Added bucket lock support to gsutil. Currently, your project must be
+  whitelisted for use with the new bucket lock functionality. This restriction
+  will be lifted in the near future.
+
+Bug Fixes
+------------------
+- Fixed issue where "rsync -P" would fail if run as the root user.
+- Fixed an issue with credential caching where the source credentials for an
+  entity would change but the old cached credentials would still be used.
+
+Other Changes
+------------------
+- OAuth2 token exchanges now go to https://oauth2.googleapis.com/token instead
+  of https://accounts.google.com/o/oauth2/token. Users using gsutil behind a
+  firewall may need to adjust their firewall rules.
+- If invoked via the Cloud SDK, gsutil's debug output now displays the path to
+  gcloud's gsutil wrapper script for "gsutil path", rather than the actual entry
+  point for the bundled gsutil component.
+- Improved error messages for failed Cloud KMS requests.
+- Improved error messages for "iam ch" command to clarify that assigning
+  roles to project convenience groups (e.g. "projectEditor") is not allowed.
+- Enhanced perfdiag command to include GCE instance details (if applicable)
+  and the target bucket's location and storage class.
+- Several documentation updates and clarifications.
+
+
+Release 4.33 (release date: 2018-06-21)
+=======================================
+Bug Fixes
+------------------
+- Fixed an issue with the "rsync" command on Windows that would cause gsutil
+  to incorrectly join file path segments when the source given was the root
+  of a drive, e.g. "C:".
+- Fixed several places where gsutil referenced a variable that had not been
+  correctly imported.
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+
+Release 4.32 (release date: 2018-06-01)
+=======================================
+Bug Fixes
+------------------
+- Fixed a file path resolution issue on Windows that affected local-to-cloud
+  copy-based operations ("cp", "mv", "rsync"). If a local file URI containing
+  relative path components ("." or "..") or forward slashes (rather than
+  backslashes) was provided as a source argument, the resulting destination
+  object(s) was incorrectly named. For recursive operations, this resulted in
+  several files being copied to the same object path, overwriting each other.
+- Fixed an issue with the "rsync" command on Windows that resulted in each rsync
+  invocation not being able to delete its temporary synchronization files on
+  disk.
+- Fixed an issue where reading a specific generation of an object from S3 would
+  fail.
+- Fixed an issue where running gsutil with the top-level "-q" flag would result
+  in credential-related logging statements being emitted to stderr.
+- Gsutil no longer allows copying from streamed input if the top-level "-m" flag
+  is specified. While this was previously allowed, it did not work correctly.
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+
+Release 4.31 (release date: 2018-04-26)
+=======================================
+New features
+------------------
+- Added support for reauthentication within gsutil. Note that this only affects
+  authentication when "gs_oauth2_refresh_token" is configured under the
+  "Credentials" section of the boto config file and that token corresponds to a
+  user account enrolled in 2-step verification.
+
+Bug Fixes
+------------------
+- When creating a signed URL via the "signurl" command, gsutil now verifies that
+  the specified expiration isn't longer than 7 days (the maximum allowed by the
+  service).
+- To support rewriting objects to be encrypted using a bucket's default KMS key,
+  the "rewrite" command now rewrites all specified objects if no value is
+  specified for "encryption_key" under the "GSUtil" section in the boto config
+  file.
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+
+Release 4.30 (release date: 2018-03-28)
+=======================================
+New features
+------------------
+- Added Cloud KMS support for Google Cloud Storage resources, allowing the use
+  of customer-managed encryption keys (CMEKs). Bucket-related functionality
+  includes the new "kms" command, which can be used to get or set a bucket's
+  default KMS key. Concerning objects, users may now specify the CMEK to be used
+  for encryption via their boto config file, in the "encryption_key" attribute.
+  In this way, users may specify either a CSEK or a CMEK to encrypt new objects,
+  but not both. For more information, see "gsutil help encryption".
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+
+
+Release 4.29 (release date: 2018-03-14)
+=======================================
+New features
+------------------
+- Added transport compression support, available through the "-j" and "-J"
+  options for the "cp", "mv", and "rsync" commands. This is useful when
+  uploading files with highly-compressible content. When specificed, files being
+  uploaded are compressed on-the-fly in memory, sent to GCS, and uncompressed by
+  GCS before they are stored. See "gsutil help cp" for additional information.
+- When "use_magicfile=True" is set in the boto config file, gsutil will now
+  append the detected charset, if present, to the object's Content-Type metadata
+  field. For example, a Content-Type might be populated with
+  "text/html; charset=us-ascii" rather than simply "text/html".
+
+Bug Fixes
+------------------
+- Improved error handling and logging for upload resumption.
+- After encountering a PreconditionException, the "acl ch" command will now
+  re-fetch the object generation before retrying.
+- Fixed issue with parsing lifecycle conditions when using the XML API.
+  Conditions whose values could be evaluated by Python as "falsy" (e.g. setting
+  an "age" condition to the number 0 or "isLive" to false) would be omitted from
+  the lifecycle configuration when "prefer_api=xml" was set in the boto config
+  file. Note that the JSON API is preferred by default, so most users were
+  unlikely to encounter this issue.
+- For commands that fetch bucket ACLs or default ACLs, when the user does not
+  have storage.buckets.getIamPolicy on the GCS bucket, using the XML API will
+  now behave consistently with the JSON API and display ACL/default ACL fields
+  as empty, rather than throwing a CommandException.
+
+Other Changes
+------------------
+- Several documentation updates and clarifications.
+- The "signurl" command now uses signature V4 signing format to generate URLs.
+
+
+Release 4.28 (release date: 2017-10-11)
+=======================================
+New features
+------------------
+- Added newest version of the Boto library, which includes support for using
+  Signature Version 4 to connect to S3 buckets via the "use-sigv4 = True" and
+  "host = s3.<region>.amazonaws.com" Boto options under the "[s3]" section.
+- Added support for Requester Pays functionality when making requests to GCS
+  buckets with this feature enabled. For example usage, see the entry for "-u"
+  in "gsutil help options". Requester Pays is currently only supported for
+  requests using the GCS JSON API; XML API support will be added in a later
+  version.
+
+Bug Fixes
+------------------
+- Fixed issue where attempting to preserve ACLs by using "-p" with cp/mv/rsync
+  would fail when the destination is a local file.
+- Improved quality of several ambiguous error messages.
+
+Other Changes
+------------------
+- The proxy_rdns option is now True by default when a proxy is set. Also added
+  Boto config file comments explaining that gcloud proxy options, if present,
+  take precedence over corresponding Boto settings and environment variable
+  settings.
+- Following the deprecation of Python 2.6 support for gsutil, code sections that
+  were only present to support Python 2.6 have been removed.
+- Several documentation updates and clarifications.
+
+
+Release 4.27 (release date: 2017-06-29)
+=======================================
+New features
+------------------
+- When using the JSON API, the "ls -L" and "stat" commands now print an object's
+  storage class update time if it differs from the object's creation time; this
+  occurs when the storage class has been changed due to the bucket's lifecycle
+  management configuration.
+- Listing a bucket's metadata via "ls -Lb" now prints its metageneration.
+
+Bug Fixes
+------------------
+- When specifying custom metadata values using the top-level -h option, such
+  values may now include unicode characters as well as multiple ":" characters.
+- For Cloud SDK (gcloud) distributions of gsutil, if you have configured the
+  Cloud SDK to not pass credentials to gsutil (by running "gcloud config set
+  pass_credentials_to_gsutil false"), gsutil will now correctly work with
+  credentials obtained via "gsutil config". This would previously result in an
+  error with a message to run "gcloud auth login". Additionally, the "gsutil
+  config" command no longer prompts users to run "gcloud auth login" if this
+  option is set to false. This should allow switching between stand-alone
+  gsutil installations and gcloud-packaged gsutil installations more easily.
+- The config_file_list section in debug output now displays files in the order
+  that they are loaded.
+
+Other Changes
+------------------
+- Added XML support for some commands which previously only worked via the JSON
+  API ("lifecycle" and "defstorageclass").
+- Several documentation updates and clarifications.
+
+
+Release 4.26 (release date: 2017-05-03)
+=======================================
+New features
+------------------
+- The cp command now supports reading from and writing to named pipes.
+
+Bug Fixes
+------------------
+- Fixed issue where tab completion wasn't working.
+- Fixed issue when using the XML API where gsutil would fail to parse bucket
+  metadata for buckets using Lifecycle rules containing the SetStorageClass
+  action or MatchesStorageClass condition.
+
+Other Changes
+------------------
+- Removed -o flag from "notification create" command. The same functionality is
+  available with the -p flag; the -o flag had been mistakenly added in a
+  previous change.
+- Removed the alpha disclaimer from the iam command help text.
+- Several documentation updates and clarifications.
+
+
+Release 4.25 (release date: 2017-04-05)
+=======================================
+New features
+------------------
+- Added bucket label support to gsutil. For more details, see
+  https://cloud.google.com/compute/docs/label-or-tag-resources.
+- Added the label command, which can be used to get, set, and change the labels
+  for an existing bucket (known as "tags" for S3 buckets).
+- Listing a bucket via "gsutil ls -Lb" now also displays the labels, if any
+  exist, that are currently set on it.
+
+
+Release 4.24 (release date: 2017-03-27)
+=======================================
+New Features
+------------------
+- Added support for configuring GCS Cloud Pub/Sub notifications. For more
+  details, see https://cloud.google.com/storage/docs/pubsub-notifications.
+- Added support for specifying canned ACLs when using the rsync command.
+
+Bug Fixes
+------------------
+- Fixed a bug where error messages about invalid object names did not correctly
+  display the problematic object name.
+
+
+Release 4.23 (release date: 2017-03-09)
+=======================================
+Bug Fixes
+------------------
+- Fixed "referenced before assignment" error in some copy_helper exceptions for
+  resumable uploads and non-resumable cloud-to-local downloads.
+- The setmeta command now properly supports case sensitivity in custom metadata
+  keys when using the JSON API.
+- Fixed a resource leak affecting Windows in cases where single-process,
+  multithreaded parallelism is used that would result in an OSError with the
+  message "Too many open files".
+- Fixed HTTPError initialization failure in signurl command.
+- Fixed signurl issue where attempting to validate short-lived URLs on a slow
+  connection would fail because of URL expiration.
+- Fixed a bug where cp -r would not properly resolve wildcards for
+  cloud-to-cloud copies.
+- Fixed a bug where cp -e -r would copy symlinks.
+- Fixed a bug where cp -P would fail on Windows.
+- Fixed a bug where version -l might not show all boto configuration files.
+- Running perfdiag now only lists the objects that were created by that run of
+  perfdiag. This fixes an issue where running perfdiag against an existing
+  bucket with many objects in it could take a long time.
+
+
+Other Changes
+------------------
+- Simplified parallelism when using a single process with multiple threads.
+  With this change, gsutil will spawn a new thread pool per level of
+  parallelism. As an example, if you specify that you want a
+  parellel_thread_count of 24, this will result in 24 worker threads, except
+  when you're using parallel composite uploads or sliced downloads, in which
+  case 48 (24 * 2) worker threads will be used.
+- Extended the early deletion warning threshold when moving Coldline objects
+  to 90 days after object creation.
+- Improved several error messages and warnings.
+- Several documentation updates and clarifications.
+
+Release 4.22 (release date: 2016-10-20)
+=======================================
+New features
+------------------
+- Added per-object storage class functionality to gsutil. For more details, see
+  https://cloud.google.com/storage/docs/per-object-storage-class.
+- Added the defstorageclass command, which can be used to get and set an
+  existing bucket's default storage class.
+- The cp, mv, and rewrite commands now support the "-s" option, allowing users
+  to specify the storage class for destination object(s). When no storage class
+  is specified, the object's storage class will be assigned from either its
+  bucket's default storage class (cp/mv commands) or the source object's
+  storage class (rewrite command).
+
+Bug Fixes
+------------------
+- Fixed a bug in POSIX preservation for the cp and mv commands where POSIX
+  attributes were not propagated to cloud objects, even when the -P flag was
+  present.
+- Fixed a bug in setmeta where removing custom metadata would add an
+  empty-string value if the key did not already exist.
+- Content-Type is now obtained from symlink targets, rather than symlinks
+  themselves, when the use_magicfile option is set in the .boto configuration
+  file.
+
+Other Changes
+------------------
+- Analytics reporting now includes performance metrics such as average
+  throughput and thread idle time.
+- The iam set command now supports a -e option to specify an etag precondition
+  check. The IAM policy file returned by iam get and used by iam set has also
+  been altered to include this field.
+- Default limit for max number of processes changed to 64.
+- Several documentation updates and clarifications.
+
+Release 4.21 (release date: 2016-08-16)
+=======================================
+New Features
+------------------
+- The console output for many commands has been improved to display
+  command progress.
+- The cp, mv, and rsync commands now support a -P option that preserves
+  POSIX file attributes from the source. Currently, mode, gid, uid,
+  atime, and mtime attributes are supported for uploads, downloads,
+  and copies.
+- gsutil can now optionally report anonymous usage statistics that help
+  gsutil developers improve the tool. For non-gcloud distributions,
+  prompts have been added to the config and update commands. Prompts can
+  be disabled via the disable_analytics_prompt value in the .boto
+  configuration file.
+- Added the iam commmand, which can be used to set IAM policies on
+  Google Cloud Storage buckets and objects. This feature is currently in
+  alpha and requires a whitelist application to use it - see
+  "gsutil help iam" for  details.
+- The hash command now supports retrieving hashes for cloud objects.
+
+Bug Fixes
+------------------
+- Fixed a bug where rsync -e -r could fail for subdirectories with
+  broken symlinks.
+- Fixed an access error when interacting with S3 user-specific
+  directories.
+
+Other Changes
+------------------
+- Updated boto library dependency to 2.42.0.
+
+Release 4.20 (release date: 2016-07-20)
+=======================================
+New Features
+------------------
+- gsutil now outputs a message that estimates the total number of objects for
+  commands affecting more than 30,000 objects. This value can be adjusted via
+  task_estimation_threshold in the .boto configuration file.
+
+Bug Fixes
+------------------
+- Fixed a bug in resumable downloads that could raise UnboundLocalError if
+  the download file was not readable.
+- Updated oauth2client to version 2.2.0, fixing some IOError and OSError cases.
+- Fixed bug in gsutil ls that would show update time instead of creation
+  time when using the JSON API and -L or -l flags.
+- Fixed a bug in gsutil rsync -d that could cause erroneous removal of
+  an extra destination object.
+- Fixed downloads to include accept-encoding:gzip logic when appropriate.
+
+Other Changes
+------------------
+- gsutil rsync now stores modification time (mtime) for cloud objects.
+- Changed the default change detection algorithm of gsutil rsync from file
+  size to file mtime, falling back to checksum and finally file
+  size as alternatives. This allows for increased accuracy of rsync without
+  the speed sacrifice that comes from checksum calculation, and makes gsutil
+  rsync work more similarly to how Linux rsync works. Note that the first
+  run of a local-to-cloud rsync using this new algorithm may be slower than
+  subsequent runs, as the cloud objects will not initially have an mtime, and
+  the algorithm will fall back to the slower checksum-based alternative in
+  addition to adding mtime to the cloud objects.
+- When using the JSON API, gsutil will output a progress message before
+  retrying a request if enough time has passed since the first attempt.
+- Improved error detection in dry runs of gsutil rsync by attempting to open
+  files that would be copied.
+- Added time created and time updated properties to output of gsutil ls -Lb.
+- Added archived time property to output of gsutil ls -La and gsutil stat.
+- Changed minimum number of source objects for gsutil compose from 2 to 1.
+- Removed an HTTP metadata get call from cp, acl, and setmeta commands. This
+  improves the speed of gsutil cp for small objects by over 50%.
+- Several documentation updates and clarifications.
+
+Release 4.19 (release date: 2016-04-13)
+=======================================
+Deprecation Notice
+------------------
+- gsutil support for Python 2.6 is deprecated, and gsutil will stop
+  supporting Python 2.6 on September 1, 2016. This change is
+  being made for two reasons. First, Python 2.6 stopped
+  receiving security patches since October 2013. Second,
+  removing Python 2.6 support will enable gsutil to add support
+  for Python 3. Versions of gsutil released prior to September 1,
+  2016 will continue to work with Python 2.6. However, bug fixes
+  will not be made retroactively to older gsutil versions, and users
+  reporting bugs will be asked to upgrade to the current gsutil
+  version (using Python 2.7, or, when it is supported, Python 3).
+
+Other Changes
+-------------
+- Improved documentation around Cloud SDK (gcloud) installs.
+
+Release 4.18 (release date: 2016-03-22)
+=======================================
+New Features
+------------
+- gsutil now supports the beta Customer-Supplied Encryption Keys
+  features for Google Cloud Storage objects, via the JSON API.
+  This feature allows you to encrypt your data with keys that
+  are not permanently stored on Google's servers. You can provide
+  encryption and decryption keys in your .boto configuration file.
+  As long as an encryption key is specified in the configuration file,
+  all gs:// objects that gsutil creates will be stored encrypted
+  with that key, and all encrypted objects will be decrypted when
+  downloaded. See "gsutil help csek" for more information.
+- Added the rewrite command, which can be used to perform
+  key rotation for objects encrypted with customer-supplied
+  encryption keys.
+
+Bug Fixes
+---------
+- Fixed an AttributeError that could occur when running in debug mode
+  for operations involving wildcards, recursion, or listing.
+- Fixed an ArgumentException that could occur when using perfdiag
+  write throughput tests with parallelism.
+- Restored debug mode output for resumable uploads using the JSON API.
+- Fixed a bug where rm -r on a bucket subdirectory would exit with
+  code 1 even though it succeeded.
+- Fixed a bug where cp -R of a single file with a destination other
+  than the bucket root would copy to the bucket root.
+- Fixed a bug when using a single process with multiple threads
+  where CTRL-C would not stop the process until one thread completed
+  a task.
+
+Other Changes
+-------------
+- Improved exception logging in debug mode.
+- Added "cache-control: no-transform" to all uploads
+  using compression ("gsutil cp -z" or "gsutil cp -Z") to ensure that
+  doubly-compressed objects can be downloaded with data integrity
+  checking.
+- Reduced the default number of threads per-process on Linux systems
+  from 10 to 5.
+- Documented additional OS X Unicode limitations.
+- The config command now includes the custom client ID and secret in the
+  configuration file output if the command is run with those values
+  configured.
+
+Release 4.17 (release date: 2016-02-18)
+=======================================
+Bug Fixes
+---------
+- Fixed an oauth2client dependency break that caused
+  the PyPi distribution of gsutil to allow oauth2client 2.0.0,
+  causing all commands to fail with an ImportError.
+- Fixed a bug where gsutil could leak multiprocessing.Manager
+  processes when terminating signals (such as CTRL-C) were sent.
+- Fixed a bug where the -q option did not suppress output
+  from the stat command.
+- Fixed a bug where deleting an empty bucket with rm -r
+  would return a non-zero exit code even when successful.
+- Fixed UnicodeEncodeErrors that could occur when using the du
+  command with a pipe on objects containing non-ASCII characters.
+
+Other Changes
+-------------
+- Many documentation improvements and clarifications.
+
+Release 4.16 (release date: 2015-11-25)
+=======================================
+New Features
+------------
+- The ls command now supports a -d option (similar to Unix ls -d)
+  for suppressing recursion into subdirectories.
+- The signurl command now accepts JSON-format private key files
+  generated by the Google Developers Console.
+- The signurl command now supports generating resumable upload
+  start URLs.
+- The cp command now supports a -Z option which will gzip-compress all
+  files (regardless of their extensions) as they are uploaded.
+
+Bug Fixes
+---------
+- Fixed a bug where an expired OAuth2 token could include the OAuth2
+  token response as part of the download, causing it to fail end-to-end
+  integrity checks and be deleted.
+- Fixed a bug where streaming downloads using the JSON API would restart
+  from the beginning of the stream if the connection broke. This bug
+  could also cause data corruption in streaming downloads, because
+  streaming downloads are not validated with end-to-end integrity checks.
+- Fixed an internal_failure exception that could occur when an OAuth2
+  token refresh returned a transient error, such as an HTTP 503.
+- Fixed a resource deadlock exception in oauth2client that could cause
+  sliced downloads to hang.
+- Fixed a bug where cp/rsync -p would use the default object
+  ACL for the destination object if the caller did not have OWNER
+  permission on the source object.
+- Fixed a potential race condition when using perfdiag with multiple
+  threads and/or processes.
+- Fixed an AttributeError that could occur when using acl ch -p.
+- Fixed a bug where the mv command did not properly handle the global
+  -m flag.
+- Fixed a UnicodeEncodeError that could occur when iterating over
+  non-Unicode-named directories.
+- Fixed a bug where an object name including a wildcard could cause
+  an infinite loop during a recursive listing.
+- Fixed a Unicode bug when using cp or ls on Windows on an object
+  containing certain Unicode characters. However, even with this fix
+  Unicode can still be problematic on Windows; consult
+  "gsutil help encoding" for details.
+- Fixed a Windows performance issue during rsync diff generation.
+- Fixed a bug in the ordering of ls output.
+- Fixed a bug where Windows help output included ANSI escape codes.
+- Fixed a compatibility bug with perfdiag -i with input generated prior
+  to gsutil 4.14.
+
+Other Changes
+-------------
+- Several documentation updates, including rsync exclusion pattern matching,
+  service account configuration, cp/rsync recursion flags, multi-object rm,
+  versioned URL removal, destination subdirectory naming, wildcard behavior,
+  regional buckets, and s3 connection reset.
+- Improvements to Unicode documentation including LANG variable and iconv
+  tool.
+
 Release 4.15 (release date: 2015-09-08)
 =======================================
 Bug Fixes
@@ -506,7 +1255,7 @@ Major New Gsutil Version - Backwards-Incompatible Changes
 - Downloading object names ending with '/' is no longer supported to avoid
   problems this caused for directores using the Google Cloud Console.
 - rm -r now implies rm -ra (removing all object versions recursively).
-- All commands using the global -m option or a force option (such as 
+- All commands using the global -m option or a force option (such as
   rm -f or cp -c) will now return a non-zero exit code if there are any
   failures during the operation.
 - MD5 and CRC32c values are now represented in base64 encoding instead
@@ -1614,7 +2363,7 @@ New Features
 - Support for multi-threading and recursive operation for setacl command
   (see “gsutil help setacl”).
 - Ability to use the UNIX 'file' command to do content type recognition as
-  an alternative to filename extensions. 
+  an alternative to filename extensions.
 - Introduction of new end-to-end test suite.
 - The gsutil version command now computes a checksum of the code, to detect
   corruption and local modification when assisting with technical support.

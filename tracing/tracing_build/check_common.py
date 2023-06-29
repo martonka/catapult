@@ -26,9 +26,9 @@ def CheckListedFilesSorted(src_file, group_name, listed_files):
   sorted_files = sorted(listed_files)
   if sorted_files != listed_files:
     mismatch = ''
-    for i in range(len(listed_files)):
-      if listed_files[i] != sorted_files[i]:
-        mismatch = listed_files[i]
+    for i, f in enumerate(listed_files):
+      if f != sorted_files[i]:
+        mismatch = f
         break
     what_is = '  ' + '\n  '.join(listed_files)
     what_should_be = '  ' + '\n  '.join(sorted_files)
@@ -84,7 +84,7 @@ def CheckCommon(file_name, listed_files):
         '\n\n'
         '  Note: only files actually used in about:tracing should\n'
         '  be listed in the build files. Try running \n'
-        '       tracing/bin/update_gypi\n'
+        '       tracing/bin/update_gni\n'
         '  to update the files automatically.')
 
   return error

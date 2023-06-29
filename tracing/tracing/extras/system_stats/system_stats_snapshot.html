@@ -11,7 +11,7 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.e.system_stats', function() {
-  var ObjectSnapshot = tr.model.ObjectSnapshot;
+  const ObjectSnapshot = tr.model.ObjectSnapshot;
 
   /**
    * @constructor
@@ -21,33 +21,34 @@ tr.exportTo('tr.e.system_stats', function() {
     this.objectInstance = objectInstance;
     this.ts = ts;
     this.args = args;
-    this.stats = args;
+    this.stats_ = args;
   }
 
   SystemStatsSnapshot.prototype = {
     __proto__: ObjectSnapshot.prototype,
 
-    initialize: function() {
-      if (this.args.length == 0)
+    initialize() {
+      if (this.args.length === 0) {
         throw new Error('No system stats snapshot data.');
+      }
       this.stats_ = this.args;
     },
 
-    getStats: function() {
+    getStats() {
       return this.stats_;
     },
 
-    setStats: function(stats) {
+    setStats(stats) {
       this.stats_ = stats;
     }
   };
 
   ObjectSnapshot.subTypes.register(
-    SystemStatsSnapshot,
-    {typeName: 'base::TraceEventSystemStatsMonitor::SystemStats'});
+      SystemStatsSnapshot,
+      {typeName: 'base::TraceEventSystemStatsMonitor::SystemStats'});
 
   return {
-    SystemStatsSnapshot: SystemStatsSnapshot
+    SystemStatsSnapshot,
   };
 });
 </script>

@@ -5,9 +5,9 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="import" href="/tracing/base/iteration_helpers.html">
+<link rel="import" href="/tracing/base/scalar.html">
 <link rel="import" href="/tracing/base/unit.html">
-<link rel="import" href="/tracing/value/numeric.html">
+<link rel="import" href="/tracing/base/utils.html">
 
 <script>
 'use strict';
@@ -24,7 +24,7 @@ tr.exportTo('tr.model', function() {
     this.parent = undefined;
     this.children = [];
 
-    // String -> ScalarNumeric.
+    // String -> Scalar.
     this.numerics = {};
 
     // String -> string.
@@ -81,45 +81,47 @@ tr.exportTo('tr.model', function() {
           this.containerMemoryDump.containerName;
     },
 
-    getDescendantDumpByFullName: function(fullName) {
+    getDescendantDumpByFullName(fullName) {
       return this.containerMemoryDump.getMemoryAllocatorDumpByFullName(
           this.fullName + '/' + fullName);
     },
 
-    isDescendantOf: function(otherDump) {
-      var dump = this;
-      while (dump !== undefined) {
-        if (dump === otherDump)
-          return true;
-        dump = dump.parent;
-      }
-      return false;
+    isDescendantOf(otherDump) {
+      if (this === otherDump) return true;
+      if (this.parent === undefined) return false;
+      return this.parent.isDescendantOf(otherDump);
     },
 
-    addNumeric: function(name, numeric) {
-      if (!(numeric instanceof tr.v.ScalarNumeric))
-        throw new Error('Numeric value must be an instance of ScalarNumeric.');
-      if (name in this.numerics)
+    addNumeric(name, numeric) {
+      if (!(numeric instanceof tr.b.Scalar)) {
+        throw new Error('Numeric value must be an instance of Scalar.');
+      }
+      if (name in this.numerics) {
         throw new Error('Duplicate numeric name: ' + name + '.');
+      }
       this.numerics[name] = numeric;
     },
 
-    addDiagnostic: function(name, text) {
-      if (typeof text !== 'string')
+    addDiagnostic(name, text) {
+      if (typeof text !== 'string') {
         throw new Error('Diagnostic text must be a string.');
-      if (name in this.diagnostics)
+      }
+      if (name in this.diagnostics) {
         throw new Error('Duplicate diagnostic name: ' + name + '.');
+      }
       this.diagnostics[name] = text;
     },
 
-    aggregateNumericsRecursively: function(opt_model) {
-      var numericNames = new Set();
+    aggregateNumericsRecursively(opt_model) {
+      const numericNames = new Set();
 
       // Aggregate descendants's numerics recursively and gather children's
       // numeric names.
       this.children.forEach(function(child) {
         child.aggregateNumericsRecursively(opt_model);
-        tr.b.iterItems(child.numerics, numericNames.add, numericNames);
+        for (const [item, value] of Object.entries(child.numerics)) {
+          numericNames.add(item, value);
+        }
       }, this);
 
       // Aggregate children's numerics.
@@ -127,10 +129,10 @@ tr.exportTo('tr.model', function() {
         if (numericName === MemoryAllocatorDump.SIZE_NUMERIC_NAME ||
             numericName === MemoryAllocatorDump.EFFECTIVE_SIZE_NUMERIC_NAME ||
             this.numerics[numericName] !== undefined) {
-            // Don't aggregate size and effective size numerics. These are
-            // calculated in GlobalMemoryDump.prototype.calculateSizes() and
-            // GlobalMemoryDump.prototype.calculateEffectiveSizes respectively.
-            // Also don't aggregate numerics that the parent already has.
+          // Don't aggregate size and effective size numerics. These are
+          // calculated in GlobalMemoryDump.prototype.calculateSizes() and
+          // GlobalMemoryDump.prototype.calculateEffectiveSizes respectively.
+          // Also don't aggregate numerics that the parent already has.
           return;
         }
 
@@ -144,16 +146,15 @@ tr.exportTo('tr.model', function() {
 
   // TODO(petrcermak): Consider moving this to tr.v.Histogram.
   MemoryAllocatorDump.aggregateNumerics = function(numerics, opt_model) {
-    var shouldLogWarning = !!opt_model;
-    var aggregatedUnit = undefined;
-    var aggregatedValue = 0;
+    let shouldLogWarning = !!opt_model;
+    let aggregatedUnit = undefined;
+    let aggregatedValue = 0;
 
     // Aggregate the units and sum up the values of the numerics.
     numerics.forEach(function(numeric) {
-      if (numeric === undefined)
-        return;
+      if (numeric === undefined) return;
 
-      var unit = numeric.unit;
+      const unit = numeric.unit;
       if (aggregatedUnit === undefined) {
         aggregatedUnit = unit;
       } else if (aggregatedUnit !== unit) {
@@ -173,10 +174,9 @@ tr.exportTo('tr.model', function() {
       aggregatedValue += numeric.value;
     }, this);
 
-    if (aggregatedUnit === undefined)
-      return undefined;
+    if (aggregatedUnit === undefined) return undefined;
 
-    return new tr.v.ScalarNumeric(aggregatedUnit, aggregatedValue);
+    return new tr.b.Scalar(aggregatedUnit, aggregatedValue);
   };
 
   /**
@@ -194,7 +194,7 @@ tr.exportTo('tr.model', function() {
    *
    * @enum
    */
-  var MemoryAllocatorDumpInfoType = {
+  const MemoryAllocatorDumpInfoType = {
     // The provided size of a MemoryAllocatorDump was less than the aggregated
     // size of its children.
     //
@@ -213,9 +213,9 @@ tr.exportTo('tr.model', function() {
   };
 
   return {
-    MemoryAllocatorDump: MemoryAllocatorDump,
-    MemoryAllocatorDumpLink: MemoryAllocatorDumpLink,
-    MemoryAllocatorDumpInfoType: MemoryAllocatorDumpInfoType
+    MemoryAllocatorDump,
+    MemoryAllocatorDumpLink,
+    MemoryAllocatorDumpInfoType,
   };
 });
 </script>

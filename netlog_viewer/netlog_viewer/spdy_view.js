@@ -33,10 +33,7 @@ var SpdyView = (function() {
   SpdyView.MAIN_BOX_ID = 'spdy-view-tab-content';
   SpdyView.STATUS_ID = 'spdy-view-status';
   SpdyView.STATUS_HTTP2_ENABLED = 'spdy-view-http2-enabled';
-  SpdyView.STATUS_SPDY31_ENABLED = 'spdy-view-spdy31-enabled';
-  SpdyView.STATUS_ALTERNATE_SERVICE = 'spdy-view-alternate-service';
   SpdyView.STATUS_ALPN_PROTOCOLS = 'spdy-view-alpn-protocols';
-  SpdyView.STATUS_NPN_PROTOCOLS = 'spdy-view-npn-protocols';
   SpdyView.SESSION_INFO_ID = 'spdy-view-session-info';
   SpdyView.SESSION_INFO_CONTENT_ID = 'spdy-view-session-info-content';
   SpdyView.SESSION_INFO_NO_CONTENT_ID =
@@ -51,7 +48,7 @@ var SpdyView = (function() {
 
     onLoadLogFinish: function(data) {
       return this.onSpdySessionInfoChanged(data.spdySessionInfo) &&
-             this.onSpdyStatusChanged(data.spdyStatus);
+          this.onSpdyStatusChanged(data.spdyStatus);
     },
 
     /**
@@ -87,7 +84,7 @@ var SpdyView = (function() {
         var a = addNodeWithText(idCell, 'a', s.source_id);
         a.href = '#events&q=id:' + s.source_id;
 
-        var kFields = ['protocol_negotiated', 'active_streams',
+        var kFields = ['negotiated_protocol', 'active_streams',
           'unclaimed_pushed_streams', 'max_concurrent_streams',
           'streams_initiated_count', 'streams_pushed_count',
           'streams_pushed_and_claimed_count',
@@ -110,24 +107,9 @@ var SpdyView = (function() {
       if (!spdyStatus)
         return false;
 
-      $(SpdyView.STATUS_HTTP2_ENABLED).textContent =
-          (spdyStatus.enable_http2 == undefined ?
-           spdyStatus.spdy_enabled : spdyStatus.enable_http2);
+      $(SpdyView.STATUS_HTTP2_ENABLED).textContent = spdyStatus.enable_http2;
 
-      $(SpdyView.STATUS_SPDY31_ENABLED).textContent =
-          (spdyStatus.enable_spdy31 == undefined ?
-           spdyStatus.spdy_enabled : spdyStatus.enable_spdy31);
-
-      $(SpdyView.STATUS_ALTERNATE_SERVICE).textContent =
-          (spdyStatus.use_alternative_services == undefined ?
-           spdyStatus.use_alternate_protocols :
-           spdyStatus.use_alternative_services);
-
-      $(SpdyView.STATUS_ALPN_PROTOCOLS).textContent =
-          (spdyStatus.alpn_protos || spdyStatus.next_protos);
-
-      $(SpdyView.STATUS_NPN_PROTOCOLS).textContent =
-          (spdyStatus.npn_protos || spdyStatus.next_protos);
+      $(SpdyView.STATUS_ALPN_PROTOCOLS).textContent = spdyStatus.alpn_protos;
 
       return true;
     }

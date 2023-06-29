@@ -23,8 +23,8 @@ tr.exportTo('tr.model', function() {
    * @constructor
    */
   function AsyncSlice(category, title, colorId, start, args, duration,
-                      opt_isTopLevel, opt_cpuStart, opt_cpuDuration,
-                      opt_argsStripped) {
+      opt_isTopLevel, opt_cpuStart, opt_cpuDuration,
+      opt_argsStripped) {
     tr.model.TimedEvent.call(this, start);
 
     this.category = category || '';
@@ -57,14 +57,17 @@ tr.exportTo('tr.model', function() {
     // be topLevel. All legacy async events are toplevel by definition.
     this.isTopLevel = (opt_isTopLevel === true);
 
-    if (opt_cpuStart !== undefined)
+    if (opt_cpuStart !== undefined) {
       this.cpuStart = opt_cpuStart;
+    }
 
-    if (opt_cpuDuration !== undefined)
+    if (opt_cpuDuration !== undefined) {
       this.cpuDuration = opt_cpuDuration;
+    }
 
-    if (opt_argsStripped !== undefined)
+    if (opt_argsStripped !== undefined) {
       this.argsStripped = opt_argsStripped;
+    }
   }
 
   AsyncSlice.prototype = {
@@ -80,15 +83,23 @@ tr.exportTo('tr.model', function() {
 
     set parentContainer(parentContainer) {
       this.parentContainer_ = parentContainer;
-      for (var i = 0; i < this.subSlices.length; i++) {
-        var subSlice = this.subSlices[i];
-        if (subSlice.parentContainer === undefined)
+      for (let i = 0; i < this.subSlices.length; i++) {
+        const subSlice = this.subSlices[i];
+        if (subSlice.parentContainer === undefined) {
           subSlice.parentContainer = parentContainer;
+        }
       }
     },
 
     get viewSubGroupTitle() {
       return this.title;
+    },
+
+    // Certain AsyncSlices can provide a grouping key to group a set of
+    // independent tracks, while grouping by |viewSubGroupTitle| puts slices
+    // into a single (maybe multi-row but single) track.
+    get viewSubGroupGroupingKey() {
+      return undefined;
     },
 
     get userFriendlyName() {
@@ -97,41 +108,48 @@ tr.exportTo('tr.model', function() {
     },
 
     get stableId() {
-      var parentAsyncSliceGroup = this.parentContainer.asyncSliceGroup;
+      const parentAsyncSliceGroup = this.parentContainer.asyncSliceGroup;
       return parentAsyncSliceGroup.stableId + '.' +
           parentAsyncSliceGroup.slices.indexOf(this);
     },
 
-    findTopmostSlicesRelativeToThisSlice: function*(eventPredicate, opt_this) {
+    * findTopmostSlicesRelativeToThisSlice(eventPredicate, opt_this) {
       if (eventPredicate(this)) {
         yield this;
         return;
       }
-      for (var s of this.subSlices)
-        yield * s.findTopmostSlicesRelativeToThisSlice(eventPredicate);
+      for (const s of this.subSlices) {
+        yield* s.findTopmostSlicesRelativeToThisSlice(eventPredicate);
+      }
     },
 
-    findDescendentSlice: function(targetTitle) {
-      if (!this.subSlices)
-        return undefined;
+    findDescendentSlice(targetTitle) {
+      if (!this.subSlices) return undefined;
 
-      for (var i = 0; i < this.subSlices.length; i++) {
-        if (this.subSlices[i].title == targetTitle)
+      for (let i = 0; i < this.subSlices.length; i++) {
+        if (this.subSlices[i].title === targetTitle) {
           return this.subSlices[i];
-        var slice = this.subSlices[i].findDescendentSlice(targetTitle);
+        }
+        const slice = this.subSlices[i].findDescendentSlice(targetTitle);
         if (slice) return slice;
       }
       return undefined;
     },
 
-    enumerateAllDescendents: function*() {
-      for (var slice of this.subSlices)
+    * enumerateAllDescendents() {
+      for (const slice of this.subSlices) {
         yield slice;
-      for (var slice of this.subSlices)
-        yield * slice.enumerateAllDescendents();
+      }
+      for (const slice of this.subSlices) {
+        // Slices might contain sub-events different from AsyncSlice.
+        // We don't go any deeper in that case.
+        if (slice.enumerateAllDescendents !== undefined) {
+          yield* slice.enumerateAllDescendents();
+        }
+      }
     },
 
-    compareTo: function(that) {
+    compareTo(that) {
       return this.title.localeCompare(that.title);
     }
   };
@@ -145,7 +163,7 @@ tr.exportTo('tr.model', function() {
 
 
   return {
-    AsyncSlice: AsyncSlice
+    AsyncSlice,
   };
 });
 </script>

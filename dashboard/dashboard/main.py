@@ -1,8 +1,10 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """URL endpoint for the main page which lists recent anomalies."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import datetime
 import logging
@@ -10,8 +12,8 @@ import logging
 from google.appengine.ext import ndb
 
 from dashboard import email_template
-from dashboard import request_handler
-from dashboard import utils
+from dashboard.common import request_handler
+from dashboard.common import utils
 from dashboard.models import anomaly
 
 _ANOMALY_FETCH_LIMIT = 1000
@@ -65,14 +67,13 @@ def _GetRecentAnomalies(days, sheriff):
   Returns:
     A list of Anomaly entities sorted from large to small relative change.
   """
-  oldest_time = datetime.datetime.now() - datetime.timedelta(days=days)
-  anomalies_query = anomaly.Anomaly.query(
-      anomaly.Anomaly.timestamp > oldest_time,
-      anomaly.Anomaly.sheriff == sheriff)
-  anomalies = anomalies_query.fetch(limit=_ANOMALY_FETCH_LIMIT)
-  anomalies.sort(key=lambda a: abs(a.percent_changed), reverse=True)
+  anomalies, _, _ = anomaly.Anomaly.QueryAsync(
+      min_timestamp=datetime.datetime.now() - datetime.timedelta(days=days),
+      subscriptions=[sheriff.id()],
+      limit=_ANOMALY_FETCH_LIMIT).get_result()
   # We only want to list alerts that aren't marked invalid or ignored.
   anomalies = [a for a in anomalies if a.bug_id is None or a.bug_id > 0]
+  anomalies.sort(key=lambda a: abs(a.percent_changed), reverse=True)
   return anomalies
 
 
@@ -110,12 +111,10 @@ def _AnomalyInfoDicts(anomalies, tests):
   """
   anomaly_list = []
   for anomaly_entity in anomalies:
-    # TODO(qyearsley): Add test coverage. See catapult:#1346.
     test = tests.get(anomaly_entity.GetTestMetadataKey())
     if not test:
-      logging.warning(
-          'No TestMetadata entity for key: %s.',
-          anomaly_entity.GetTestMetadataKey())
+      logging.warning('No TestMetadata entity for key: %s.',
+                      anomaly_entity.GetTestMetadataKey())
       continue
     subtest_path = '/'.join(test.test_path.split('/')[3:])
     graph_link = email_template.GetGroupReportPageLink(anomaly_entity)

@@ -15,6 +15,11 @@
 """Implementation of compose command for Google Cloud Storage."""
 
 from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import division
+from __future__ import unicode_literals
+
+from boto import config
 
 from gslib.bucket_listing_ref import BucketListingObject
 from gslib.command import Command
@@ -24,13 +29,15 @@ from gslib.exception import CommandException
 from gslib.storage_url import ContainsWildcard
 from gslib.storage_url import StorageUrlFromString
 from gslib.third_party.storage_apitools import storage_v1_messages as apitools_messages
-from gslib.translation_helper import PreconditionsFromHeaders
+from gslib.utils.encryption_helper import GetEncryptionKeyWrapper
+from gslib.utils.translation_helper import PreconditionsFromHeaders
 
 MAX_COMPONENT_COUNT = 1024
 MAX_COMPOSE_ARITY = 32
+MAX_COMPONENT_RATE = 200
 
 _SYNOPSIS = """
-  gsutil compose gs://bucket/obj1 gs://bucket/obj2 ... gs://bucket/composite
+  gsutil compose gs://bucket/obj1 [gs://bucket/obj2 ...] gs://bucket/composite
 """
 
 _DETAILED_HELP_TEXT = ("""
@@ -40,19 +47,18 @@ _DETAILED_HELP_TEXT = ("""
 
 <B>DESCRIPTION</B>
   The compose command creates a new object whose content is the concatenation
-  of a given sequence of component objects under the same bucket. gsutil uses
+  of a given sequence of source objects under the same bucket. gsutil uses
   the content type of the first source object to determine the destination
   object's content type. For more information, please see:
-  https://developers.google.com/storage/docs/composite-objects
+  https://cloud.google.com/storage/docs/composite-objects
 
-  Note also that the gsutil cp command will automatically split uploads for
+  Note also that the gsutil cp command can automatically split uploads for
   large files into multiple component objects, upload them in parallel, and
-  compose them into a final object (which will be subject to the component
-  count limit). This will still perform all uploads from a single machine. For
-  extremely large files and/or very low per-machine bandwidth, you may want to
-  split the file and upload it from multiple machines, and later compose these
-  parts of the file manually. See the 'PARALLEL COMPOSITE UPLOADS' section under
-  'gsutil help cp' for details.
+  compose them into a final object. This will still perform all uploads from
+  a single machine. For extremely large files and/or very low per-machine
+  bandwidth, you may want to split the file and upload it from multiple
+  machines, and later compose these parts of the file manually. See the
+  'PARALLEL COMPOSITE UPLOADS' section under 'gsutil help cp' for details.
 
   Appending simply entails uploading your new data to a temporary object,
   composing it with the growing append-target, and deleting the temporary
@@ -63,10 +69,9 @@ _DETAILED_HELP_TEXT = ("""
         gs://bucket/append-target
     $ gsutil rm gs://bucket/data-to-append
 
-  Note that there is a limit (currently %d) to the number of components for a
-  given composite object. This means you can append to each object at most %d
-  times.
-""" % (MAX_COMPONENT_COUNT, MAX_COMPONENT_COUNT - 1))
+  Note that there is a limit (currently %d) to the number of components that can
+  be composed in a single operation.
+""" % (MAX_COMPOSE_ARITY))
 
 
 class ComposeCommand(Command):
@@ -77,7 +82,7 @@ class ComposeCommand(Command):
       'compose',
       command_name_aliases=['concat'],
       usage_synopsis=_SYNOPSIS,
-      min_args=2,
+      min_args=1,
       max_args=MAX_COMPOSE_ARITY + 1,
       supported_sub_args='',
       # Not files, just object names without gs:// prefix.
@@ -86,10 +91,7 @@ class ComposeCommand(Command):
       urls_start_arg=1,
       gs_api_support=[ApiSelector.XML, ApiSelector.JSON],
       gs_default_api=ApiSelector.JSON,
-      argparse_arguments=[
-          CommandArgument.MakeZeroOrMoreCloudURLsArgument()
-      ]
-  )
+      argparse_arguments=[CommandArgument.MakeZeroOrMoreCloudURLsArgument()])
   # Help specification. See help_provider.py for documentation.
   help_spec = Command.HelpSpec(
       help_name='compose',
@@ -115,8 +117,8 @@ class ComposeCommand(Command):
     self.CheckProvider(target_url)
     if target_url.HasGeneration():
       raise CommandException('A version-specific URL (%s) cannot be '
-                             'the destination for gsutil compose - abort.'
-                             % target_url)
+                             'the destination for gsutil compose - abort.' %
+                             target_url)
 
     dst_obj_metadata = apitools_messages.Object(name=target_url.object_name,
                                                 bucket=target_url.bucket_name)
@@ -134,8 +136,7 @@ class ComposeCommand(Command):
         self.CheckProvider(src_url)
 
         if src_url.bucket_name != target_url.bucket_name:
-          raise CommandException(
-              'GCS does not support inter-bucket composing.')
+          raise CommandException('GCS does not support inter-bucket composing.')
 
         if not first_src_url:
           first_src_url = src_url
@@ -151,17 +152,22 @@ class ComposeCommand(Command):
           raise CommandException('"compose" called with too many component '
                                  'objects. Limit is %d.' % MAX_COMPOSE_ARITY)
 
-    if len(components) < 2:
-      raise CommandException('"compose" requires at least 2 component objects.')
+    if not components:
+      raise CommandException('"compose" requires at least 1 component object.')
 
     dst_obj_metadata.contentType = self.gsutil_api.GetObjectMetadata(
-        first_src_url.bucket_name, first_src_url.object_name,
-        provider=first_src_url.scheme, fields=['contentType']).contentType
+        first_src_url.bucket_name,
+        first_src_url.object_name,
+        provider=first_src_url.scheme,
+        fields=['contentType']).contentType
 
     preconditions = PreconditionsFromHeaders(self.headers or {})
 
-    self.logger.info(
-        'Composing %s from %d component objects.', target_url, len(components))
-    self.gsutil_api.ComposeObject(components, dst_obj_metadata,
-                                  preconditions=preconditions,
-                                  provider=target_url.scheme)
+    self.logger.info('Composing %s from %d component object(s).', target_url,
+                     len(components))
+    self.gsutil_api.ComposeObject(
+        components,
+        dst_obj_metadata,
+        preconditions=preconditions,
+        provider=target_url.scheme,
+        encryption_tuple=GetEncryptionKeyWrapper(config))

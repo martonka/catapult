@@ -1,7 +1,9 @@
 # Copyright 2016 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
 from py_trace_event import trace_time
+import six
 
 
 r"""Instrumentation-based profiling for Python.
@@ -48,7 +50,7 @@ in the child processes.
 """
 
 try:
-  import trace_event_impl
+  from . import trace_event_impl
 except ImportError:
   trace_event_impl = None
 
@@ -61,15 +63,25 @@ def trace_can_enable():
   """
   return trace_event_impl != None
 
+# Default TracedMetaClass to type incase trace_event_impl is not defined.
+# This is to avoid exception during import time since TracedMetaClass typically
+# used in class definition scope.
+TracedMetaClass = type
+
+
 if trace_event_impl:
   import time
 
+  # Trace file formats
+  JSON = trace_event_impl.JSON
+  JSON_WITH_METADATA = trace_event_impl.JSON_WITH_METADATA
+  PROTOBUF = trace_event_impl.PROTOBUF
 
   def trace_is_enabled():
     return trace_event_impl.trace_is_enabled()
 
-  def trace_enable(logfile):
-    return trace_event_impl.trace_enable(logfile)
+  def trace_enable(logfile, format=None):
+    return trace_event_impl.trace_enable(logfile, format)
 
   def trace_disable():
     return trace_event_impl.trace_disable()
@@ -78,12 +90,22 @@ if trace_event_impl:
     trace_event_impl.trace_flush()
 
   def trace_begin(name, **kwargs):
-    args_to_log = {key: repr(value) for key, value in kwargs.iteritems()}
+    args_to_log = {key: repr(value) for key, value in six.iteritems(kwargs)}
     trace_event_impl.add_trace_event("B", trace_time.Now(), "python", name,
                                      args_to_log)
 
   def trace_end(name):
     trace_event_impl.add_trace_event("E", trace_time.Now(), "python", name)
+
+  def trace_set_thread_name(thread_name):
+    trace_event_impl.add_trace_event("M", trace_time.Now(), "__metadata",
+                                     "thread_name", {"name": thread_name})
+
+  def trace_add_benchmark_metadata(*args, **kwargs):
+    trace_event_impl.trace_add_benchmark_metadata(*args, **kwargs)
+
+  def trace_set_clock_snapshot(*args, **kwargs):
+    trace_event_impl.trace_set_clock_snapshot(*args, **kwargs)
 
   def trace(name, **kwargs):
     return trace_event_impl.trace(name, **kwargs)
@@ -93,27 +115,19 @@ if trace_event_impl:
   def traced(fn):
     return trace_event_impl.traced(fn)
 
-  def clock_sync(sync_id, issue_ts=None):
-    '''
-    Add a clock sync event to the trace log.
-
-    Args:
-      sync_id: ID of clock sync event.
-      issue_ts: Time at which clock sync was issued, in microseconds.
-    '''
-    time_stamp = trace_time.Now()
-    args_to_log = {'sync_id': sync_id}
-    if issue_ts: # Issuer if issue_ts is set, else reciever.
-      assert issue_ts <= time_stamp
-      args_to_log['issue_ts'] = issue_ts
-    trace_event_impl.add_trace_event(
-        "c", time_stamp, "python", "clock_sync", args_to_log)
+  def clock_sync(*args, **kwargs):
+    return trace_event_impl.clock_sync(*args, **kwargs)
 
   def is_tracing_controllable():
     return trace_event_impl.is_tracing_controllable()
 
 else:
   import contextlib
+
+  # Trace file formats
+  JSON = None
+  JSON_WITH_METADATA = None
+  PROTOBUF = None
 
   def trace_enable():
     raise TraceException(
@@ -135,6 +149,10 @@ else:
 
   def trace_end(name):
     del name # unused.
+    pass
+
+  def trace_set_thread_name(thread_name):
+    del thread_name # unused.
     pass
 
   @contextlib.contextmanager
@@ -228,6 +246,9 @@ trace_end.__doc__ = """Records the end of an event of the given name.
   trace_event_viewer UI.
   """
 
+trace_set_thread_name.__doc__ = """Sets the trace's name for the current thread.
+  """
+
 trace.__doc__ = """Traces a block of code using a with statement.
 
   Example usage:
@@ -239,7 +260,8 @@ trace.__doc__ = """Traces a block of code using a with statement.
   If tracing an entire function call, prefer the @traced decorator.
   """
 
-traced.__doc__ = """
+traced.__doc__ = """Traces the provided function.
+
   Traces the provided function, using the function name for the actual generated
   event.
 
@@ -255,12 +277,15 @@ traced.__doc__ = """
       urllib2.urlopen(url).read()
   """
 
-clock_sync.__doc__ = """
-  Issues a clock sync marker event.
+clock_sync.__doc__ = """Issues a clock sync marker event.
 
   Clock sync markers are used to synchronize the clock domains of different
   traces so that they can be used together. It takes a sync_id, and if it is
   the issuer of a clock sync event it will also require an issue_ts. The
   issue_ts is a timestamp from when the clocksync was first issued. This is used
   to calculate the time difference between clock domains.
+
+  This function has no effect if trace format is proto and
+  trace_set_clock_snapshot was called before trace start. The synchronization
+  will be performed in trace_processor using clock snapshots in this case.
   """

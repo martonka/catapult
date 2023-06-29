@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import unittest
 
 from telemetry.core import exceptions
@@ -25,10 +26,10 @@ class BinaryManagerTest(unittest.TestCase):
 
   @mock.patch('py_utils.binary_manager.BinaryManager')
   def testFetchPathInitialized(self, binary_manager_mock):
-    expected = [mock.call.binary_manager.BinaryManager(
-                   ['base_config_object']),
-                mock.call.binary_manager.BinaryManager().FetchPath(
-                    'dep', 'plat_arch')]
+    expected = [
+        mock.call.binary_manager.BinaryManager(['base_config_object']),
+        mock.call.binary_manager.BinaryManager().FetchPath('dep', 'plat_arch')
+    ]
     binary_manager.InitDependencyManager(None)
     binary_manager.FetchPath('dep', 'plat', 'arch')
     binary_manager_mock.assert_call_args(expected)
@@ -39,10 +40,10 @@ class BinaryManagerTest(unittest.TestCase):
 
   @mock.patch('py_utils.binary_manager.BinaryManager')
   def testLocalPathInitialized(self, binary_manager_mock):
-    expected = [mock.call.binary_manager.BinaryManager(
-                   ['base_config_object']),
-                mock.call.binary_manager.BinaryManager().LocalPath(
-                    'dep', 'plat_arch')]
+    expected = [
+        mock.call.binary_manager.BinaryManager(['base_config_object']),
+        mock.call.binary_manager.BinaryManager().LocalPath('dep', 'plat_arch')
+    ]
     binary_manager.InitDependencyManager(None)
     binary_manager.LocalPath('dep', 'plat', 'arch')
     binary_manager_mock.assert_call_args(expected)

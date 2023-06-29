@@ -2,11 +2,15 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
+
 import math
 import unittest
 
 from dashboard import find_step
-from dashboard import math_utils
+from dashboard.common import math_utils
 
 # Sample data where there is a small-ish step upwards around revision 304772.
 _QUITE_STEPPISH = [
@@ -113,19 +117,19 @@ class FindStepTest(unittest.TestCase):
     self.assertEqual(304772, find_step.FindStep(_QUITE_STEPPISH))
     y_values = [y for _, y in _QUITE_STEPPISH]
     self.assertEqual(21, find_step._MinimizeDistanceFromStep(y_values))
-    self.assertAlmostEqual(
-        4863.05166991, find_step._DistanceFromStep(y_values, 21))
-    self.assertAlmostEqual(
-        5.55211054, find_step._RegressionSizeScore(y_values, 21))
+    self.assertAlmostEqual(4863.05166991,
+                           find_step._DistanceFromStep(y_values, 21))
+    self.assertAlmostEqual(5.55211054,
+                           find_step._RegressionSizeScore(y_values, 21))
 
   def testFindStep_NotSteppishExample(self):
     self.assertIsNone(find_step.FindStep(_NOT_STEPPISH))
     y_values = [y for _, y in _NOT_STEPPISH]
     self.assertEqual(15, find_step._MinimizeDistanceFromStep(y_values))
-    self.assertAlmostEqual(
-        67.44240311, find_step._DistanceFromStep(y_values, 15))
-    self.assertAlmostEqual(
-        0.53773162, find_step._RegressionSizeScore(y_values, 15))
+    self.assertAlmostEqual(67.44240311,
+                           find_step._DistanceFromStep(y_values, 15))
+    self.assertAlmostEqual(0.53773162,
+                           find_step._RegressionSizeScore(y_values, 15))
 
   def testSteppiness_PerfectStep_ReturnsOne(self):
     step = [3, 3, 3, 3, 10, 10, 10]
@@ -139,8 +143,7 @@ class FindStepTest(unittest.TestCase):
     step = [1, 2, 1, 2, 4, 3, 5, 4]
     step_long = [1, 2, 1, 2, 2, 1, 2, 1, 4, 3, 5, 4, 5, 3, 4, 4]
     self.assertAlmostEqual(
-        find_step.Steppiness(step, 4),
-        find_step.Steppiness(step_long, 8))
+        find_step.Steppiness(step, 4), find_step.Steppiness(step_long, 8))
 
   def testSteppiness_UpDownPattern_ReturnsZero(self):
     step = [1, 0, 1, 0, 1, 0, 1, 0]
@@ -163,9 +166,8 @@ class FindStepTest(unittest.TestCase):
 
   def testNormalize_ShortList(self):
     self.assertEqual([-1, 1], find_step._Normalize([3, 4]))
-    self.assertEqual(
-        [-1.2247448713915889, 0, 1.2247448713915889],
-        find_step._Normalize([3, 4, 5]))
+    self.assertEqual([-1.2247448713915889, 0, 1.2247448713915889],
+                     find_step._Normalize([3, 4, 5]))
 
   def testNormalize_ResultMeanIsZeroAndStdDevIsOne(self):
     # When a data series is normalized, it is guaranteed that the result
@@ -187,10 +189,12 @@ class FindStepTest(unittest.TestCase):
     self.assertEqual(0.0, find_step._RegressionSizeScore([1, 1], 1))
     self.assertEqual(float('inf'), find_step._RegressionSizeScore([1, 2], 1))
     self.assertEqual(7.0, find_step._RegressionSizeScore([3, 5, 10, 12], 2))
-    self.assertLess(find_step._RegressionSizeScore([3, 5, 10, 12], 2),
-                    find_step._RegressionSizeScore([3, 4, 10, 11], 2))
-    self.assertLess(find_step._RegressionSizeScore([3, 5, 10, 12], 2),
-                    find_step._RegressionSizeScore([3, 5, 20, 22], 2))
+    self.assertLess(
+        find_step._RegressionSizeScore([3, 5, 10, 12], 2),
+        find_step._RegressionSizeScore([3, 4, 10, 11], 2))
+    self.assertLess(
+        find_step._RegressionSizeScore([3, 5, 10, 12], 2),
+        find_step._RegressionSizeScore([3, 5, 20, 22], 2))
 
   def testDistanceFromStep(self):
     self.assertEqual(0.0, find_step._DistanceFromStep([], 0))
@@ -200,8 +204,8 @@ class FindStepTest(unittest.TestCase):
 
   def testStepFunctionValues(self):
     self.assertEqual([], find_step._StepFunctionValues([], 0))
-    self.assertEqual([2, 2, 2, 4],
-                     find_step._StepFunctionValues([1, 2, 3, 4], 3))
+    self.assertEqual([2, 2, 2, 4], find_step._StepFunctionValues([1, 2, 3, 4],
+                                                                 3))
     self.assertEqual([1.5, 1.5, 3.5, 3.5],
                      find_step._StepFunctionValues([1, 2, 3, 4], 2))
 

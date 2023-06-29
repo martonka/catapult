@@ -11,8 +11,7 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.ui.behaviors', function() {
-
-  var SidePanel = {
+  const SidePanel = {
 
     get rangeOfInterest() {
       throw new Error('Not implemented');
@@ -38,14 +37,13 @@ tr.exportTo('tr.ui.behaviors', function() {
       throw new Error('Not implemented');
     },
 
-    supportsModel: function(m) {
+    supportsModel(m) {
       throw new Error('Not implemented');
     }
   };
 
   return {
-    SidePanel: SidePanel
+    SidePanel,
   };
-
 });
 </script>

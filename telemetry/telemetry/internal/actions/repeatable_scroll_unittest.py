@@ -2,6 +2,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import division
+from __future__ import absolute_import
 from telemetry import decorators
 
 from telemetry.internal.actions import page_action
@@ -19,21 +21,32 @@ class RepeatableScrollActionTest(tab_test_case.TabTestCase):
     utils.InjectJavaScript(self._tab, 'gesture_common.js')
 
     # Make page taller than window so it's scrollable.
-    self._tab.ExecuteJavaScript('document.body.style.height ='
+    self._original_height = int(
+        self._tab.EvaluateJavaScript('__GestureCommon_GetScrollableHeight()'))
+    self._tab.ExecuteJavaScript(
+        'document.body.style.height ='
         '(3 * __GestureCommon_GetWindowHeight() + 1) + "px";')
+    self._new_height = int(
+        self._tab.EvaluateJavaScript('__GestureCommon_GetScrollableHeight()'))
+    self._available_scroll = self._new_height - self._original_height
 
     self.assertEquals(
         self._tab.EvaluateJavaScript('document.scrollingElement.scrollTop'), 0)
 
     self._browser_info = browser_info_module.BrowserInfo(self._tab.browser)
-    self._window_height = int(self._tab.EvaluateJavaScript(
-        '__GestureCommon_GetWindowHeight()'))
+    self._window_height = int(
+        self._tab.EvaluateJavaScript('__GestureCommon_GetWindowHeight()'))
 
+  # Test flaky on chromeos: https://crbug.com/826527.
+  @decorators.Disabled('chromeos')
   def testRepeatableScrollActionNoRepeats(self):
-    if not self._browser_info.HasRepeatableSynthesizeScrollGesture():
-      return
-
-    expected_scroll = (self._window_height / 2) - 1
+    expected_scroll = (self._window_height // 2) - 1
+    self.assertLess(
+        expected_scroll,
+        self._available_scroll,
+        msg='cannot run test because available scroll is too low.'
+        ' Available:%d; Expected:%d' % (self._available_scroll,
+                                        expected_scroll))
 
     i = repeatable_scroll.RepeatableScrollAction(y_scroll_distance_ratio=0.5)
     i.WillRunAction(self._tab)
@@ -43,19 +56,24 @@ class RepeatableScrollActionTest(tab_test_case.TabTestCase):
     scroll_position = self._tab.EvaluateJavaScript(
         'document.scrollingElement.scrollTop')
     # We can only expect the final scroll position to be approximatly equal.
-    self.assertTrue(abs(scroll_position - expected_scroll) < 20,
-                    msg='scroll_position=%d;expected %d' % (scroll_position,
-                                                            expected_scroll))
+    self.assertTrue(
+        abs(scroll_position - expected_scroll) < 20,
+        msg='scroll_position=%d;expected %d' % (scroll_position,
+                                                expected_scroll))
 
+  # Flaky on chromeos: https://crbug.com/932104.
+  @decorators.Disabled('chromeos')
   def testRepeatableScrollActionTwoRepeats(self):
-    if not self._browser_info.HasRepeatableSynthesizeScrollGesture():
-      return
+    expected_scroll = ((self._window_height // 2) - 1) * 3
+    self.assertLess(
+        expected_scroll,
+        self._available_scroll,
+        msg='cannot run test because available scroll is too low.'
+        ' Available:%d; Expected:%d' % (self._available_scroll,
+                                        expected_scroll))
 
-    expected_scroll = ((self._window_height / 2) - 1) * 3
-
-    i = repeatable_scroll.RepeatableScrollAction(y_scroll_distance_ratio=0.5,
-                                                 repeat_count=2,
-                                                 repeat_delay_ms=1)
+    i = repeatable_scroll.RepeatableScrollAction(
+        y_scroll_distance_ratio=0.5, repeat_count=2, repeat_delay_ms=1)
     i.WillRunAction(self._tab)
 
     i.RunAction(self._tab)
@@ -63,17 +81,17 @@ class RepeatableScrollActionTest(tab_test_case.TabTestCase):
     scroll_position = self._tab.EvaluateJavaScript(
         'document.scrollingElement.scrollTop')
     # We can only expect the final scroll position to be approximatly equal.
-    self.assertTrue(abs(scroll_position - expected_scroll) < 20,
-                    msg='scroll_position=%d;expected %d' % (scroll_position,
-                                                            expected_scroll))
+    self.assertTrue(
+        abs(scroll_position - expected_scroll) < 20,
+        msg='scroll_position=%d;expected %d' % (scroll_position,
+                                                expected_scroll))
 
   # Regression test for crbug.com/627166
   # TODO(ulan): enable for Android after catapult:#2475 is fixed.
   @decorators.Disabled('all')
   def testRepeatableScrollActionNoRepeatsZoomed(self):
-    if (not self._browser_info.HasRepeatableSynthesizeScrollGesture() or
-        not page_action.IsGestureSourceTypeSupported(self._tab, 'touch')):
-      return
+    if not page_action.IsGestureSourceTypeSupported(self._tab, 'touch'):
+      self.skipText('touch gestures not supported')
 
     self._tab.action_runner.PinchPage(scale_factor=0.1)
 

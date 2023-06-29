@@ -11,7 +11,7 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.e.v8', function() {
-  var ThreadSlice = tr.model.ThreadSlice;
+  const ThreadSlice = tr.model.ThreadSlice;
 
   function V8ThreadSlice() {
     ThreadSlice.apply(this, arguments);
@@ -31,16 +31,16 @@ tr.exportTo('tr.e.v8', function() {
   };
 
   ThreadSlice.subTypes.register(
-    V8ThreadSlice,
-    {
-      categoryParts: ['v8'],
-      name: 'v8 slice',
-      pluralName: 'v8 slices'
-    }
+      V8ThreadSlice,
+      {
+        categoryParts: ['v8', 'disabled-by-default-v8.runtime_stats'],
+        name: 'v8 slice',
+        pluralName: 'v8 slices'
+      }
   );
 
   return {
-    V8ThreadSlice: V8ThreadSlice
+    V8ThreadSlice,
   };
 });
 </script>

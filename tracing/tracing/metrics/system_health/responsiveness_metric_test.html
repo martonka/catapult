@@ -9,29 +9,29 @@ found in the LICENSE file.
 <link rel="import" href="/tracing/extras/importer/trace_event_importer.html">
 <link rel="import" href="/tracing/metrics/system_health/responsiveness_metric.html">
 <link rel="import" href="/tracing/model/slice_group.html">
-<link rel="import" href="/tracing/value/value_set.html">
+<link rel="import" href="/tracing/value/histogram_set.html">
 
 <script>
 'use strict';
 
 tr.b.unittest.testSuite(function() {
   function createModel(collectionOfFrameTimestamps) {
-    var opts = {
-      customizeModelCallback: function(model) {
-        var thread = tr.c.TestUtils.newFakeThread();
+    const opts = {
+      customizeModelCallback(model) {
+        const thread = tr.c.TestUtils.newFakeThread();
         collectionOfFrameTimestamps.forEach(function(frameTimestamps) {
           frameTimestamps.sort((a, b) => a - b);
-          var ue = new tr.model.um.AnimationExpectation(
+          const ue = new tr.model.um.AnimationExpectation(
               model, 'test', frameTimestamps[0],
               frameTimestamps[frameTimestamps.length - 1]);
-          var group = new tr.model.SliceGroup(thread);
+          const group = new tr.model.SliceGroup(thread);
           frameTimestamps.forEach(function(time) {
             group.pushSlice(tr.c.TestUtils.newSliceEx({
-                title: tr.model.helpers.IMPL_RENDERING_STATS,
-                start: time,
-                end: time,
-                cpuStart: time,
-                cpuEnd: time
+              title: tr.model.helpers.IMPL_RENDERING_STATS,
+              start: time,
+              end: time,
+              cpuStart: time,
+              cpuEnd: time
             }));
           });
           group.createSubSlices();
@@ -50,20 +50,18 @@ tr.b.unittest.testSuite(function() {
   }
 
   test('animationThroughputNoFrames', function() {
-    var model = createModel([[]]);
-    var valueList = new tr.v.ValueSet();
+    const model = createModel([[]]);
+    const valueList = new tr.v.HistogramSet();
     tr.metrics.sh.responsivenessMetric(valueList, model);
-    var value = tr.b.getOnlyElement(valueList.getValuesNamed(
-        'animation throughput'));
+    const value = valueList.getHistogramNamed('animation throughput');
     assert.strictEqual(value.numValues, 0);
   });
 
   test('animationThroughputFramesAndNoFrames', function() {
-    var model = createModel([[0, 100], []]);
-    var valueList = new tr.v.ValueSet();
+    const model = createModel([[0, 100], []]);
+    const valueList = new tr.v.HistogramSet();
     tr.metrics.sh.responsivenessMetric(valueList, model);
-    var value = tr.b.getOnlyElement(valueList.getValuesNamed(
-        'animation throughput'));
+    const value = valueList.getHistogramNamed('animation throughput');
     assert.strictEqual(value.average, 20);
   });
 });

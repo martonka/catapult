@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import ctypes
 import ctypes.util
 import logging
@@ -124,6 +125,8 @@ def IsQPCUsable():
   # Sample output: 'Intel64 Family 6 Model 23 Stepping 6, GenuineIntel'
   info = platform.processor()
   if 'AuthenticAMD' in info and 'Family 15' in info:
+    return False
+  if not hasattr(ctypes, 'windll'):
     return False
   try:  # If anything goes wrong during this, assume QPC isn't available.
     frequency = ctypes.c_int64()

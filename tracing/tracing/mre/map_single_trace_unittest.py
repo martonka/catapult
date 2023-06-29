@@ -1,14 +1,21 @@
 # Copyright (c) 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import json
+import os
 import unittest
 
-from tracing.mre import function_handle
-from tracing.mre import map_single_trace
-from tracing.mre import file_handle
+from six.moves import range  # pylint: disable=redefined-builtin
 from tracing.mre import failure
+from tracing.mre import file_handle
+from tracing.mre import function_handle
 from tracing.mre import job as job_module
+from tracing.mre import map_single_trace
 
 
 def _Handle(filename):
@@ -28,7 +35,7 @@ class MapSingleTraceTests(unittest.TestCase):
          'ts': 3, 'dur': 5, 'args': {}}
     ]
     trace_handle = file_handle.InMemoryFileHandle(
-        '/a.json', json.dumps(events))
+        '/a.json', json.dumps(events).encode('utf-8'))
 
     with map_single_trace.TemporaryMapScript("""
       tr.mre.FunctionRegistry.register(
@@ -50,12 +57,14 @@ class MapSingleTraceTests(unittest.TestCase):
   def testProcessingGiantTrace(self):
     # Populate a string trace of 2 million events.
     trace_events = ['[']
-    for i in xrange(2000000):
+    for i in range(2000000):
       trace_events.append(
           '{"pid": 1, "tid": %i, "ph": "X", "name": "a", "cat": "c",'
           '"ts": %i, "dur": 1, "args": {}},' %  (i % 5, 2 * i))
     trace_events.append('{}]')
     trace_data = ''.join(trace_events)
+    if not isinstance(trace_data, bytes):
+      trace_data = trace_data.encode('utf-8')
     trace_handle = file_handle.InMemoryFileHandle(
         '/a.json', trace_data)
 
@@ -83,7 +92,7 @@ class MapSingleTraceTests(unittest.TestCase):
 
 
   def testTraceDidntImport(self):
-    trace_string = 'This is intentionally not a trace-formatted string.'
+    trace_string = b'This is intentionally not a trace-formatted string.'
     trace_handle = file_handle.InMemoryFileHandle(
         '/a.json', trace_string)
 
@@ -108,7 +117,7 @@ class MapSingleTraceTests(unittest.TestCase):
          'ts': 3, 'dur': 5, 'args': {}}
     ]
     trace_handle = file_handle.InMemoryFileHandle(
-        '/a.json', json.dumps(events))
+        '/a.json', json.dumps(events).encode('utf-8'))
 
     with map_single_trace.TemporaryMapScript("""
       tr.mre.FunctionRegistry.register(
@@ -132,7 +141,7 @@ class MapSingleTraceTests(unittest.TestCase):
          'ts': 3, 'dur': 5, 'args': {}}
     ]
     trace_handle = file_handle.InMemoryFileHandle(
-        '/a.json', json.dumps(events))
+        '/a.json', json.dumps(events).encode('utf-8'))
 
     with map_single_trace.TemporaryMapScript("""
       throw new Error('Expected load error');
@@ -151,7 +160,7 @@ class MapSingleTraceTests(unittest.TestCase):
          'ts': 0, 'dur': 10, 'args': {}},
     ]
     trace_handle = file_handle.InMemoryFileHandle(
-        '/a.json', json.dumps(events))
+        '/a.json', json.dumps(events).encode('utf-8'))
 
     with map_single_trace.TemporaryMapScript("""
           quit(100);
@@ -172,7 +181,7 @@ class MapSingleTraceTests(unittest.TestCase):
          'ts': 3, 'dur': 5, 'args': {}}
     ]
     trace_handle = file_handle.InMemoryFileHandle(
-        '/a.json', json.dumps(events))
+        '/a.json', json.dumps(events).encode('utf-8'))
 
     with map_single_trace.TemporaryMapScript("""
     """) as map_script:
@@ -192,7 +201,7 @@ class MapSingleTraceTests(unittest.TestCase):
          'ts': 3, 'dur': 5, 'args': {}}
     ]
     trace_handle = file_handle.InMemoryFileHandle(
-        '/a.json', json.dumps(events))
+        '/a.json', json.dumps(events).encode('utf-8'))
 
     with map_single_trace.TemporaryMapScript("""
       tr.mre.FunctionRegistry.register(
@@ -206,3 +215,26 @@ class MapSingleTraceTests(unittest.TestCase):
     self.assertEquals(len(result.pairs), 0)
     f = result.failures[0]
     self.assertIsInstance(f, map_single_trace.NoResultsAddedFailure)
+
+  def testExecuteTraceMappingCode(self):
+    test_trace_path = os.path.join(os.path.dirname(__file__), 'test_trace.json')
+    results = map_single_trace.ExecuteTraceMappingCode(
+        test_trace_path,
+        """
+        function processTrace(results, model) {
+          var canonicalUrl = model.canonicalUrl;
+          results.addPair('numProcesses', model.getAllProcesses().length);
+        };
+        """)
+    self.assertEquals(results['numProcesses'], 2)
+
+  def testExecuteTraceMappingCodeWithError(self):
+    test_trace_path = os.path.join(os.path.dirname(__file__), 'test_trace.json')
+    with self.assertRaises(RuntimeError):
+      map_single_trace.ExecuteTraceMappingCode(
+          test_trace_path,
+          """
+          function processTrace(results, model) {
+              throw new Error('Expected error');
+          };
+          """)

@@ -2,400 +2,345 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import collections
-import copy
-import datetime
+from __future__ import absolute_import
+import contextlib
+import json
 import logging
-import random
-import sys
+import os
+import posixpath
+import shutil
+import time
 import traceback
+import six
 
-from py_utils import cloud_storage  # pylint: disable=import-error
-
-from telemetry.internal.results import json_output_formatter
-from telemetry.internal.results import progress_reporter as reporter_module
+from telemetry.internal.results import artifact_logger
+from telemetry.internal.results import gtest_progress_reporter
 from telemetry.internal.results import story_run
-from telemetry import value as value_module
-from telemetry.value import failure
-from telemetry.value import skip
-from telemetry.value import trace
+
+from tracing.value.diagnostics import reserved_infos
 
 
-class IterationInfo(object):
-  def __init__(self):
-    self._benchmark_name = None
-    self._benchmark_start_ms = None
-    self._label = None
-    self._story_display_name = ''
-    self._story_grouping_keys = {}
-    self._story_repeat_counter = 0
-    self._story_url = ''
-    self._storyset_repeat_counter = 0
+TEST_RESULTS = '_test_results.jsonl'
+DIAGNOSTICS_NAME = 'diagnostics.json'
+
+
+class PageTestResults(object):
+  def __init__(self, progress_stream=None, intermediate_dir=None,
+               benchmark_name=None, benchmark_description=None,
+               results_label=None):
+    """Object to hold story run results while a benchmark is executed.
+
+    Args:
+      progress_stream: A file-like object where to write progress reports as
+          stories are being run. Can be None to suppress progress reporting.
+      intermediate_dir: A string specifying the directory where to store the
+          test artifacts, e.g: traces, videos, etc.
+      benchmark_name: A string with the name of the currently running benchmark.
+      benchmark_description: A string with a description of the currently
+          running benchmark.
+      results_label: A string that serves as an identifier for the current
+          benchmark run.
+    """
+    super(PageTestResults, self).__init__()
+    self._progress_reporter = gtest_progress_reporter.GTestProgressReporter(
+        progress_stream)
+    self._intermediate_dir = intermediate_dir
+    self._benchmark_name = benchmark_name or '(unknown benchmark)'
+    self._benchmark_description = benchmark_description or ''
+    self._results_label = results_label
+
+    self._current_story_run = None
+    self._all_story_runs = []
+
+    # This is used to validate that measurements accross story runs use units
+    # consistently.
+    self._measurement_units = {}
+
+    # |_interruption| is None if the benchmark has not been interrupted.
+    # Otherwise it is a string explaining the reason for the interruption.
+    # Interruptions occur for unrecoverable exceptions.
+    self._interruption = None
+
+    self._diagnostics = {
+        reserved_infos.BENCHMARKS.name: [self.benchmark_name],
+        reserved_infos.BENCHMARK_DESCRIPTIONS.name:
+            [self.benchmark_description],
+    }
+
+    # If the object has been finalized, no more results can be added to it.
+    self._finalized = False
+    self._start_time = time.time()
+    self._results_stream = None
+    if self._intermediate_dir is not None:
+      if not os.path.exists(self._intermediate_dir):
+        os.makedirs(self._intermediate_dir)
+      self._results_stream = open(
+          os.path.join(self._intermediate_dir, TEST_RESULTS), 'w')
 
   @property
   def benchmark_name(self):
     return self._benchmark_name
 
-  @benchmark_name.setter
-  def benchmark_name(self, benchmark_name):
-    assert self.benchmark_name is None, (
-      'benchmark_name must be set exactly once')
-    self._benchmark_name = benchmark_name
+  @property
+  def benchmark_description(self):
+    return self._benchmark_description
 
   @property
-  def benchmark_start_ms(self):
-    return self._benchmark_start_ms
+  def benchmark_start_us(self):
+    return self._start_time * 1e6
 
-  @benchmark_start_ms.setter
-  def benchmark_start_ms(self, benchmark_start_ms):
-    assert self.benchmark_start_ms is None, (
-      'benchmark_start_ms must be set exactly once')
-    self._benchmark_start_ms = benchmark_start_ms
+  @property
+  def benchmark_interrupted(self):
+    return bool(self._interruption)
+
+  @property
+  def benchmark_interruption(self):
+    """Returns a string explaining why the benchmark was interrupted."""
+    return self._interruption
 
   @property
   def label(self):
-    return self._label
-
-  @label.setter
-  def label(self, label):
-    assert self.label is None, 'label cannot be set more than once'
-    self._label = label
+    return self._results_label
 
   @property
-  def story_display_name(self):
-    return self._story_display_name
+  def finalized(self):
+    return self._finalized
 
   @property
-  def story_url(self):
-    return self._story_url
+  def current_story(self):
+    assert self._current_story_run, 'Not currently running test.'
+    return self._current_story_run.story
 
   @property
-  def story_grouping_keys(self):
-    return self._story_grouping_keys
+  def current_story_run(self):
+    return self._current_story_run
 
   @property
-  def storyset_repeat_counter(self):
-    return self._storyset_repeat_counter
+  def had_successes(self):
+    """If there were any actual successes, not including skipped stories."""
+    return any(run.ok for run in self._all_story_runs)
 
   @property
-  def story_repeat_counter(self):
-    return self._story_repeat_counter
-
-  def WillRunStory(self, story, storyset_repeat_counter, story_repeat_counter):
-    self._story_display_name = story.display_name
-    self._story_url = story.url
-    if story.grouping_keys:
-      self._story_grouping_keys = story.grouping_keys
-    self._storyset_repeat_counter = storyset_repeat_counter
-    self._story_repeat_counter = story_repeat_counter
-
-  def AsDict(self):
-    assert self.benchmark_name is not None, (
-        'benchmark_name must be set exactly once')
-    assert self.benchmark_start_ms is not None, (
-        'benchmark_start_ms must be set exactly once')
-    d = {}
-    d['benchmarkName'] = self.benchmark_name
-    d['benchmarkStartMs'] = self.benchmark_start_ms
-    if self.label:
-      d['label'] = self.label
-    d['storyDisplayName'] = self.story_display_name
-    d['storyGroupingKeys'] = self.story_grouping_keys
-    d['storyRepeatCounter'] = self.story_repeat_counter
-    d['storyUrl'] = self.story_url
-    d['storysetRepeatCounter'] = self.storyset_repeat_counter
-    return d
-
-
-class PageTestResults(object):
-  def __init__(self, output_formatters=None,
-               progress_reporter=None, trace_tag='', output_dir=None,
-               value_can_be_added_predicate=lambda v, is_first: True,
-               benchmark_enabled=True):
-    """
-    Args:
-      output_formatters: A list of output formatters. The output
-          formatters are typically used to format the test results, such
-          as CsvPivotTableOutputFormatter, which output the test results as CSV.
-      progress_reporter: An instance of progress_reporter.ProgressReporter,
-          to be used to output test status/results progressively.
-      trace_tag: A string to append to the buildbot trace name. Currently only
-          used for buildbot.
-      output_dir: A string specified the directory where to store the test
-          artifacts, e.g: trace, videos,...
-      value_can_be_added_predicate: A function that takes two arguments:
-          a value.Value instance (except failure.FailureValue, skip.SkipValue
-          or trace.TraceValue) and a boolean (True when the value is part of
-          the first result for the story). It returns True if the value
-          can be added to the test results and False otherwise.
-    """
-    # TODO(chrishenry): Figure out if trace_tag is still necessary.
-
-    super(PageTestResults, self).__init__()
-    self._progress_reporter = (
-        progress_reporter if progress_reporter is not None
-        else reporter_module.ProgressReporter())
-    self._output_formatters = (
-        output_formatters if output_formatters is not None else [])
-    self._trace_tag = trace_tag
-    self._output_dir = output_dir
-    self._value_can_be_added_predicate = value_can_be_added_predicate
-
-    self._current_page_run = None
-    self._all_page_runs = []
-    self._all_stories = set()
-    self._representative_value_for_each_value_name = {}
-    self._all_summary_values = []
-    self._serialized_trace_file_ids_to_paths = {}
-    self._pages_to_profiling_files = collections.defaultdict(list)
-    self._pages_to_profiling_files_cloud_url = collections.defaultdict(list)
-
-    # You'd expect this to be a set(), but Values are dictionaries, which are
-    # unhashable. We could wrap Values with custom __eq/hash__, but we don't
-    # actually need set-ness in python.
-    self._value_set = []
-
-    self._iteration_info = IterationInfo()
-
-    # State of the benchmark this set of results represents.
-    self._benchmark_enabled = benchmark_enabled
+  def num_successful(self):
+    """Number of successful story runs."""
+    return sum(1 for run in self._all_story_runs if run.ok)
 
   @property
-  def iteration_info(self):
-    return self._iteration_info
+  def num_expected(self):
+    """Number of story runs that succeeded or were expected skips."""
+    return sum(1 for run in self._all_story_runs if run.expected)
 
   @property
-  def value_set(self):
-    return self._value_set
-
-  def __copy__(self):
-    cls = self.__class__
-    result = cls.__new__(cls)
-    for k, v in self.__dict__.items():
-      if isinstance(v, collections.Container):
-        v = copy.copy(v)
-      setattr(result, k, v)
-    return result
+  def had_failures(self):
+    """If there where any failed story runs."""
+    return any(run.failed for run in self._all_story_runs)
 
   @property
-  def pages_to_profiling_files(self):
-    return self._pages_to_profiling_files
+  def num_failed(self):
+    """Number of failed story runs."""
+    return sum(1 for run in self._all_story_runs if run.failed)
 
   @property
-  def serialized_trace_file_ids_to_paths(self):
-    return self._serialized_trace_file_ids_to_paths
+  def had_skips(self):
+    """If there where any skipped story runs."""
+    return any(run.skipped for run in self._all_story_runs)
 
   @property
-  def pages_to_profiling_files_cloud_url(self):
-    return self._pages_to_profiling_files_cloud_url
+  def num_skipped(self):
+    """Number of skipped story runs."""
+    return sum(1 for run in self._all_story_runs if run.skipped)
 
   @property
-  def all_page_specific_values(self):
-    values = []
-    for run in self._all_page_runs:
-      values += run.values
-    if self._current_page_run:
-      values += self._current_page_run.values
-    return values
+  def empty(self):
+    """Whether there were any story runs."""
+    return not self._all_story_runs
 
-  @property
-  def all_summary_values(self):
-    return self._all_summary_values
+  def _WriteJsonLine(self, data):
+    if self._results_stream is not None:
+      # Use a compact encoding and sort keys to get deterministic outputs.
+      self._results_stream.write(
+          json.dumps(data, sort_keys=True, separators=(',', ':')) + '\n')
+      self._results_stream.flush()
 
-  @property
-  def current_page(self):
-    assert self._current_page_run, 'Not currently running test.'
-    return self._current_page_run.story
-
-  @property
-  def current_page_run(self):
-    assert self._current_page_run, 'Not currently running test.'
-    return self._current_page_run
-
-  @property
-  def all_page_runs(self):
-    return self._all_page_runs
-
-  @property
-  def pages_that_succeeded(self):
-    """Returns the set of pages that succeeded."""
-    pages = set(run.story for run in self.all_page_runs)
-    pages.difference_update(self.pages_that_failed)
-    return pages
-
-  @property
-  def pages_that_failed(self):
-    """Returns the set of failed pages."""
-    failed_pages = set()
-    for run in self.all_page_runs:
-      if run.failed:
-        failed_pages.add(run.story)
-    return failed_pages
-
-  @property
-  def failures(self):
-    values = self.all_page_specific_values
-    return [v for v in values if isinstance(v, failure.FailureValue)]
-
-  @property
-  def skipped_values(self):
-    values = self.all_page_specific_values
-    return [v for v in values if isinstance(v, skip.SkipValue)]
-
-  def _GetStringFromExcInfo(self, err):
-    return ''.join(traceback.format_exception(*err))
-
-  def CleanUp(self):
-    """Clean up any TraceValues contained within this results object."""
-    for run in self._all_page_runs:
-      for v in run.values:
-        if isinstance(v, trace.TraceValue):
-          v.CleanUp()
-          run.values.remove(v)
+  def IterStoryRuns(self):
+    return iter(self._all_story_runs)
 
   def __enter__(self):
     return self
 
-  def __exit__(self, _, __, ___):
-    self.CleanUp()
+  def __exit__(self, _, exc_value, __):
+    self.Finalize(exc_value)
 
-  def WillRunPage(self, page, storyset_repeat_counter=0,
-                  story_repeat_counter=0):
-    assert not self._current_page_run, 'Did not call DidRunPage.'
-    self._current_page_run = story_run.StoryRun(page)
-    self._progress_reporter.WillRunPage(self)
-    self.iteration_info.WillRunStory(
-        page, storyset_repeat_counter, story_repeat_counter)
+  @contextlib.contextmanager
+  def CreateStoryRun(self, story, story_run_index=0):
+    """A context manager to delimit the capture of results for a new story run.
 
-  def DidRunPage(self, page):  # pylint: disable=unused-argument
-    """
     Args:
-      page: The current page under test.
+      story: The story to be run.
+      story_run_index: An optional integer indicating the number of times this
+        same story has been already run as part of the same benchmark run.
     """
-    assert self._current_page_run, 'Did not call WillRunPage.'
-    self._progress_reporter.DidRunPage(self)
-    self._all_page_runs.append(self._current_page_run)
-    self._all_stories.add(self._current_page_run.story)
-    self._current_page_run = None
+    assert not self.finalized, 'Results are finalized, cannot run more stories.'
+    assert not self._current_story_run, 'Already running a story'
+    self._current_story_run = story_run.StoryRun(
+        story, test_prefix=self.benchmark_name, index=story_run_index,
+        intermediate_dir=self._intermediate_dir)
+    artifact_logger.RegisterArtifactImplementation(self._current_story_run)
+    try:
+      with self.CreateArtifact(DIAGNOSTICS_NAME) as f:
+        json.dump({'diagnostics': self._diagnostics}, f, indent=4)
+      self._progress_reporter.WillRunStory(self._current_story_run)
+      yield self._current_story_run
+    finally:
+      self._current_story_run.Finish()
+      self._WriteJsonLine(self._current_story_run.AsDict())
+      self._progress_reporter.DidRunStory(self._current_story_run)
+      self._all_story_runs.append(self._current_story_run)
+      self._current_story_run = None
+      # Clear the artifact implementation so that other tests don't
+      # accidentally use a stale artifact instance.
+      artifact_logger.RegisterArtifactImplementation(None)
 
-  def AddValue(self, value):
-    assert self._current_page_run, 'Not currently running test.'
-    assert self._benchmark_enabled, 'Cannot add value to disabled results'
-    self._ValidateValue(value)
-    is_first_result = (
-      self._current_page_run.story not in self._all_stories)
+  def InterruptBenchmark(self, reason):
+    """Mark the benchmark as interrupted.
 
-    story_keys = self._current_page_run.story.grouping_keys
+    Interrupted benchmarks are assumed to be stuck in some irrecoverably
+    broken state.
 
-    if story_keys:
-      for k, v in story_keys.iteritems():
-        assert k not in value.grouping_keys, (
-            'Tried to add story grouping key ' + k + ' already defined by ' +
-            'value')
-        value.grouping_keys[k] = v
+    Note that the interruption_reason will always be the first interruption.
+    This is because later interruptions may be simply additional fallout from
+    the first interruption.
+    """
+    assert not self.finalized, 'Results are finalized, cannot interrupt.'
+    assert reason, 'A reason string to interrupt must be provided.'
+    logging.fatal(reason)
+    self._interruption = self._interruption or reason
 
-      # We sort by key name to make building the tir_label deterministic.
-      story_keys_label = '_'.join(v for _, v in sorted(story_keys.iteritems()))
-      if value.tir_label:
-        assert value.tir_label == story_keys_label, (
-            'Value has an explicit tir_label (%s) that does not match the '
-            'one computed from story_keys (%s)' % (value.tir_label, story_keys))
-      else:
-        value.tir_label = story_keys_label
+  def AddMeasurement(self, name, unit, samples, description=None):
+    """Record a measurement of the currently running story.
 
-    if not (isinstance(value, skip.SkipValue) or
-            isinstance(value, failure.FailureValue) or
-            isinstance(value, trace.TraceValue) or
-            self._value_can_be_added_predicate(value, is_first_result)):
-      return
-    # TODO(eakuefner/chrishenry): Add only one skip per pagerun assert here
-    self._current_page_run.AddValue(value)
-    self._progress_reporter.DidAddValue(value)
+    Measurements are numeric values obtained directly by a benchmark while
+    a story is running (e.g. by evaluating some JavaScript on the page or
+    calling some platform methods). These are appended together with
+    measurements obtained by running metrics on collected traces (if any)
+    after the benchmark run has finished.
 
-  def AddProfilingFile(self, page, file_handle):
-    self._pages_to_profiling_files[page].append(file_handle)
-
-  def AddSummaryValue(self, value):
-    assert value.page is None
-    self._ValidateValue(value)
-    self._all_summary_values.append(value)
-
-  def _ValidateValue(self, value):
-    assert isinstance(value, value_module.Value)
-    if value.name not in self._representative_value_for_each_value_name:
-      self._representative_value_for_each_value_name[value.name] = value
-    representative_value = self._representative_value_for_each_value_name[
-        value.name]
-    assert value.IsMergableWith(representative_value)
-
-  def PrintSummary(self):
-    if self._benchmark_enabled:
-      self._progress_reporter.DidFinishAllTests(self)
-
-      # Only serialize the trace if output_format is json.
-      if (self._output_dir and
-          any(isinstance(o, json_output_formatter.JsonOutputFormatter)
-              for o in self._output_formatters)):
-        self._SerializeTracesToDirPath(self._output_dir)
-      for output_formatter in self._output_formatters:
-        output_formatter.Format(self)
+    Args:
+      name: A string with the name of the measurement (e.g. 'score', 'runtime',
+        etc).
+      unit: A string specifying the unit used for measurements (e.g. 'ms',
+        'count', etc).
+      samples: Either a single numeric value or a list of numeric values to
+        record as part of this measurement.
+      description: An optional string with a short human readable description
+        of the measurement.
+    """
+    assert self._current_story_run, 'Not currently running a story.'
+    old_unit = self._measurement_units.get(name)
+    if old_unit is not None:
+      if unit != old_unit:
+        raise ValueError('Unit for measurement %r changed from %s to %s.' % (
+            name, old_unit, unit))
     else:
-      for output_formatter in self._output_formatters:
-        output_formatter.FormatDisabled()
+      self._measurement_units[name] = unit
+    self.current_story_run.AddMeasurement(name, unit, samples, description)
 
-  def FindValues(self, predicate):
-    """Finds all values matching the specified predicate.
+  def AddSharedDiagnostics(self,
+                           owners=None,
+                           bug_components=None,
+                           documentation_urls=None,
+                           architecture=None,
+                           device_id=None,
+                           os_name=None,
+                           os_version=None,
+                           info_blurb=None):
+    """Save diagnostics to intermediate results."""
+    diag_values = [
+        (reserved_infos.OWNERS, owners),
+        (reserved_infos.BUG_COMPONENTS, bug_components),
+        (reserved_infos.DOCUMENTATION_URLS, documentation_urls),
+        (reserved_infos.ARCHITECTURES, architecture),
+        (reserved_infos.DEVICE_IDS, device_id),
+        (reserved_infos.OS_NAMES, os_name),
+        (reserved_infos.OS_VERSIONS, os_version),
+        (reserved_infos.INFO_BLURB, info_blurb),
+    ]
+    for info, value in diag_values:
+      if value is None or value == []:
+        continue
+      # Results Processor supports only GenericSet diagnostics for now.
+      assert info.type == 'GenericSet'
+      if not isinstance(value, list):
+        value = [value]
+      self._diagnostics[info.name] = value
+
+  def Fail(self, failure):
+    """Mark the current story run as failed.
+
+    This method will print a GTest-style failure annotation and mark the
+    current story run as failed.
 
     Args:
-      predicate: A function that takes a Value and returns a bool.
-    Returns:
-      A list of values matching |predicate|.
+      failure: A string or exc_info describing the reason for failure.
     """
-    values = []
-    for value in self.all_page_specific_values:
-      if predicate(value):
-        values.append(value)
-    return values
+    # TODO(#4258): Relax this assertion.
+    assert self._current_story_run, 'Not currently running test.'
+    if isinstance(failure, six.string_types):
+      failure_str = 'Failure recorded for story %s: %s' % (
+          self._current_story_run.story.name, failure)
+    else:
+      failure_str = ''.join(traceback.format_exception(*failure))
+    logging.error(failure_str)
+    self._current_story_run.SetFailed(failure_str)
 
-  def FindPageSpecificValuesForPage(self, page, value_name):
-    return self.FindValues(lambda v: v.page == page and v.name == value_name)
+  def Skip(self, reason, expected=True):
+    assert self._current_story_run, 'Not currently running test.'
+    self._current_story_run.Skip(reason, expected)
 
-  def FindAllPageSpecificValuesNamed(self, value_name):
-    return self.FindValues(lambda v: v.name == value_name)
+  def CreateArtifact(self, name):
+    assert self._current_story_run, 'Not currently running test.'
+    return self._current_story_run.CreateArtifact(name)
 
-  def FindAllPageSpecificValuesFromIRNamed(self, tir_label, value_name):
-    return self.FindValues(lambda v: v.name == value_name
-                           and v.tir_label == tir_label)
+  def CaptureArtifact(self, name):
+    assert self._current_story_run, 'Not currently running test.'
+    return self._current_story_run.CaptureArtifact(name)
 
-  def FindAllTraceValues(self):
-    return self.FindValues(lambda v: isinstance(v, trace.TraceValue))
+  def AddTraces(self, traces, tbm_metrics=None):
+    """Associate some recorded traces with the current story run.
 
-  def _SerializeTracesToDirPath(self, dir_path):
-    """ Serialize all trace values to files in dir_path and return a list of
-    file handles to those files. """
-    for value in self.FindAllTraceValues():
-      fh = value.Serialize(dir_path)
-      self._serialized_trace_file_ids_to_paths[fh.id] = fh.GetAbsPath()
+    Args:
+      traces: A TraceDataBuilder object with traces recorded from all
+        tracing agents.
+      tbm_metrics: Optional list of TBMv2 metrics to be computed from the
+        input traces.
+    """
+    assert self._current_story_run, 'Not currently running test.'
+    for part, filename in traces.IterTraceParts():
+      artifact_name = posixpath.join('trace', part, os.path.basename(filename))
+      with self.CaptureArtifact(artifact_name) as artifact_path:
+        shutil.copy(filename, artifact_path)
+    if tbm_metrics:
+      self._current_story_run.AddTbmMetrics(tbm_metrics)
 
-  def UploadTraceFilesToCloud(self, bucket):
-    for value in self.FindAllTraceValues():
-      value.UploadToCloud(bucket)
+  def Finalize(self, exc_value=None):
+    """Finalize this object to prevent more results from being recorded.
 
-  def UploadProfilingFilesToCloud(self, bucket):
-    for page, file_handle_list in self._pages_to_profiling_files.iteritems():
-      for file_handle in file_handle_list:
-        remote_path = ('profiler-file-id_%s-%s%-d%s' % (
-            file_handle.id,
-            datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'),
-            random.randint(1, 100000),
-            file_handle.extension))
-        try:
-          cloud_url = cloud_storage.Insert(
-              bucket, remote_path, file_handle.GetAbsPath())
-          sys.stderr.write(
-              'View generated profiler files online at %s for page %s\n' %
-              (cloud_url, page.display_name))
-          self._pages_to_profiling_files_cloud_url[page].append(cloud_url)
-        except cloud_storage.PermissionError as e:
-          logging.error('Cannot upload profiling files to cloud storage due to '
-                        ' permission error: %s' % e.message)
+    When progress reporting is enabled, also prints a final summary with the
+    number of story runs that suceeded, failed, or were skipped.
+
+    It's fine to call this method multiple times, later calls are just a no-op.
+    """
+    if self.finalized:
+      return
+
+    if exc_value is not None:
+      self.InterruptBenchmark(repr(exc_value))
+      self._current_story_run = None
+    else:
+      assert self._current_story_run is None, (
+          'Cannot finalize while stories are still running.')
+
+    self._finalized = True
+    self._progress_reporter.DidFinishAllStories(self)
+    if self._results_stream is not None:
+      self._results_stream.close()

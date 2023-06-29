@@ -2,6 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
+
 import json
 import re
 import unittest
@@ -11,8 +15,7 @@ import webapp2
 import webtest
 
 from dashboard import buildbucket_job_status
-from dashboard import testing_common
-
+from dashboard.common import testing_common
 
 SAMPLE_RESPONSE = r"""{
  "build": {
@@ -102,14 +105,14 @@ class BuildbucketJobStatusTest(testing_common.TestCase):
 
   def setUp(self):
     super(BuildbucketJobStatusTest, self).setUp()
-    app = webapp2.WSGIApplication(
-        [(r'/buildbucket_job_status/(\d+)',
-          buildbucket_job_status.BuildbucketJobStatusHandler)])
+    app = webapp2.WSGIApplication([
+        (r'/buildbucket_job_status/(\d+)',
+         buildbucket_job_status.BuildbucketJobStatusHandler)
+    ])
     self.testapp = webtest.TestApp(app)
 
-  @mock.patch.object(
-      buildbucket_job_status.buildbucket_service, 'GetJobStatus',
-      mock.MagicMock(return_value=json.loads(SAMPLE_RESPONSE)))
+  @mock.patch.object(buildbucket_job_status.buildbucket_service, 'GetJobStatus',
+                     mock.MagicMock(return_value=json.loads(SAMPLE_RESPONSE)))
   def testGet_ExistingJob(self):
     response = self.testapp.get('/buildbucket_job_status/9046721402459257808')
     # Verify that a human-readable creation time is presented. We check for the

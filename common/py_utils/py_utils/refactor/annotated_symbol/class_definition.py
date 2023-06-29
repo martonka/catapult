@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import symbol
 
 from py_utils.refactor.annotated_symbol import base_symbol
@@ -13,8 +14,6 @@ __all__ = [
 
 
 class Class(base_symbol.AnnotatedSymbol):
-  # pylint: disable=abstract-class-not-used
-
   @classmethod
   def Annotate(cls, symbol_type, children):
     if symbol_type != symbol.stmt:

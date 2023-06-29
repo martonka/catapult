@@ -1,6 +1,7 @@
 # Copyright 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
 import unittest
 
 from telemetry.testing import simple_mock
@@ -79,5 +80,5 @@ class SimpleMockUnitTest(unittest.TestCase):
     mock.bar.ExpectCall('baz')
 
     self.assertRaises(
-      Exception,
-      lambda: mock.bar.baz()) # pylint: disable=unnecessary-lambda
+        Exception,
+        lambda: mock.bar.baz()) # pylint: disable=unnecessary-lambda

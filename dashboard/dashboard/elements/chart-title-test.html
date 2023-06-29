@@ -13,47 +13,46 @@ found in the LICENSE file.
 'use strict';
 
 tr.b.unittest.testSuite(function() {
-
-  var testOptions = {
-    setUp: function() {
+  const testOptions = {
+    setUp() {
     },
-    tearDown: function() {
+    tearDown() {
     }
   };
 
   test('instantiate basic', function() {
-    var title = document.createElement('chart-title');
+    const title = document.createElement('chart-title');
     title.testSuites = {
-        'dromaeo': {'des': 'Description of dromaeo.'},
-        'sunspider': {'des': 'Sunspider test.'}
+      'dromaeo': {'des': 'Description of dromaeo.'},
+      'sunspider': {'des': 'Sunspider test.'}
     };
     title.seriesGroupList = [{
-        'path': 'ChromiumPerf/win/dromaeo/dom/Total',
-        'tests': [{'name': 'Total'}]
+      'path': 'ChromiumPerf/win/dromaeo/dom/Total',
+      'tests': [{'name': 'Total'}]
     }];
     title.update();
     this.addHTMLOutput(title);
   }, testOptions);
 
   test('after update is called, suite descriptions are set', function() {
-    var title = document.createElement('chart-title');
+    const title = document.createElement('chart-title');
     title.testSuites = {
-        'dromaeo': {'des': 'Description of dromaeo.'},
-        'sunspider': {'des': 'Sunspider test.'}
+      'dromaeo': {'des': 'Description of dromaeo.'},
+      'sunspider': {'des': 'Sunspider test.'}
     };
     title.seriesGroupList = [
-    {
+      {
         'path': 'ChromiumPerf/win/dromaeo',
         'tests': [{'name': 'Total'}]
-    },
-    {
+      },
+      {
         'path': 'ChromiumPerf/win/somestuff',
         'tests': [{'name': 'Total'}]
-    },
-    {
+      },
+      {
         'path': 'ChromiumPerf/win/sunspider',
         'tests': [{'name': 'Total'}]
-    }];
+      }];
     title.update();
     this.addHTMLOutput(title);
     assert.propertyVal(
@@ -62,6 +61,5 @@ tr.b.unittest.testSuite(function() {
         title.suiteDescriptions[1], 'description', 'Sunspider test.');
     assert.lengthOf(title.suiteDescriptions, 2);
   }, testOptions);
-
 });
 </script>

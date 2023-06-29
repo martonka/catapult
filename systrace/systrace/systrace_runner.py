@@ -8,17 +8,20 @@
 necessary tracing agents for systrace, runs them, and outputs the results
 as an HTML or JSON file.'''
 
+from __future__ import print_function
 from systrace import output_generator
 from systrace import tracing_controller
+from systrace.tracing_agents import android_process_data_agent
+from systrace.tracing_agents import android_cgroup_agent
 from systrace.tracing_agents import atrace_agent
 from systrace.tracing_agents import atrace_from_file_agent
-from systrace.tracing_agents import battor_trace_agent
+from systrace.tracing_agents import atrace_process_dump
 from systrace.tracing_agents import ftrace_agent
+from systrace.tracing_agents import walt_agent
 
-
-AGENT_MODULES = [atrace_agent, atrace_from_file_agent,
-                 battor_trace_agent, ftrace_agent]
-
+AGENT_MODULES = [android_process_data_agent, android_cgroup_agent,
+                 atrace_agent, atrace_from_file_agent, atrace_process_dump,
+                 ftrace_agent, walt_agent]
 
 class SystraceRunner(object):
   def __init__(self, script_dir, options):
@@ -56,7 +59,7 @@ class SystraceRunner(object):
     Args:
        write_json: Whether to output to a json file (if false, use HTML file)
     """
-    print 'Tracing complete, writing results'
+    print('Tracing complete, writing results')
     if write_json:
       result = output_generator.GenerateJSONOutput(
                   self._tracing_controller.all_results,
@@ -65,5 +68,5 @@ class SystraceRunner(object):
       result = output_generator.GenerateHTMLOutput(
                   self._tracing_controller.all_results,
                   self._out_filename)
-    print '\nWrote trace %s file: file://%s\n' % (('JSON' if write_json
-                                                   else 'HTML'), result)
+    print('\nWrote trace %s file: file://%s\n' % (('JSON' if write_json
+                                                   else 'HTML'), result))

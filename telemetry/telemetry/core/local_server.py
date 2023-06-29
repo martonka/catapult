@@ -4,15 +4,19 @@
 
 # TODO(aiolos): this should be moved to catapult/base after the repo move.
 # It is used by tracing in tvcm/browser_controller.
+from __future__ import print_function
+from __future__ import absolute_import
 import collections
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
+import time
+import six
 
 from telemetry.core import util
-from telemetry.internal import forwarders
 
 NamedPort = collections.namedtuple('NamedPort', ['name', 'port'])
 
@@ -22,9 +26,14 @@ class LocalServerBackend(object):
   def __init__(self):
     pass
 
-  def StartAndGetNamedPorts(self, args):
+  def StartAndGetNamedPorts(self, args, handler_class=None):
     """Starts the actual server and obtains any sockets on which it
     should listen.
+
+    Args:
+      args: Same as what LocalServer.GetBackendStartupArgs() returns.
+      handler_class: Class of the handler which is used by sub-classes to
+        process resource requests.
 
     Returns a list of NamedPort on which this backend is listening.
     """
@@ -49,11 +58,11 @@ class LocalServer(object):
     self._subprocess = None
     self._devnull = None
     self._local_server_controller = None
-    self.forwarder = None
     self.host_ip = None
+    self.port = None
 
   def Start(self, local_server_controller):
-    assert self._subprocess == None
+    assert self._subprocess is None
     self._local_server_controller = local_server_controller
 
     self.host_ip = local_server_controller.host_ip
@@ -88,16 +97,16 @@ class LocalServer(object):
         http_port = p.port
     assert http_port and len(named_ports) == 1, (
         'Only http port is supported: %s' % named_ports)
-    self.forwarder = local_server_controller.CreateForwarder(
-        forwarders.PortPair(http_port,
-                            local_server_controller.GetRemotePort(http_port)))
+    self.port = http_port
 
   def _GetNamedPortsFromBackend(self):
     named_ports_json = None
     named_ports_re = re.compile('LocalServerBackend started: (?P<port>.+)')
     # TODO: This will hang if the subprocess doesn't print the correct output.
-    while self._subprocess.poll() == None:
-      m = named_ports_re.match(self._subprocess.stdout.readline())
+    while self._subprocess.poll() is None:
+      line = str(self._subprocess.stdout.readline().decode('utf-8'))
+      print(line)
+      m = named_ports_re.match(line)
       if m:
         named_ports_json = m.group('port')
         break
@@ -121,12 +130,22 @@ class LocalServer(object):
     self.Close()
 
   def Close(self):
-    if self.forwarder:
-      self.forwarder.Close()
-      self.forwarder = None
     if self._subprocess:
-      # TODO(tonyg): Should this block until it goes away?
       self._subprocess.kill()
+      # kill() does not close the handle to the process. On Windows, a process
+      # will live until you delete all handles to that subprocess, so
+      # ps_util.ListAllSubprocesses will find this subprocess if
+      # we haven't garbage-collected the handle yet. poll() should close the
+      # handle once the process dies.
+      time.sleep(.01)
+      for _ in range(100):
+        if self._subprocess.poll() is None:
+          time.sleep(.1)
+          continue
+        break
+      else:
+        logging.warn('Local server subprocess is still running after we '
+                     'attempted to kill it.')
       self._subprocess = None
     if self._devnull:
       self._devnull.close()
@@ -155,10 +174,11 @@ class LocalServerController(object):
 
   def StartServer(self, server):
     assert not server.is_running, 'Server already started'
+    assert self._platform_backend.network_controller_backend.is_open
     assert isinstance(server, LocalServer)
     if server.__class__ in self._local_servers_by_class:
       raise Exception(
-          'Canont have two servers of the same class running at once. ' +
+          'Cannot have two servers of the same class running at once. ' +
           'Locate the existing one and use it, or call Close() on it.')
 
     server.Start(self)
@@ -169,19 +189,18 @@ class LocalServerController(object):
 
   @property
   def local_servers(self):
-    return self._local_servers_by_class.values()
+    return list(self._local_servers_by_class.values())
 
   def Close(self):
+    # TODO(crbug.com/953365): This is a terrible infinite loop scenario
+    # and we should fix it.
     while len(self._local_servers_by_class):
-      server = self._local_servers_by_class.itervalues().next()
+      server = next(six.itervalues(self._local_servers_by_class))
       try:
         server.Close()
-      except Exception:
+      except Exception: # pylint: disable=broad-except
         import traceback
         traceback.print_exc()
-
-  def CreateForwarder(self, port_pair):
-    return self._platform_backend.forwarder_factory.Create(port_pair)
 
   def GetRemotePort(self, port):
     return self._platform_backend.GetRemotePort(port)
@@ -201,7 +220,19 @@ def _LocalServerBackendMain(args):
 
   server_args = json.loads(server_args_as_json)
 
-  named_ports = server.StartAndGetNamedPorts(server_args)
+  # Import the handler class if provided.
+  handler_module_name = server_args.get('dynamic_request_handler_module_name')
+  handler_class_name = server_args.get('dynamic_request_handler_class_name')
+  handler_class = None
+  if handler_module_name and handler_class_name:
+    handler_module = __import__(handler_module_name, fromlist=[True])
+    handler_class = getattr(handler_module, handler_class_name, None)
+    logging.info('Loading request handler: %s', handler_class_name)
+
+    if handler_class is None:
+      raise Exception('Failed to load request handler %s.' % handler_class_name)
+
+  named_ports = server.StartAndGetNamedPorts(server_args, handler_class)
   assert isinstance(named_ports, list)
   for named_port in named_ports:
     assert isinstance(named_port, NamedPort)
@@ -209,8 +240,8 @@ def _LocalServerBackendMain(args):
   # Note: This message is scraped by the parent process'
   # _GetNamedPortsFromBackend(). Do **not** change it.
   # pylint: disable=protected-access
-  print 'LocalServerBackend started: %s' % json.dumps([pair._asdict()
-                                                       for pair in named_ports])
+  print('LocalServerBackend started: %s' %
+        json.dumps([pair._asdict() for pair in named_ports]))
   sys.stdout.flush()
 
   return server.ServeForever()
@@ -220,6 +251,7 @@ if __name__ == '__main__':
   # This trick is needed because local_server.NamedPort is not the
   # same as sys.modules['__main__'].NamedPort. The module itself is loaded
   # twice, basically.
+  # pylint: disable=wrong-import-position
   from telemetry.core import local_server  # pylint: disable=import-self
   sys.exit(
       local_server._LocalServerBackendMain(  # pylint: disable=protected-access

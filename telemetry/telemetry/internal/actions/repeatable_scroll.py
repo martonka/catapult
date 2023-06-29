@@ -2,6 +2,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import division
+from __future__ import absolute_import
 import numbers
 
 from telemetry.internal.actions import page_action
@@ -12,15 +14,15 @@ from telemetry.web_perf import timeline_interaction_record
 class RepeatableScrollAction(page_action.PageAction):
 
   def __init__(self, x_scroll_distance_ratio=0.0, y_scroll_distance_ratio=0.5,
-               repeat_count=0, repeat_delay_ms=250, timeout=60,
+               repeat_count=0, repeat_delay_ms=250,
+               timeout=page_action.DEFAULT_TIMEOUT,
                prevent_fling=None, speed=None):
-    super(RepeatableScrollAction, self).__init__()
+    super(RepeatableScrollAction, self).__init__(timeout=timeout)
     self._x_scroll_distance_ratio = x_scroll_distance_ratio
     self._y_scroll_distance_ratio = y_scroll_distance_ratio
     self._repeat_count = repeat_count
     self._repeat_delay_ms = repeat_delay_ms
     self._windowsize = []
-    self._timeout = timeout
     self._prevent_fling = prevent_fling
     self._speed = speed
 
@@ -37,14 +39,15 @@ class RepeatableScrollAction(page_action.PageAction):
     # Set up a browser driven repeating scroll. The delay between the scrolls
     # should be unaffected by render thread responsivness (or lack there of).
     tab.SynthesizeScrollGesture(
+        #2To3-division: this line is unchanged as result is expected floats.
         x=int(self._windowsize[0] / 2),
         y=int(self._windowsize[1] / 2),
-        xDistance=int(self._x_scroll_distance_ratio * self._windowsize[0]),
-        yDistance=int(-self._y_scroll_distance_ratio * self._windowsize[1]),
-        preventFling=self._prevent_fling,
+        x_distance=int(self._x_scroll_distance_ratio * self._windowsize[0]),
+        y_distance=int(-self._y_scroll_distance_ratio * self._windowsize[1]),
+        prevent_fling=self._prevent_fling,
         speed=self._speed,
-        repeatCount=self._repeat_count,
-        repeatDelayMs=self._repeat_delay_ms,
-        interactionMarkerName=timeline_interaction_record.GetJavaScriptMarker(
+        repeat_count=self._repeat_count,
+        repeat_delay_ms=self._repeat_delay_ms,
+        interaction_marker_name=timeline_interaction_record.GetJavaScriptMarker(
             'Gesture_ScrollAction', [timeline_interaction_record.REPEATABLE]),
-        timeout=self._timeout)
+        timeout=self.timeout)

@@ -2,59 +2,68 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import logging
-import subprocess
+import os
+import posixpath
+import shutil
+
+from py_utils import exc_util
 
 from telemetry.core import exceptions
 from telemetry.internal.platform import android_platform_backend as \
   android_platform_backend_module
-from telemetry.core import util
-from telemetry.internal.backends import android_command_line_backend
-from telemetry.internal.backends import browser_backend
+from telemetry.internal.backends.chrome import android_minidump_symbolizer
 from telemetry.internal.backends.chrome import chrome_browser_backend
+from telemetry.internal.backends.chrome import minidump_finder
 from telemetry.internal.browser import user_agent
+from telemetry.internal.results import artifact_logger
 
 from devil.android import app_ui
+from devil.android import device_signal
 from devil.android.sdk import intent
+from devil.android.sdk import version_codes
 
 
 class AndroidBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
   """The backend for controlling a browser instance running on Android."""
+  DEBUG_ARTIFACT_PREFIX = 'android_debug_info'
+
   def __init__(self, android_platform_backend, browser_options,
-               backend_settings):
+               browser_directory, profile_directory, backend_settings,
+               build_dir=None):
+    """
+    Args:
+      android_platform_backend: The
+          android_platform_backend.AndroidPlatformBackend instance to use.
+      browser_options: The browser_options.BrowserOptions instance to use.
+      browser_directory: A string containing the path to the directory on the
+          device where the browser is installed.
+      profile_directory: A string containing a path to the directory on the
+          device to store browser profile information in.
+      backend_settings: The
+          android_browser_backend_settings.AndroidBrowserBackendSettings
+          instance to use.
+      build_dir: A string containing a path to the directory on the host that
+          the browser was built in, for finding debug artifacts. Can be None if
+          the browser was not locally built, or the directory otherwise cannot
+          be determined.
+    """
     assert isinstance(android_platform_backend,
                       android_platform_backend_module.AndroidPlatformBackend)
     super(AndroidBrowserBackend, self).__init__(
         android_platform_backend,
+        browser_options=browser_options,
+        browser_directory=browser_directory,
+        profile_directory=profile_directory,
+        supports_extensions=False,
         supports_tab_control=backend_settings.supports_tab_control,
-        supports_extensions=False, browser_options=browser_options)
-
-    self._port_keeper = util.PortKeeper()
-    # Use the port hold by _port_keeper by default.
-    self._port = self._port_keeper.port
-
-    extensions_to_load = browser_options.extensions_to_load
-
-    if len(extensions_to_load) > 0:
-      raise browser_backend.ExtensionsNotSupportedException(
-          'Android browser does not support extensions.')
+        build_dir=build_dir)
+    self._backend_settings = backend_settings
 
     # Initialize fields so that an explosion during init doesn't break in Close.
-    self._backend_settings = backend_settings
     self._saved_sslflag = ''
-
-    # Stop old browser, if any.
-    self._StopBrowser()
-
-    if self.device.HasRoot() or self.device.NeedsSU():
-      if self.browser_options.profile_dir:
-        self.platform_backend.PushProfile(
-            self._backend_settings.package,
-            self.browser_options.profile_dir)
-      elif not self.browser_options.dont_override_profile:
-        self.platform_backend.RemoveProfile(
-            self._backend_settings.package,
-            self._backend_settings.profile_ignore_list)
+    self._app_ui = None
 
     # Set the debug app if needed.
     self.platform_backend.SetDebugApp(self._backend_settings.package)
@@ -67,91 +76,56 @@ class AndroidBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
   def device(self):
     return self.platform_backend.device
 
+  @property
+  def supports_app_ui_interactions(self):
+    return True
+
+  def GetAppUi(self):
+    if self._app_ui is None:
+      self._app_ui = app_ui.AppUi(self.device, package=self.package)
+    return self._app_ui
+
   def _StopBrowser(self):
     # Note: it's important to stop and _not_ kill the browser app, since
     # stopping also clears the app state in Android's activity manager.
     self.platform_backend.StopApplication(self._backend_settings.package)
 
-  def Start(self):
-    self.device.RunShellCommand('logcat -c')
-    if self.browser_options.startup_url:
-      url = self.browser_options.startup_url
-    elif self.browser_options.profile_dir:
-      url = None
-    else:
-      # If we have no existing tabs start with a blank page since default
-      # startup with the NTP can lead to race conditions with Telemetry
-      url = 'about:blank'
-
-    self.platform_backend.DismissCrashDialogIfNeeded()
-
+  def Start(self, startup_args):
+    assert not startup_args, (
+        'Startup arguments for Android should be set during '
+        'possible_browser.SetUpEnvironment')
+    self._dump_finder = minidump_finder.MinidumpFinder(
+        self.browser.platform.GetOSName(), self.browser.platform.GetArchName())
     user_agent_dict = user_agent.GetChromeUserAgentDictFromType(
         self.browser_options.browser_user_agent_type)
+    self.device.StartActivity(
+        intent.Intent(package=self._backend_settings.package,
+                      activity=self._backend_settings.activity,
+                      action=None, data='about:blank', category=None,
+                      extras=user_agent_dict),
+        blocking=True)
+    try:
+      self.BindDevToolsClient()
+    except:
+      self.Close()
+      raise
 
-    browser_startup_args = self.GetBrowserStartupArgs()
-    with android_command_line_backend.SetUpCommandLineFlags(
-        self.device, self._backend_settings, browser_startup_args):
-      self.device.StartActivity(
-          intent.Intent(package=self._backend_settings.package,
-                        activity=self._backend_settings.activity,
-                        action=None, data=url, category=None,
-                        extras=user_agent_dict),
-          blocking=True)
+  def BindDevToolsClient(self):
+    super(AndroidBrowserBackend, self).BindDevToolsClient()
+    package = self.devtools_client.GetVersion().get('Android-Package')
+    if package is None:
+      logging.warning('Could not determine package name from DevTools client.')
+    elif package == self._backend_settings.package:
+      logging.info('Successfully connected to %s DevTools client', package)
+    else:
+      raise exceptions.BrowserGoneException(
+          self.browser, 'Expected connection to %s but got %s.' % (
+              self._backend_settings.package, package))
 
-      # TODO(crbug.com/404771): Move port forwarding to network_controller.
-      remote_devtools_port = self._backend_settings.GetDevtoolsRemotePort(
-          self.device)
-      try:
-        # Release reserved port right before forwarding host to device.
-        self._port_keeper.Release()
-        assert self._port == self._port_keeper.port, (
-          'Android browser backend must use reserved port by _port_keeper')
-        self.platform_backend.ForwardHostToDevice(
-            self._port, remote_devtools_port)
-      except Exception:
-        logging.exception('Failed to forward %s to %s.',
-            str(self._port), str(remote_devtools_port))
-        logging.warning('Currently forwarding:')
-        try:
-          for line in self.device.adb.ForwardList().splitlines():
-            logging.warning('  %s', line)
-        except Exception:
-          logging.warning('Exception raised while listing forwarded '
-                          'connections.')
-
-        logging.warning('Host tcp ports in use:')
-        try:
-          for line in subprocess.check_output(['netstat', '-t']).splitlines():
-            logging.warning('  %s', line)
-        except Exception:
-          logging.warning('Exception raised while listing tcp ports.')
-
-        logging.warning('Device unix domain sockets in use:')
-        try:
-          for line in self.device.ReadFile('/proc/net/unix', as_root=True,
-                                           force_pull=True).splitlines():
-            logging.warning('  %s', line)
-        except Exception:
-          logging.warning('Exception raised while listing unix domain sockets.')
-
-        raise
-
-      try:
-        self._WaitForBrowserToComeUp()
-        self._InitDevtoolsClientBackend(remote_devtools_port)
-      except exceptions.BrowserGoneException:
-        logging.critical('Failed to connect to browser.')
-        if not (self.device.HasRoot() or self.device.NeedsSU()):
-          logging.critical(
-            'Resolve this by either: '
-            '(1) Flashing to a userdebug build OR '
-            '(2) Manually enabling web debugging in Chrome at '
-            'Settings > Developer tools > Enable USB Web debugging.')
-        self.Close()
-        raise
-      except:
-        self.Close()
-        raise
+  def _FindDevToolsPortAndTarget(self):
+    devtools_port = self._backend_settings.GetDevtoolsRemotePort(self.device)
+    browser_target = None  # Use default
+    return devtools_port, browser_target
 
   def Foreground(self):
     package = self._backend_settings.package
@@ -168,35 +142,56 @@ class AndroidBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
     try:
       app_ui.AppUi(self.device).WaitForUiNode(package=package)
     except Exception:
-      raise exceptions.BrowserGoneException(self.browser,
+      raise exceptions.BrowserGoneException(
+          self.browser,
           'Timed out waiting for browser to come back foreground.')
 
+  def Background(self):
+    package = 'org.chromium.push_apps_to_background'
+    activity = package + '.PushAppsToBackgroundActivity'
+    self.device.StartActivity(
+        intent.Intent(
+            package=package,
+            activity=activity,
+            action=None,
+            flags=[intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED]),
+        blocking=True)
 
-  def GetBrowserStartupArgs(self):
-    args = super(AndroidBrowserBackend, self).GetBrowserStartupArgs()
-    args.append('--enable-remote-debugging')
-    args.append('--disable-fre')
-    args.append('--disable-external-intent-requests')
-    return args
+  def ForceJavaHeapGarbageCollection(self):
+    # Send USR1 signal to force GC on Chrome processes forked from Zygote.
+    # (c.f. crbug.com/724032)
+    self.device.KillAll(
+        self._backend_settings.package,
+        exact=False,  # Send signal to children too.
+        signum=device_signal.SIGUSR1,
+        as_root=True)
 
   @property
-  def pid(self):
-    pids = self.device.GetPids(self._backend_settings.package)
-    if not pids or self._backend_settings.package not in pids:
+  def processes(self):
+    try:
+      zygotes = self.device.ListProcesses('zygote')
+      zygote_pids = set(p.pid for p in zygotes)
+      assert zygote_pids, 'No Android zygote found'
+      processes = self.device.ListProcesses(self._backend_settings.package)
+      return [p for p in processes if p.ppid in zygote_pids]
+    except Exception as exc:
+      # Re-raise as an AppCrashException to get further diagnostic information.
+      # In particular we also get the values of all local variables above.
+      raise exceptions.AppCrashException(
+          self.browser, 'Error getting browser PIDs: %s' % exc)
+
+  def GetPid(self):
+    browser_processes = self._GetBrowserProcesses()
+    assert len(browser_processes) <= 1, (
+        'Found too many browsers: %r' % browser_processes)
+    if not browser_processes:
       raise exceptions.BrowserGoneException(self.browser)
-    if len(pids[self._backend_settings.package]) > 1:
-      raise Exception(
-          'At most one instance of process %s expected but found pids: '
-          '%s' % (self._backend_settings.package, pids))
-    return int(pids[self._backend_settings.package][0])
+    return browser_processes[0].pid
 
-  @property
-  def browser_directory(self):
-    return None
-
-  @property
-  def profile_directory(self):
-    return self._backend_settings.profile_dir
+  def _GetBrowserProcesses(self):
+    """Return all possible browser processes."""
+    package = self._backend_settings.package
+    return [p for p in self.processes if p.name == package]
 
   @property
   def package(self):
@@ -206,37 +201,141 @@ class AndroidBrowserBackend(chrome_browser_backend.ChromeBrowserBackend):
   def activity(self):
     return self._backend_settings.activity
 
-  def __del__(self):
-    self.Close()
-
+  @exc_util.BestEffort
   def Close(self):
     super(AndroidBrowserBackend, self).Close()
-
     self._StopBrowser()
-
-    self.platform_backend.StopForwardingHost(self._port)
-
-    if self._output_profile_path:
-      self.platform_backend.PullProfile(
-          self._backend_settings.package, self._output_profile_path)
+    if self._tmp_minidump_dir:
+      shutil.rmtree(self._tmp_minidump_dir, ignore_errors=True)
+      self._tmp_minidump_dir = None
 
   def IsBrowserRunning(self):
-    return self.platform_backend.IsAppRunning(self._backend_settings.package)
+    return len(self._GetBrowserProcesses()) > 0
 
   def GetStandardOutput(self):
     return self.platform_backend.GetStandardOutput()
 
-  def GetStackTrace(self):
-    return self.platform_backend.GetStackTrace()
+  def PullMinidumps(self):
+    self._PullMinidumpsAndAdjustMtimes()
 
-  def GetMostRecentMinidumpPath(self):
-    return None
+  def CollectDebugData(self, log_level):
+    """Collects various information that may be useful for debugging.
 
-  def GetAllMinidumpPaths(self):
-    return None
+    In addition to any data collected by parents' implementation, this also
+    collects the following and stores it as artifacts:
+      1. UI state of the device
+      2. Logcat
+      3. Symbolized logcat
+      4. Tombstones
 
-  def GetAllUnsymbolizedMinidumpPaths(self):
-    return None
+    Args:
+      log_level: The logging level to use from the logging module, e.g.
+          logging.ERROR.
+
+    Returns:
+      A debug_data.DebugData object containing the collected data.
+    """
+    # Store additional debug information as artifacts.
+    # We do these in a mixed order so that higher priority ones are done first.
+    # This is so that if an error occurs during debug data collection (e.g.
+    # adb issues), we're more likely to end up with useful debug information.
+    suffix = artifact_logger.GetTimestampSuffix()
+    self._StoreLogcatAsArtifact(suffix)
+    retval = super(AndroidBrowserBackend, self).CollectDebugData(log_level)
+    self._StoreUiDumpAsArtifact(suffix)
+    self._StoreTombstonesAsArtifact(suffix)
+    return retval
 
   def SymbolizeMinidump(self, minidump_path):
-    return None
+    dump_symbolizer = android_minidump_symbolizer.AndroidMinidumpSymbolizer(
+        self._dump_finder, self.build_dir)
+    stack = dump_symbolizer.SymbolizeMinidump(minidump_path)
+    if not stack:
+      return (False, 'Failed to symbolize minidump.')
+    self._symbolized_minidump_paths.add(minidump_path)
+    return (True, stack)
+
+  def _PullMinidumpsAndAdjustMtimes(self):
+    """Pulls any minidumps from the device to the host.
+
+    Skips pulling any dumps that have already been pulled. The modification time
+    of any pulled dumps will be set to the modification time of the dump on the
+    device, offset by any difference in clocks between the device and host.
+    """
+    # The offset is (device_time - host_time), so a positive value means that
+    # the device clock is ahead.
+    time_offset = self.platform_backend.GetDeviceHostClockOffset()
+    device = self.platform_backend.device
+
+    device_dump_path = posixpath.join(
+        self.platform_backend.GetDumpLocation(self.package),
+        'Crashpad', 'pending')
+    if not device.PathExists(device_dump_path):
+      logging.warning(
+          'Device minidump path %s does not exist - not attempting to pull '
+          'minidumps', device_dump_path)
+      return
+    device_dumps = device.ListDirectory(device_dump_path)
+    for dump_filename in device_dumps:
+      # Skip any .lock files since they're not useful and are prone to being
+      # deleted by the time we try to actually pull them.
+      if dump_filename.endswith('.lock'):
+        continue
+      host_path = os.path.join(self._tmp_minidump_dir, dump_filename)
+      if os.path.exists(host_path):
+        continue
+      device_path = posixpath.join(device_dump_path, dump_filename)
+      # Skip any files that have a .lock file associated with them, as that
+      # implies that the minidump hasn't been fully written to disk yet.
+      device_lock_path = device_path + '.lock'
+      if device.FileExists(device_lock_path):
+        logging.debug('Not pulling file %s because a .lock file exists for it',
+                      device_path)
+        continue
+      device.PullFile(device_path, host_path)
+      # Set the local version's modification time to the device's
+      # The mtime returned by device_utils.StatPath only has a resolution down
+      # to the minute, so we can't use that.
+      # On Android L and earlier, 'stat' is not available, so fall back to
+      # device_utils.StatPath and adjust the returned value so that it's as new
+      # as possible while still fitting in that 1 minute resolution.
+      device_mtime = None
+      if device.build_version_sdk >= version_codes.MARSHMALLOW:
+        device_mtime = device.RunShellCommand(
+            ['stat', '-c', '%Y', device_path], single_line=True)
+        device_mtime = int(device_mtime.strip())
+      else:
+        stat_output = device.StatPath(device_path)
+        device_mtime = stat_output['st_mtime'] + 59
+      host_mtime = device_mtime - time_offset
+      os.utime(host_path, (host_mtime, host_mtime))
+
+  def _StoreUiDumpAsArtifact(self, suffix):
+    try:
+      ui_dump = self.platform_backend.GetSystemUi().ScreenDump()
+      artifact_name = posixpath.join(
+          self.DEBUG_ARTIFACT_PREFIX, 'ui_dump-%s.txt' % suffix)
+      artifact_logger.CreateArtifact(artifact_name, '\n'.join(ui_dump))
+    except Exception:  # pylint: disable=broad-except
+      logging.exception('Failed to store UI dump')
+
+  def _StoreLogcatAsArtifact(self, suffix):
+    logcat = self.platform_backend.GetLogCat()
+    artifact_name = posixpath.join(
+        self.DEBUG_ARTIFACT_PREFIX, 'logcat-%s.txt' % suffix)
+    artifact_logger.CreateArtifact(artifact_name, logcat)
+
+    symbolized_logcat = self.platform_backend.SymbolizeLogCat(logcat)
+    if symbolized_logcat is None:
+      symbolized_logcat = 'Failed to symbolize logcat. Is the script available?'
+    artifact_name = posixpath.join(
+        self.DEBUG_ARTIFACT_PREFIX, 'symbolized_logcat-%s.txt' % suffix)
+    artifact_logger.CreateArtifact(artifact_name, symbolized_logcat)
+
+  def _StoreTombstonesAsArtifact(self, suffix):
+    tombstones = self.platform_backend.GetTombstones()
+    if tombstones is None:
+      tombstones = 'Failed to get tombstones. Is the script available?'
+    artifact_name = posixpath.join(
+        self.DEBUG_ARTIFACT_PREFIX, 'tombstones-%s.txt' % suffix)
+    artifact_logger.CreateArtifact(artifact_name, tombstones)

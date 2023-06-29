@@ -15,6 +15,9 @@
 """Implementation of Unix-like mv command for cloud storage providers."""
 
 from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import division
+from __future__ import unicode_literals
 
 from gslib.command import Command
 from gslib.command_argument import CommandArgument
@@ -22,8 +25,7 @@ from gslib.commands.cp import CP_SUB_ARGS
 from gslib.cs_api_map import ApiSelector
 from gslib.exception import CommandException
 from gslib.storage_url import StorageUrlFromString
-from gslib.util import NO_MAX
-
+from gslib.utils.constants import NO_MAX
 
 _SYNOPSIS = """
   gsutil mv [-p] src_url dst_url
@@ -42,7 +44,7 @@ _DETAILED_HELP_TEXT = ("""
   cloud storage providers. For example, to move all objects from a
   bucket to a local directory you could use:
 
-    gsutil mv gs://my_bucket dir
+    gsutil mv gs://my_bucket/* dir
 
   Similarly, to move all objects from a local directory to a bucket you could
   use:
@@ -50,33 +52,41 @@ _DETAILED_HELP_TEXT = ("""
     gsutil mv ./dir gs://my_bucket
 
 
-<B>RENAMING BUCKET SUBDIRECTORIES</B>
-  You can use the gsutil mv command to rename subdirectories. For example,
-  the command:
+<B>RENAMING GROUPS OF OBJECTS</B>
+  You can use the gsutil mv command to rename all objects with a given prefix
+  to have a new prefix. This is accomplished by copying each object to a new
+  object with the desired name and deleting the old one. For example, the
+  command:
 
-    gsutil mv gs://my_bucket/olddir gs://my_bucket/newdir
+    gsutil mv gs://my_bucket/oldprefix gs://my_bucket/newprefix
 
-  would rename all objects and subdirectories under gs://my_bucket/olddir to be
-  under gs://my_bucket/newdir, otherwise preserving the subdirectory structure.
+  would rename all objects under gs://my_bucket/oldprefix to be under
+  gs://my_bucket/newprefix, otherwise preserving the naming structure.
 
   If you do a rename as specified above and you want to preserve ACLs, you
   should use the -p option (see OPTIONS).
 
-  Note that when using mv to rename bucket subdirectories you cannot specify
-  the source URL using wildcards. You need to spell out the complete name:
+  Note that when using mv to rename groups of objects with a common prefix
+  you cannot specify the source URL using wildcards. You need to spell out
+  the complete name:
 
-    gsutil mv gs://my_bucket/olddir gs://my_bucket/newdir
+    gsutil mv gs://my_bucket/oldprefix gs://my_bucket/newprefix
 
   If you have a large number of files to move you might want to use the
   gsutil -m option, to perform a multi-threaded/multi-processing move:
 
-    gsutil -m mv gs://my_bucket/olddir gs://my_bucket/newdir
+    gsutil -m mv gs://my_bucket/oldprefix gs://my_bucket/newprefix
 
 
 <B>NON-ATOMIC OPERATION</B>
   Unlike the case with many file systems, the gsutil mv command does not
   perform a single atomic operation. Rather, it performs a copy from source
   to destination followed by removing the source for each object.
+
+  A consequence of this is that, in addition to normal network and operation
+  charges, if you move a Nearline Storage or Coldline Storage object, deletion
+  and data retrieval charges apply. See the `documentation
+  <https://cloud.google.com/storage/pricing>`_ for pricing details.
 
 
 <B>OPTIONS</B>
@@ -111,14 +121,14 @@ class MvCommand(Command):
       gs_default_api=ApiSelector.JSON,
       argparse_arguments=[
           CommandArgument.MakeZeroOrMoreCloudOrFileURLsArgument()
-      ]
+      ],
   )
   # Help specification. See help_provider.py for documentation.
   help_spec = Command.HelpSpec(
       help_name='mv',
       help_name_aliases=['move', 'rename'],
       help_type='command_help',
-      help_one_line_summary='Move/rename objects and/or subdirectories',
+      help_one_line_summary='Move/rename objects',
       help_text=_DETAILED_HELP_TEXT,
       subcommand_help_text={},
   )
@@ -146,7 +156,13 @@ class MvCommand(Command):
     if self.recursion_requested:
       unparsed_args.append('-R')
     unparsed_args.extend(self.unparsed_args)
-    self.command_runner.RunNamedCommand('cp', unparsed_args, self.headers,
-                                        self.debug, self.parallel_operations)
+    self.command_runner.RunNamedCommand(
+        'cp',
+        args=unparsed_args,
+        headers=self.headers,
+        debug=self.debug,
+        trace_token=self.trace_token,
+        user_project=self.user_project,
+        parallel_operations=self.parallel_operations)
 
     return 0

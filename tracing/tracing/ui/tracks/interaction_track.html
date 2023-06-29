@@ -10,7 +10,6 @@ found in the LICENSE file.
 <link rel="import" href="/tracing/ui/tracks/alert_track.html">
 <link rel="import" href="/tracing/ui/tracks/container_track.html">
 <link rel="import" href="/tracing/ui/tracks/drawing_container.html">
-<link rel="import" href="/tracing/ui/tracks/highlighter.html">
 <link rel="import" href="/tracing/ui/tracks/kernel_track.html">
 
 <script>
@@ -22,13 +21,13 @@ tr.exportTo('tr.ui.tracks', function() {
    * @constructor
    * @extends {MultiRowTrack}
    */
-  var InteractionTrack = tr.ui.b.define(
+  const InteractionTrack = tr.ui.b.define(
       'interaction-track', tr.ui.tracks.MultiRowTrack);
 
   InteractionTrack.prototype = {
     __proto__: tr.ui.tracks.MultiRowTrack.prototype,
 
-    decorate: function(viewport) {
+    decorate(viewport) {
       tr.ui.tracks.MultiRowTrack.prototype.decorate.call(this, viewport);
       this.heading = 'Interactions';
       this.subRows_ = [];
@@ -37,24 +36,24 @@ tr.exportTo('tr.ui.tracks', function() {
     set model(model) {
       this.setItemsToGroup(model.userModel.expectations, {
         guid: tr.b.GUID.allocateSimple(),
-        model: model,
-        getSettingsKey: function() {
+        model,
+        getSettingsKey() {
           return undefined;
         }
       });
     },
 
-    buildSubRows_: function(slices) {
-      if (this.subRows_.length)
+    buildSubRows_(slices) {
+      if (this.subRows_.length) {
         return this.subRows_;
-      this.subRows_.push.apply(this.subRows_,
-          tr.ui.tracks.AsyncSliceGroupTrack.prototype.buildSubRows_.call(
-          {}, slices, true));
+      }
+      this.subRows_.push(
+          ...tr.ui.tracks.groupAsyncSlicesIntoSubRows(slices, true));
       return this.subRows_;
     },
 
-    addSubTrack_: function(slices) {
-      var track = new tr.ui.tracks.SliceTrack(this.viewport);
+    addSubTrack_(slices) {
+      const track = new tr.ui.tracks.SliceTrack(this.viewport);
       track.slices = slices;
       Polymer.dom(this).appendChild(track);
       return track;
@@ -62,7 +61,7 @@ tr.exportTo('tr.ui.tracks', function() {
   };
 
   return {
-    InteractionTrack: InteractionTrack
+    InteractionTrack,
   };
 });
 </script>

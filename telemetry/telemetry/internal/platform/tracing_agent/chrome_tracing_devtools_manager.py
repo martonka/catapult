@@ -5,6 +5,10 @@
 # A singleton map from platform backends to maps of uniquely-identifying
 # remote port (which may be the same as local port) to DevToolsClientBackend.
 # There is no guarantee that the devtools agent is still alive.
+
+from __future__ import absolute_import
+import six
+
 _platform_backends_to_devtools_clients_maps = {}
 
 
@@ -14,34 +18,22 @@ def _RemoveStaleDevToolsClient(platform_backend):
       platform_backend, {})
   devtools_clients_map = {
       port: client
-      for port, client in devtools_clients_map.iteritems()
+      for port, client in six.iteritems(devtools_clients_map)
       if client.IsAlive()
       }
   _platform_backends_to_devtools_clients_maps[platform_backend] = (
       devtools_clients_map)
 
 
-def RegisterDevToolsClient(devtools_client_backend, platform_backend):
+def RegisterDevToolsClient(devtools_client_backend):
   """Register DevTools client
 
   This should only be called from DevToolsClientBackend when it is initialized.
   """
   remote_port = str(devtools_client_backend.remote_port)
-  if platform_backend not in _platform_backends_to_devtools_clients_maps:
-    _platform_backends_to_devtools_clients_maps[platform_backend] = {}
-  devtools_clients_map = (
-    _platform_backends_to_devtools_clients_maps[platform_backend])
-  devtools_clients_map[remote_port] = devtools_client_backend
-
-
-def IsSupported(platform_backend):
-  _RemoveStaleDevToolsClient(platform_backend)
-  devtools_clients_map = _platform_backends_to_devtools_clients_maps.get(
-      platform_backend, {})
-  for _, devtools_client in devtools_clients_map.iteritems():
-    if devtools_client.IsChromeTracingSupported():
-      return True
-  return False
+  platform_clients = _platform_backends_to_devtools_clients_maps.setdefault(
+      devtools_client_backend.platform_backend, {})
+  platform_clients[remote_port] = devtools_client_backend
 
 
 def GetDevToolsClients(platform_backend):
@@ -50,7 +42,7 @@ def GetDevToolsClients(platform_backend):
       platform_backend, {})
   if not devtools_clients_map:
     return []
-  return devtools_clients_map.values()
+  return list(devtools_clients_map.values())
 
 def GetActiveDevToolsClients(platform_backend):
   """Get DevTools clients that are still connectable."""

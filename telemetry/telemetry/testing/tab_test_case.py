@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry.core import exceptions
 from telemetry.testing import browser_test_case
 
@@ -28,12 +29,15 @@ class TabTestCase(browser_test_case.BrowserTestCase):
     self._tab.Navigate('about:blank')
     self._tab.WaitForDocumentReadyStateToBeInteractiveOrBetter()
 
-  def Navigate(self, filename, script_to_evaluate_on_commit=None):
+  def Navigate(self,
+               filename,
+               script_to_evaluate_on_commit=None,
+               handler_class=None):
     """Navigates |tab| to |filename| in the unittest data directory.
 
     Also sets up http server to point to the unittest data directory.
     """
-    url = self.UrlOfUnittestFile(filename)
+    url = self.UrlOfUnittestFile(filename, handler_class)
     self._tab.Navigate(url, script_to_evaluate_on_commit)
     self._tab.WaitForDocumentReadyStateToBeComplete()
     self._tab.WaitForFrameToBeDisplayed()

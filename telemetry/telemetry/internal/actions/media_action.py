@@ -4,11 +4,11 @@
 
 """Common media action functions."""
 
-import logging
-
-from telemetry.core import util
+from __future__ import absolute_import
 from telemetry.internal.actions import page_action
 from telemetry.internal.actions import utils
+
+import py_utils
 
 
 class MediaAction(page_action.PageAction):
@@ -29,17 +29,17 @@ class MediaAction(page_action.PageAction):
       timeout_in_seconds: Timeout to check for event, throws an exception if
           not fired.
     """
-    util.WaitFor(lambda:
-                     self.HasEventCompletedOrError(tab, selector, event_name),
-                 timeout=timeout_in_seconds)
+    py_utils.WaitFor(
+        lambda: self.HasEventCompletedOrError(tab, selector, event_name),
+        timeout=timeout_in_seconds)
 
   def HasEventCompletedOrError(self, tab, selector, event_name):
     if tab.EvaluateJavaScript(
-        'window.__hasEventCompleted("%s", "%s");' % (selector, event_name)):
+        'window.__hasEventCompleted({{ selector }}, {{ event_name }});',
+        selector=selector, event_name=event_name):
       return True
     error = tab.EvaluateJavaScript('window.__error')
     if error:
-      logging.error('Detected media error while waiting for %s: %s', event_name,
-                    error)
-      return True
+      raise page_action.PageActionFailed(
+          'Detected media error while waiting for %s: %s' % (event_name, error))
     return False

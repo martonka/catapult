@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import collections
 from telemetry.core import exceptions
 
@@ -50,8 +51,8 @@ class InspectorBackendList(collections.Sequence):
     """
     raise NotImplementedError
 
-  # TODO(nednguyen): Remove this method and turn inspector_backend_list API to
-  # dictionary-like API (crbug.com/398467)
+  # TODO(crbug.com/398467): Remove this method and turn inspector_backend_list
+  # API to dictionary-like API.
   def __getitem__(self, index):
     self._Update()
     if index >= len(self._filtered_context_ids):
@@ -75,9 +76,8 @@ class InspectorBackendList(collections.Sequence):
             context_id)
       except exceptions.Error as e:
         self._HandleDevToolsConnectionError(e)
-        raise e
+        raise  # Re-raise exception with original stacktrace.
       # Propagate KeyError from GetInspectorBackend call.
-
       wrapper = self.CreateWrapper(backend)
       self._wrapper_dict[context_id] = wrapper
     return self._wrapper_dict[context_id]
@@ -111,7 +111,7 @@ class InspectorBackendList(collections.Sequence):
         self._filtered_context_ids.append(context['id'])
 
     # Clean up any backends for contexts that have gone away.
-    for context_id in self._wrapper_dict.keys():
+    for context_id in list(self._wrapper_dict.keys()):
       if context_id not in self._filtered_context_ids:
         del self._wrapper_dict[context_id]
 

@@ -5,8 +5,6 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="stylesheet" href="/tracing/ui/extras/chrome/cc/picture_view.css">
-
 <link rel="import" href="/tracing/extras/chrome/cc/picture.html">
 <link rel="import" href="/tracing/ui/analysis/generic_object_view.html">
 <link rel="import" href="/tracing/ui/analysis/object_snapshot_view.html">
@@ -20,23 +18,33 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
    * Displays a picture snapshot in a human readable form.
    * @constructor
    */
-  var PictureSnapshotView = tr.ui.b.define(
+  const PictureSnapshotView = tr.ui.b.define(
       'tr-ui-e-chrome-cc-picture-snapshot-view',
       tr.ui.analysis.ObjectSnapshotView);
 
   PictureSnapshotView.prototype = {
     __proto__: tr.ui.analysis.ObjectSnapshotView.prototype,
 
-    decorate: function() {
+    decorate() {
       Polymer.dom(this).classList.add(
           'tr-ui-e-chrome-cc-picture-snapshot-view');
+      this.style.display = 'flex';
+      this.style.flexGrow = 1;
+      this.style.flexShrink = 1;
+      this.style.flexBasis = 'auto';
+      this.style.minWidth = 0;
       this.pictureDebugger_ = new tr.ui.e.chrome.cc.PictureDebugger();
+      this.pictureDebugger_.style.flexGrow = 1;
+      this.pictureDebugger_.style.flexShrink = 1;
+      this.pictureDebugger_.style.flexBasis = 'auto';
+      this.pictureDebugger_.style.minWidth = 0;
       Polymer.dom(this).appendChild(this.pictureDebugger_);
     },
 
-    updateContents: function() {
-      if (this.objectSnapshot_ && this.pictureDebugger_)
+    updateContents() {
+      if (this.objectSnapshot_ && this.pictureDebugger_) {
         this.pictureDebugger_.picture = this.objectSnapshot_;
+      }
     }
   };
 
@@ -48,7 +56,7 @@ tr.exportTo('tr.ui.e.chrome.cc', function() {
       });
 
   return {
-    PictureSnapshotView: PictureSnapshotView
+    PictureSnapshotView,
   };
 });
 </script>

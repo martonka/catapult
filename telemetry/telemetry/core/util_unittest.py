@@ -1,49 +1,15 @@
 # Copyright 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
 import os
 import shutil
 import tempfile
 import unittest
 
-from telemetry.core import exceptions
+import mock
+
 from telemetry.core import util
-
-
-class TestWait(unittest.TestCase):
-
-  def testNonTimeout(self):
-
-    def test():
-      return True
-
-    util.WaitFor(test, 0.1)
-
-  def testTimeout(self):
-
-    def test():
-      return False
-
-    self.assertRaises(exceptions.TimeoutException,
-                      lambda: util.WaitFor(test, 0.1))
-
-  def testCallable(self):
-    """Test methods and anonymous functions, functions are tested elsewhere."""
-
-    class Test(object):
-
-      def Method(self):
-        return 'test'
-
-    util.WaitFor(Test().Method, 0.1)
-
-    util.WaitFor(lambda: 1, 0.1)
-
-    # Test noncallable condition.
-    self.assertRaises(TypeError, lambda: util.WaitFor('test', 0.1))
-
-  def testReturn(self):
-    self.assertEquals('test', util.WaitFor(lambda: 'test', 0.1))
 
 
 class TestGetSequentialFileName(unittest.TestCase):
@@ -63,7 +29,7 @@ class TestGetSequentialFileName(unittest.TestCase):
 
   def testGetSequentialFileNameWithOtherSequentialFiles(self):
     # Create test_000.json, test_001.json, test_002.json in test directory.
-    for i in xrange(3):
+    for i in range(3):
       with open(
           os.path.join(self.test_directory, 'test_%03d.json' % i), 'w') as _:
         pass
@@ -74,3 +40,42 @@ class TestGetSequentialFileName(unittest.TestCase):
 
   def tearDown(self):
     shutil.rmtree(self.test_directory)
+
+
+class TestGetUsedBuildDirectory(unittest.TestCase):
+
+  def testGetUsedBuildDirectoryBrowserDirectoryExists(self):
+    with mock.patch('os.path.exists') as m:
+      m.return_value = True
+      self.assertEquals(util.GetUsedBuildDirectory('/foo/test'), '/foo/test')
+
+  def testGetUsedBuildDirectoryBrowserDirectoryDoesNotExist(self):
+    with mock.patch('os.path.exists') as m:
+      m.return_value = False
+      self.assertNotEqual(util.GetUsedBuildDirectory('/foo/test'), '/foo/test')
+
+  # Patched so that CHROMIUM_OUTPUT_DIR doesn't affect the test if it's set.
+  @mock.patch.dict(os.environ, {}, clear=True)
+  def testGetUsedBuildDirectoryNoBrowserDirectory(self):
+    def side_effect(arg):
+      return arg == os.path.join('.', 'out', 'Release_x64')
+
+    with mock.patch('os.path.exists') as m:
+      m.side_effect = side_effect
+      self.assertEquals(util.GetUsedBuildDirectory(chrome_root='.'),
+                        os.path.join('.', 'out', 'Release_x64'))
+
+
+class TestGetBuildDirFromHostApkPath(unittest.TestCase):
+  def testNoPathReturnsNone(self):
+    self.assertEqual(util.GetBuildDirFromHostApkPath(None), None)
+
+  def testLocallyBuiltPaths(self):
+    self.assertEqual(util.GetBuildDirFromHostApkPath('/out/Foo/apks/test.apk'),
+                     '/out/Foo')
+    self.assertEqual(
+        util.GetBuildDirFromHostApkPath('/out/Bar/bin/test_bundle'), '/out/Bar')
+
+  def testNonLocallyBuiltPath(self):
+    self.assertEqual(
+        util.GetBuildDirFromHostApkPath('/some/other/path/test.apk'), None)

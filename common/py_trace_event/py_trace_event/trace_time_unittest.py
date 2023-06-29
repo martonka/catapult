@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import contextlib
 import logging
 import platform
@@ -86,7 +87,7 @@ class TimerTest(unittest.TestCase):
     # Test requires QPC to be available on platform.
     if not trace_time.IsQPCUsable():
       return True
-    self.assertGreater(trace_time.monotonic(), 0)
+    self.assertGreater(trace_time.Now(), 0)
 
   # Works even if QPC would work.
   def testGetWinNowFunction_GetTickCount(self):
@@ -94,7 +95,7 @@ class TimerTest(unittest.TestCase):
             or sys.platform.startswith(trace_time._PLATFORMS['cygwin'])):
       return True
     with self.ReplaceQPCCheck(lambda: False):
-      self.assertGreater(trace_time.monotonic(), 0)
+      self.assertGreater(trace_time.Now(), 0)
 
   # Linux tests.
   def testGetClockGetTimeClockNumber_linux(self):
@@ -112,7 +113,7 @@ class TimerTest(unittest.TestCase):
   # Smoke Test.
   def testMonotonic(self):
     time_one = trace_time.Now()
-    for _ in xrange(1000):
+    for _ in range(1000):
       time_two = trace_time.Now()
       self.assertLessEqual(time_one, time_two)
       time_one = time_two

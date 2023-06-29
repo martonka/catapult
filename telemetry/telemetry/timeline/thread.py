@@ -1,11 +1,25 @@
 # Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
+import functools
+import sys
 import telemetry.timeline.async_slice as async_slice_module
 import telemetry.timeline.event_container as event_container
 import telemetry.timeline.flow_event as flow_event_module
 import telemetry.timeline.sample as sample_module
 import telemetry.timeline.slice as slice_module
+
+if sys.version_info.major == 3:
+  def cmp(x, y):  # pylint: disable=redefined-builtin
+    """
+    Replacement for built-in function cmp that was removed in Python 3
+
+    Compare the two objects x and y and return an integer according to
+    the outcome. The return value is negative if x < y, zero if x == y
+    and strictly positive if x > y.
+    """
+    return (x > y) - (x < y)
 
 
 class Thread(event_container.TimelineEventContainer):
@@ -82,8 +96,8 @@ class Thread(event_container.TimelineEventContainer):
     if len(self._samples) and timestamp < self._samples[-1].start:
       raise ValueError(
           'Samples must be added in increasing timestamp order')
-    sample = sample_module.Sample(self,
-        category, name, timestamp, args=args)
+    sample = sample_module.Sample(
+        self, category, name, timestamp, args=args)
     self._samples.append(sample)
 
   def AddAsyncSlice(self, async_slice):
@@ -111,8 +125,8 @@ class Thread(event_container.TimelineEventContainer):
       raise ValueError(
           'Slices must be added in increasing timestamp order')
     new_slice = slice_module.Slice(self, category, name, timestamp,
-                                    thread_timestamp=thread_timestamp,
-                                    args=args)
+                                   thread_timestamp=thread_timestamp,
+                                   args=args)
     self._open_slices.append(new_slice)
     new_slice.did_not_finish = True
     self.PushSlice(new_slice)
@@ -150,7 +164,7 @@ class Thread(event_container.TimelineEventContainer):
     new_slice = slice_module.Slice(self, category, name, timestamp,
                                    thread_timestamp=thread_timestamp,
                                    args=args)
-    if duration == None:
+    if duration is None:
       new_slice.did_not_finish = True
     else:
       new_slice.duration = duration
@@ -158,8 +172,8 @@ class Thread(event_container.TimelineEventContainer):
     self.PushSlice(new_slice)
     return new_slice
 
-  def PushMarkSlice(self, category, name, timestamp, thread_timestamp,
-        args=None):
+  def PushMarkSlice(
+      self, category, name, timestamp, thread_timestamp, args=None):
     new_slice = slice_module.Slice(self, category, name, timestamp,
                                    thread_timestamp=thread_timestamp,
                                    args=args)
@@ -233,7 +247,8 @@ class Thread(event_container.TimelineEventContainer):
 
     self._all_slices.extend(self._newly_added_slices)
 
-    sorted_slices = sorted(self._newly_added_slices, cmp=CompareSlices)
+    sorted_slices = sorted(
+        self._newly_added_slices, key=functools.cmp_to_key(CompareSlices))
     root_slice = sorted_slices[0]
     self._toplevel_slices.append(root_slice)
     for s in sorted_slices[1:]:

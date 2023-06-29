@@ -2,7 +2,11 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import distutils.spawn
+# pylint: disable=import-error
+# pylint: disable=no-name-in-module
+from __future__ import print_function
+from __future__ import absolute_import
+import distutils.spawn as spawn
 import logging
 import os
 import re
@@ -11,7 +15,6 @@ import subprocess
 import sys
 
 from telemetry.internal.platform import desktop_platform_backend
-from telemetry.internal.util import ps_util
 
 
 def _BinaryExistsInSudoersFiles(path, sudoers_file_contents):
@@ -47,60 +50,15 @@ class PosixPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
     with open(path, 'r') as f:
       return f.read()
 
-  def GetPsOutput(self, columns, pid=None):
-    """Returns output of the 'ps' command as a list of lines.
-    Subclass should override this function.
-
-    Args:
-      columns: A list of require columns, e.g., ['pid', 'pss'].
-      pid: If not None, returns only the information of the process
-         with the pid.
-    """
-    return ps_util.GetPsOutputWithPlatformBackend(self, columns, pid)
-
-  def _GetTopOutput(self, pid, columns):
-    """Returns output of the 'top' command as a list of lines.
-
-    Args:
-      pid: pid of process to examine.
-      columns: A list of require columns, e.g., ['idlew', 'vsize'].
-    """
-    args = ['top']
-    args.extend(['-pid', str(pid), '-l', '1', '-s', '0', '-stats',
-        ','.join(columns)])
-    return self.RunCommand(args).splitlines()
-
-  def GetChildPids(self, pid):
-    """Returns a list of child pids of |pid|."""
-    ps_output = self.GetPsOutput(['pid', 'ppid', 'state'])
-    ps_line_re = re.compile(
-        r'\s*(?P<pid>\d+)\s*(?P<ppid>\d+)\s*(?P<state>\S*)\s*')
-    processes = []
-    for pid_ppid_state in ps_output:
-      m = ps_line_re.match(pid_ppid_state)
-      assert m, 'Did not understand ps output: %s' % pid_ppid_state
-      processes.append((m.group('pid'), m.group('ppid'), m.group('state')))
-    return ps_util.GetChildPids(processes, pid)
-
-  def GetCommandLine(self, pid):
-    command = self.GetPsOutput(['command'], pid)
-    return command[0] if command else None
-
   def CanLaunchApplication(self, application):
-    return bool(distutils.spawn.find_executable(application))
-
-  def IsApplicationRunning(self, application):
-    ps_output = self.GetPsOutput(['command'])
-    application_re = re.compile(
-        r'(.*%s|^)%s(\s|$)' % (os.path.sep, application))
-    return any(application_re.match(cmd) for cmd in ps_output)
+    return bool(spawn.find_executable(application))
 
   def LaunchApplication(
       self, application, parameters=None, elevate_privilege=False):
     assert application, 'Must specify application to launch'
 
     if os.path.sep not in application:
-      application = distutils.spawn.find_executable(application)
+      application = spawn.find_executable(application)
       assert application, 'Failed to find application in path'
 
     args = [application]
@@ -135,16 +93,17 @@ class PosixPlatformBackend(desktop_platform_backend.DesktopPlatformBackend):
           # that is rarely relevant), there's no way to prompt the user for
           # sudo. Fail with a helpful error message. For more information, see:
           #   https://code.google.com/p/chromium/issues/detail?id=426720
-          text = ('Telemetry needs to run %s with elevated privileges, but the '
-                 'setuid bit is not set and there is no interactive terminal '
-                 'for a prompt. Please ask an administrator to set the setuid '
-                 'bit on this executable and ensure that it is owned by a user '
-                 'with the necessary privileges. Aborting.' % application)
-          print text
+          text = (
+              'Telemetry needs to run %s with elevated privileges, but the '
+              'setuid bit is not set and there is no interactive terminal '
+              'for a prompt. Please ask an administrator to set the setuid '
+              'bit on this executable and ensure that it is owned by a user '
+              'with the necessary privileges. Aborting.' % application)
+          print(text)
           raise Exception(text)
         # Else, there is a tty that can be used for a useful interactive prompt.
-        print ('Telemetry needs to run %s under sudo. Please authenticate.' %
-               application)
+        print('Telemetry needs to run %s under sudo. Please authenticate.' %
+              application)
         # Synchronously authenticate.
         subprocess.check_call(['/usr/bin/sudo', '-v'])
 

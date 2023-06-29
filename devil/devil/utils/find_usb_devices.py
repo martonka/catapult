@@ -3,13 +3,21 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import argparse
+import logging
+import os
 import re
 import sys
-import argparse
+
+if __name__ == '__main__':
+  sys.path.append(
+      os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from devil.utils import cmd_helper
 from devil.utils import usb_hubs
 from devil.utils import lsusb
+
+logger = logging.getLogger(__name__)
 
 # Note: In the documentation below, "virtual port" refers to the port number
 # as observed by the system (e.g. by usb-devices) and "physical port" refers
@@ -183,10 +191,10 @@ class USBDeviceNode(USBNode):
 
   #override
   def Display(self, port_chain='', info=False):
-    print '%s Device %d (%s)' % (port_chain, self.device_num, self.desc)
+    logger.info('%s Device %d (%s)', port_chain, self.device_num, self.desc)
     if info:
-      print self.info
-    for (port, device) in self._port_to_node.iteritems():
+      logger.info('%s', self.info)
+    for (port, device) in self._port_to_node.items():
       device.Display('%s%d:' % (port_chain, port), info=info)
 
 
@@ -229,8 +237,8 @@ class USBBusNode(USBNode):
 
   #override
   def Display(self, port_chain='', info=False):
-    print "=== %s ===" % self.desc
-    for (port, device) in self._port_to_node.iteritems():
+    logger.info('=== %s ===', self.desc)
+    for (port, device) in self._port_to_node.items():
       device.Display('%s%d:' % (port_chain, port), info=info)
 
 
@@ -258,12 +266,12 @@ def GetBusNumberToDeviceTreeMap(fast=True):
     for line in lsusb.raw_lsusb().splitlines():
       match = _LSUSB_BUS_DEVICE_RE.match(line)
       if match:
-        info_map[(int(match.group(1)), int(match.group(2)))] = (
-          {'desc':match.group(3)})
+        info_map[(int(match.group(1)), int(match.group(2)))] = ({
+            'desc': match.group(3)
+        })
   else:
     info_map = {((int(line['bus']), int(line['device']))): line
                 for line in _GetParsedLSUSBOutput()}
-
 
   tree = {}
   bus_num = -1
@@ -281,10 +289,10 @@ def GetBusNumberToDeviceTreeMap(fast=True):
         tree[bus_num] = USBBusNode(bus_num=bus_num)
 
       # create the new device
-      new_device = USBDeviceNode(bus_num=bus_num,
-                                 device_num=device_num,
-                                 info=info_map.get((bus_num, device_num),
-                                                   {'desc': 'NOT AVAILABLE'}))
+      new_device = USBDeviceNode(
+          bus_num=bus_num,
+          device_num=device_num,
+          info=info_map.get((bus_num, device_num), {'desc': 'NOT AVAILABLE'}))
 
       # add device to bus
       if parent_num != 0:
@@ -342,8 +350,10 @@ def GetPhysicalPortToBusDeviceMap(hub, hub_type):
     Dict of {physical port: (bus number, device number)}
   """
   port_device = hub_type.GetPhysicalPortToNodeTuples(hub)
-  return {port: (device.bus_num, device.device_num)
-          for (port, device) in port_device}
+  return {
+      port: (device.bus_num, device.device_num)
+      for (port, device) in port_device
+  }
 
 
 def GetPhysicalPortToSerialMap(hub, hub_type):
@@ -357,9 +367,10 @@ def GetPhysicalPortToSerialMap(hub, hub_type):
     Dict of {physical port: serial number)}
   """
   port_device = hub_type.GetPhysicalPortToNodeTuples(hub)
-  return {port: device.serial
-          for (port, device) in port_device
-          if device.serial}
+  return {
+      port: device.serial
+      for (port, device) in port_device if device.serial
+  }
 
 
 def GetPhysicalPortToTTYMap(device, hub_type):
@@ -373,9 +384,11 @@ def GetPhysicalPortToTTYMap(device, hub_type):
   """
   port_device = hub_type.GetPhysicalPortToNodeTuples(device)
   bus_device_to_tty = GetBusDeviceToTTYMap()
-  return {port: bus_device_to_tty[(device.bus_num, device.device_num)]
-          for (port, device) in port_device
-          if (device.bus_num, device.device_num) in bus_device_to_tty}
+  return {
+      port: bus_device_to_tty[(device.bus_num, device.device_num)]
+      for (port, device) in port_device
+      if (device.bus_num, device.device_num) in bus_device_to_tty
+  }
 
 
 def CollectHubMaps(hub_types, map_func, device_tree_map=None, fast=False):
@@ -443,9 +456,9 @@ def GetBusDeviceFromTTY(tty_string):
   for line in _GetTtyUSBInfo(tty_string).splitlines():
     bus_match = _BUS_NUM_REGEX.match(line)
     device_match = _DEVICE_NUM_REGEX.match(line)
-    if bus_match and bus_num == None:
+    if bus_match and bus_num is None:
       bus_num = int(bus_match.group(1))
-    if device_match and device_num == None:
+    if device_match and device_num is None:
       device_num = int(device_match.group(1))
   if bus_num is None or device_num is None:
     raise ValueError('Info not found')
@@ -477,29 +490,34 @@ def GetBusDeviceToTTYMap():
 
 def TestUSBTopologyScript():
   """Test display and hub identification."""
+  # The following makes logger.info behave pretty much like print
+  # during this test script.
+  logging.basicConfig(format='%(message)s', stream=sys.stdout)
+  logger.setLevel(logging.INFO)
+
   # Identification criteria for Plugable 7-Port Hub
-  print '==== USB TOPOLOGY SCRIPT TEST ===='
+  logger.info('==== USB TOPOLOGY SCRIPT TEST ====')
+  logger.info('')
 
   # Display devices
-  print '==== DEVICE DISPLAY ===='
+  logger.info('==== DEVICE DISPLAY ====')
   device_trees = GetBusNumberToDeviceTreeMap()
   for device_tree in device_trees.values():
     device_tree.Display()
-  print
+  logger.info('')
 
   # Display TTY information about devices plugged into hubs.
-  print '==== TTY INFORMATION ===='
+  logger.info('==== TTY INFORMATION ====')
   for port_map in GetAllPhysicalPortToTTYMaps(
       usb_hubs.ALL_HUBS, device_tree_map=device_trees):
-    print port_map
-  print
+    logger.info('%s', port_map)
+  logger.info('')
 
   # Display serial number information about devices plugged into hubs.
-  print '==== SERIAL NUMBER INFORMATION ===='
+  logger.info('==== SERIAL NUMBER INFORMATION ====')
   for port_map in GetAllPhysicalPortToSerialMaps(
       usb_hubs.ALL_HUBS, device_tree_map=device_trees):
-    print port_map
-
+    logger.info('%s', port_map)
 
   return 0
 
@@ -524,9 +542,11 @@ def parse_options(argv):
   parser = argparse.ArgumentParser(usage=USAGE)
   return parser.parse_args(argv[1:])
 
+
 def main():
   parse_options(sys.argv)
   TestUSBTopologyScript()
+
 
 if __name__ == "__main__":
   sys.exit(main())

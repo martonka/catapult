@@ -3,7 +3,7 @@
 Copyright 2016 The Chromium Authors. All rights reserved.
 Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
--->  
+-->
 
 <link rel="import" href="top_bar_view.html">
 <link rel="import" href="proxy_view.html">
@@ -12,15 +12,13 @@ found in the LICENSE file.
 <link rel="import" href="alt_svc_view.html">
 <link rel="import" href="spdy_view.html">
 <link rel="import" href="quic_view.html">
+<link rel="import" href="reporting_view.html">
 <link rel="import" href="http_cache_view.html">
-<link rel="import" href="bandwidth_view.html">
 <link rel="import" href="prerender_view.html">
 <link rel="import" href="modules_view.html">
 <link rel="import" href="import_view.html">
 <link rel="import" href="events_view.html">
 <link rel="import" href="timeline_view.html">
-<link rel="import" href="sdch_view.html">
-<link rel="import" href="chromeos_view.html">
 
 <script src="cr.js"></script>
 <script src="assert.js"></script>
@@ -48,7 +46,6 @@ found in the LICENSE file.
 <script src="details_view.js"></script>
 <script src="source_entry.js"></script>
 <script src="horizontal_scrollbar_view.js"></script>
-<script src="top_mid_bottom_view.js"></script>
 <script src="timeline_data_series.js"></script>
 <script src="timeline_graph_view.js"></script>
 <script src="timeline_view.js"></script>
@@ -56,59 +53,68 @@ found in the LICENSE file.
 <script src="log_grouper.js"></script>
 <script src="proxy_view.js"></script>
 <script src="quic_view.js"></script>
+<script src="reporting_view.js"></script>
 <script src="socket_pool_wrapper.js"></script>
 <script src="sockets_view.js"></script>
 <script src="alt_svc_view.js"></script>
 <script src="spdy_view.js"></script>
 <script src="modules_view.js"></script>
 <script src="prerender_view.js"></script>
-<script src="chromeos_view.js"></script>
-<script src="bandwidth_view.js"></script>
-<script src="sdch_view.js"></script> 
-
+<script src="/third_party/jszip/jszip.min.js"></script>
 <dom-module id="netlog-viewer">
-  <!-- TODO(rayraymond): Styles specific to a module should go
-       in the module's style and styles shared across many modules
-       should be separated out into style modules. -->
-  <link type="text/css" rel="stylesheet" href="main.css">
-  <link type="text/css" rel="stylesheet" href="status_view.css">
-  <link type="text/css" rel="stylesheet" href="events_view.css">
-  <link type="text/css" rel="stylesheet" href="timeline_view.css">
-  <link type="text/css" rel="stylesheet" href="chromeos_view.css">
-  <link type="text/css" rel="stylesheet" href="tab_views.css">
-
   <template>
-    <div id=import-view-drop-target>  
-      <top-bar-view></top-bar-view>
-    
-      <div id="tab-list">
-      </div>
-    
-      <div id=main-tab-contents>
-        <proxy-view></proxy-view>
-        <dns-view></dns-view>
-        <sockets-view></sockets-view>
-        <alt-svc-view></alt-svc-view>
-        <spdy-view></spdy-view>
-        <quic-view></quic-view>
-        <http-cache-view></http-cache-view>
-        <bandwidth-view></bandwidth-view>
-        <prerender-view></prerender-view>
-        <modules-view></modules-view>
-        <import-view></import-view>
-        <events-view></events-view>
-        <timeline-view></timeline-view>
-        <sdch-view></sdch-view>
-        <chromeos-view></chromeos-view>
-      </div>
-    </div>
+    <style>
+      :host {
+        /* Fill the entire viewport */
+        width: 100vw;
+        height: 100vh;
 
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+    </style>
+
+      <!-- The bar at the very top of NetLog viewer that identifies the loaded
+           log file. -->
+      <top-bar-view></top-bar-view>
+
+    <!-- The box below the top bar that fills the remaining space and contains
+         everything else -->
+    <div class="flexfill flexrow">
+
+      <!-- The navigation bar on the left to cycle between the different main
+           "tabs" (dns, proxy, import, etc) -->
+      <div id="tab-list" class="scrollable">
+      </div>
+
+      <!-- The box to the right of the tab list that fills the remaining space
+           and contains the active tab (only one of the children below are
+           visible at a time) -->
+      <div class="flexfill flexrow">
+        <proxy-view class="flexfill scrollable"></proxy-view>
+        <dns-view class="flexfill scrollable"></dns-view>
+        <sockets-view class="flexfill scrollable"></sockets-view>
+        <alt-svc-view class="flexfill scrollable"></alt-svc-view>
+        <spdy-view class="flexfill scrollable"></spdy-view>
+        <quic-view class="flexfill scrollable"></quic-view>
+        <reporting-view class="flexfill scrollable"></reporting-view>
+        <http-cache-view class="flexfill scrollable"></http-cache-view>
+        <prerender-view class="flexfill scrollable"></prerender-view>
+        <modules-view class="flexfill scrollable"></modules-view>
+        <import-view class="flexfill scrollable"></import-view>
+        <events-view class="flexfill"></events-view>
+        <timeline-view class="flexfill"></timeline-view>
+      </div>
   </template>
   <script>
     'use strict';
 
     Polymer({
-      is: 'netlog-viewer'
+      is: 'netlog-viewer',
+      attached: function() {
+        MainView.getInstance();  // entry point, from main.js
+      }
     });
   </script>
 </dom-module>

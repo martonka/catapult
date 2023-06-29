@@ -1,16 +1,18 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """A Model for holding a mapping of bug labels to sets of tests.
 
 This is used to decide which bug labels should be applied by default
 to bugs filed for alerts on particular tests.
 """
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 from google.appengine.ext import ndb
 
-from dashboard import utils
+from dashboard.common import utils
 
 # String ID for the single BugLabelPatterns entity.
 _ID = 'patterns'
@@ -45,7 +47,7 @@ def GetBugLabelPatterns():
 def GetBugLabelsForTest(test):
   """Returns a list of bug labels to be applied to the test."""
   matching = []
-  for label, patterns in GetBugLabelPatterns().iteritems():
+  for label, patterns in GetBugLabelPatterns().items():
     for pattern in patterns:
       if utils.TestMatchesPattern(test, pattern):
         matching.append(label)

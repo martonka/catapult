@@ -16,16 +16,16 @@ from collections import OrderedDict
 
 import json
 
+_show_only_in_metadata = set(['tags', 'expectations_files', 'test_name_prefix'])
 
 class ResultType(object):
-    Pass = 'Pass'
-    Failure = 'Failure'
-    ImageOnlyFailure = 'ImageOnlyFailure'
-    Timeout = 'Timeout'
-    Crash = 'Crash'
-    Skip = 'Skip'
+    Pass = 'PASS'
+    Failure = 'FAIL'
+    Timeout = 'TIMEOUT'
+    Crash = 'CRASH'
+    Skip = 'SKIP'
 
-    values = (Pass, Failure, ImageOnlyFailure, Timeout, Crash, Skip)
+    values = (Pass, Failure, Timeout, Crash, Skip)
 
 
 class Result(object):
@@ -34,7 +34,8 @@ class Result(object):
 
     def __init__(self, name, actual, started, took, worker,
                  expected=None, unexpected=False,
-                 flaky=False, code=0, out='', err='', pid=0):
+                 flaky=False, code=0, out='', err='', pid=0,
+                 artifacts=None):
         self.name = name
         self.actual = actual
         self.started = started
@@ -47,6 +48,9 @@ class Result(object):
         self.out = out
         self.err = err
         self.pid = pid
+        self.is_regression = actual != ResultType.Pass and unexpected
+        self.artifacts = artifacts
+        self.result_sink_retcode = 0
 
 
 class ResultSet(object):
@@ -58,10 +62,11 @@ class ResultSet(object):
         self.results.append(result)
 
 
-TEST_SEPARATOR = '.'
+DEFAULT_TEST_SEPARATOR = '.'
 
 
-def make_full_results(metadata, seconds_since_epoch, all_test_names, results):
+def make_full_results(metadata, seconds_since_epoch, all_test_names, results,
+                      test_separator=DEFAULT_TEST_SEPARATOR):
     """Convert the typ results to the Chromium JSON test result format.
 
     See http://www.chromium.org/developers/the-json-test-results-format
@@ -71,42 +76,49 @@ def make_full_results(metadata, seconds_since_epoch, all_test_names, results):
     full_results = OrderedDict()
     full_results['version'] = 3
     full_results['interrupted'] = False
-    full_results['path_delimiter'] = TEST_SEPARATOR
+    full_results['path_delimiter'] = test_separator
     full_results['seconds_since_epoch'] = seconds_since_epoch
 
-    for md in metadata:
-        key, val = md.split('=', 1)
-        full_results[key] = val
+    full_results.update(
+        {k:v for k, v in metadata.items() if k not in _show_only_in_metadata})
+
+    if metadata:
+        full_results['metadata'] = metadata
 
     passing_tests = _passing_test_names(results)
-    failed_tests = failed_test_names(results)
-    skipped_tests = set(all_test_names) - passing_tests - failed_tests
+    skipped_tests = _skipped_test_names(results)
+    failed_tests = set(all_test_names) - passing_tests - skipped_tests
+    crashed_tests = failed_tests & _crashing_test_names(results)
+    timed_out_tests = failed_tests & _timed_out_test_names(results)
+    failed_tests -= crashed_tests | timed_out_tests
 
     full_results['num_failures_by_type'] = OrderedDict()
-    full_results['num_failures_by_type']['FAIL'] = len(failed_tests)
-    full_results['num_failures_by_type']['PASS'] = len(passing_tests)
-    full_results['num_failures_by_type']['SKIP'] = len(skipped_tests)
+    full_results['num_failures_by_type'][ResultType.Failure] = len(failed_tests)
+    full_results['num_failures_by_type'][ResultType.Timeout] = len(timed_out_tests)
+    full_results['num_failures_by_type'][ResultType.Crash] = len(crashed_tests)
+    full_results['num_failures_by_type'][ResultType.Pass] = len(passing_tests)
+    full_results['num_failures_by_type'][ResultType.Skip] = len(skipped_tests)
+
+    full_results['num_regressions'] = 0
 
     full_results['tests'] = OrderedDict()
 
     for test_name in all_test_names:
-        value = OrderedDict()
-        if test_name in skipped_tests:
-            value['expected'] = 'SKIP'
-            value['actual'] = 'SKIP'
-        else:
-            value['expected'] = 'PASS'
-            value['actual'] = _actual_results_for_test(test_name, results)
-            if value['actual'].endswith('FAIL'):
-                value['is_unexpected'] = True
-        _add_path_to_trie(full_results['tests'], test_name, value)
+        value = _results_for_test(test_name, results)
+        _add_path_to_trie(
+            full_results['tests'], test_name, value, test_separator)
+        if value.get('is_regression'):
+            full_results['num_regressions'] += 1
 
     return full_results
 
 
 def make_upload_request(test_results_server, builder, master, testtype,
                         full_results):
-    url = 'http://%s/testfile/upload' % test_results_server
+    if test_results_server.startswith('http'):
+        url = '%s/testfile/upload' % test_results_server
+    else:
+        url = 'https://%s/testfile/upload' % test_results_server
     attrs = [('builder', builder),
              ('master', master),
              ('testtype', testtype)]
@@ -115,48 +127,105 @@ def make_upload_request(test_results_server, builder, master, testtype,
 
 
 def exit_code_from_full_results(full_results):
-    return 1 if num_failures(full_results) else 0
+    return 1 if full_results['num_regressions'] else 0
 
 
 def num_failures(full_results):
     return full_results['num_failures_by_type']['FAIL']
 
 
-def failed_test_names(results):
+def num_passes(full_results):
+    return full_results['num_failures_by_type']['PASS']
+
+
+def num_skips(full_results):
+    return full_results['num_failures_by_type']['SKIP']
+
+
+def regressions(results):
     names = set()
     for r in results.results:
-        if r.actual == ResultType.Failure:
+        if r.is_regression:
             names.add(r.name)
-        elif r.actual == ResultType.Pass and r.name in names:
+        elif ((r.actual == ResultType.Pass or r.actual == ResultType.Skip)
+              and r.name in names):
+            # This check indicates that a test failed, and then either passed
+            # or was skipped on a retry. It is somewhat counterintuitive
+            # that a test that failed and then skipped wouldn't be considered
+            # failed, but that's at least consistent with a test that is
+            # skipped every time.
             names.remove(r.name)
     return names
 
+def _skipped_test_names(results):
+    return set([r.name for r in results.results if r.actual == ResultType.Skip])
 
 def _passing_test_names(results):
     return set(r.name for r in results.results if r.actual == ResultType.Pass)
 
+def _crashing_test_names(results):
+    return set(r.name for r in results.results if r.actual == ResultType.Crash)
 
-def _actual_results_for_test(test_name, results):
+def _timed_out_test_names(results):
+    return set(r.name for r in results.results if r.actual == ResultType.Timeout)
+
+def _results_for_test(test_name, results):
+    value = OrderedDict()
     actuals = []
+    times = []
     for r in results.results:
         if r.name == test_name:
-            if r.actual == ResultType.Failure:
-                actuals.append('FAIL')
-            elif r.actual == ResultType.Pass:
-                actuals.append('PASS')
+            if r.actual in ResultType.values:
+                actuals.append(r.actual)
+            else:
+                raise ValueError('%r is not a valid result' % r.actual)
 
-    assert actuals, 'We did not find any result data for %s.' % test_name
-    return ' '.join(actuals)
+            # The time a test takes is a floating point number of seconds;
+            # if we were to encode this unmodified, then when we converted it
+            # to JSON it might make the file significantly larger. Instead
+            # we truncate the file to ten-thousandths of a second, which is
+            # probably more than good enough for most tests.
+            times.append(round(r.took, 4))
 
+            # A given test may be run more than one time; if so, whether
+            # a result was unexpected or a regression is based on the result
+            # of the *last* time it was run.
+            if r.unexpected:
+                value['is_unexpected'] = r.unexpected
+                if r.is_regression:
+                    value['is_regression'] = True
+            else:
+                if 'is_unexpected' in value:
+                    value.pop('is_unexpected')
+                if 'is_regression' in value:
+                    value.pop('is_regression')
 
-def _add_path_to_trie(trie, path, value):
-    if TEST_SEPARATOR not in path:
+            # This assumes that the expected values are the same for every
+            # invocation of the test.
+            value['expected'] = ' '.join(sorted(r.expected))
+
+            # Handle artifacts
+            if not r.artifacts:
+                continue
+            if 'artifacts' not in value:
+                value['artifacts'] = {}
+            for artifact_name, artifacts in r.artifacts.items():
+                value['artifacts'].setdefault(artifact_name, []).extend(artifacts)
+
+    if not actuals:  # pragma: untested
+        actuals.append('SKIP')
+    value['actual'] = ' '.join(actuals)
+    value['times'] = times
+    return value
+
+def _add_path_to_trie(trie, path, value, test_separator):
+    if test_separator not in path:
         trie[path] = value
         return
-    directory, rest = path.split(TEST_SEPARATOR, 1)
+    directory, rest = path.split(test_separator, 1)
     if directory not in trie:
         trie[directory] = {}
-    _add_path_to_trie(trie[directory], rest, value)
+    _add_path_to_trie(trie[directory], rest, value, test_separator)
 
 
 def _encode_multipart_form_data(attrs, test_results):

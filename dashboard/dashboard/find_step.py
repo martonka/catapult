@@ -1,17 +1,19 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """An experimental alternative to find_change_points.FindChangePoints.
 
 The general approach that this function takes is similar to that
 of skiaperf.com. For the implementation that this is based on, see:
 http://goo.gl/yikYZY
 """
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import math
 
-from dashboard import math_utils
+from dashboard.common import math_utils
 
 
 def FindStep(data_series, score_threshold=4.0):
@@ -99,4 +101,4 @@ def _RootMeanSquareDeviation(values1, values2):
 
 def _SumOfSquaredResiduals(values1, values2):
   """Returns the sum of the squared deviations between corresponding values."""
-  return sum((v1 - v2) ** 2 for v1, v2 in zip(values1, values2))
+  return sum((v1 - v2)**2 for v1, v2 in zip(values1, values2))

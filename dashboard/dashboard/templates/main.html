@@ -54,12 +54,15 @@ found in the LICENSE file.
 
 <html>
 <head>
-  <link type="text/css" rel="stylesheet" href="/dashboard/static/base.css">
+  <script src="/components/webcomponentsjs/webcomponents-lite.min.js"></script>
+  <link rel="import" href="/dashboard/static/base.html">
   <link rel="import" href="/components/polymer/polymer.html">
   <link rel="import" href="/dashboard/elements/load-analytics.html">
   <link rel="import" href="/dashboard/elements/nav-bar.html">
   <title>Chrome Performance Dashboard</title>
-  <script>// Placeholder for analytics</script>
+  <script>
+    /* Placeholder for analytics */
+  </script>
 
   <style>
     /* The #content element contains everything after the title. */
@@ -133,7 +136,6 @@ found in the LICENSE file.
 </head>
 <body>
   <nav-bar></nav-bar>
-  <h1>Chrome Performance Dashboard</h1>
   <div id="content">
     <h2>Top {{num_changes}} improvements in the last {{num_days}} days
     for {{sheriff_name}}</h2>

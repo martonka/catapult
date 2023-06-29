@@ -14,17 +14,17 @@ found in the LICENSE file.
 'use strict';
 
 tr.b.unittest.testSuite(function() {
-  var TestUtils = tr.c.TestUtils;
+  const TestUtils = tr.c.TestUtils;
 
   test('crossProcessCounterpart', function() {
-    var frameTreeNode;
-    var renderFrame;
+    let frameTreeNode;
+    let renderFrame;
     TestUtils.newModel(function(model) {
       // Add a toplevel to make the context tree consistent with the spec,
       // though its functionality is not tested here.
       TestUtils.newSnapshot(model, {
-                              pid: 1, name: 'TopLevel', id: '0x1',
-                              scope: 'PlatformThread', category: 'blink'});
+        pid: 1, name: 'TopLevel', id: '0x1',
+        scope: 'PlatformThread', category: 'blink'});
       renderFrame = TestUtils.newSnapshot(
           model, {
             pid: 1, name: 'RenderFrame', id: '0x2', scope: 'RenderFrame',

@@ -2,10 +2,15 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import argparse
 import codecs
 import collections
 import gzip
+import io
 import itertools
 import json
 import logging
@@ -14,7 +19,14 @@ import sys
 
 # Add tracing/ to the path.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import six
 from tracing_build import html2trace, trace2html
+
+
+try:
+  StringTypes = six.string_types # pylint: disable=invalid-name
+except NameError:
+  StringTypes = str
 
 
 GZIP_FILENAME_SUFFIX = '.gz'
@@ -65,7 +77,7 @@ class IdMap(object):
     """The maximum mapped ID of this map's entries."""
     if not self._entry_map:
       return 0
-    return max(e._canonical_id for e in self._entry_map.itervalues())
+    return max(e._canonical_id for e in self._entry_map.values())
 
   def AddEntry(self, source, path, **items):
     """Add a source-specific entry path to the map.
@@ -80,10 +92,10 @@ class IdMap(object):
       return self._GetSubMapEntry(source, path[0]).AddEntry(source, path[1:],
                                                             **items)
     assert 'id' not in items  # ID is set according to the path.
-    for key, value in items.iteritems():
+    for key, value in items.items():
       value_set = self._items[key]
       if (isinstance(value, collections.Iterable) and
-          not isinstance(value, basestring)):
+          not isinstance(value, StringTypes)):
         value_set.update(value)
       else:
         value_set.add(value)
@@ -140,6 +152,7 @@ class IdMap(object):
     are assigned to the resulting "canonical" entries and their sub-entries are
     merged recursively.
     """
+    # pylint: disable=unsubscriptable-object
     if self._depth == len(self.LEVELS):
       return
 
@@ -164,12 +177,12 @@ class IdMap(object):
 
   def _CalculateUnmergeableMapFromEntrySources(self):
     entry_ids_by_source = collections.defaultdict(set)
-    for entry_id, entry in self._entry_map.iteritems():
+    for entry_id, entry in self._entry_map.items():
       for source in entry._sources:
         entry_ids_by_source[source].add(entry_id)
 
     unmergeable_map = collections.defaultdict(set)
-    for unmergeable_set in entry_ids_by_source.itervalues():
+    for unmergeable_set in entry_ids_by_source.values():
       for entry_id in unmergeable_set:
         unmergeable_map[entry_id].update(unmergeable_set - {entry_id})
 
@@ -179,6 +192,7 @@ class IdMap(object):
     return self._sources.isdisjoint(other._sources)
 
   def _GetMatch(self, other):
+    # pylint: disable=unsubscriptable-object
     match_cls = self.LEVELS[self._depth - 1].match
     return match_cls(*(self._items[f] & other._items[f]
                        for f in match_cls._fields))
@@ -187,15 +201,14 @@ class IdMap(object):
     if self._depth > 0:
       # This is NOT a ROOT node, so we need to merge fields and sources from
       # the source node.
-      for key, values in source._items.iteritems():
+      for key, values in source._items.items():
         self._items[key].update(values)
       self._sources.update(source._sources)
 
     if self._depth < len(self.LEVELS):
       # This is NOT a LEAF node, so we need to copy over entries from the
       # source node's entry map.
-      assert not (set(self._entry_map.iterkeys()) &
-                  set(source._entry_map.iterkeys()))
+      assert not set(self._entry_map) & set(source._entry_map)
       self._entry_map.update(source._entry_map)
 
   def _CanonicalizeEntries(self):
@@ -203,14 +216,14 @@ class IdMap(object):
 
     # {ID1, ID2} -> Match between the two entries.
     matches = {frozenset([full_id1, full_id2]): entry1._GetMatch(entry2)
-               for full_id1, entry1 in canonical_entries.iteritems()
-               for full_id2, entry2 in canonical_entries.iteritems()
+               for full_id1, entry1 in canonical_entries.items()
+               for full_id2, entry2 in canonical_entries.items()
                if entry1._IsMergeableWith(entry2)}
 
     while matches:
       # Pop the maximum match from the dictionary.
-      max_match_set, max_match = max(matches.iteritems(),
-                                     key=lambda (_, v): map(len, v))
+      max_match_set, max_match = max(
+          list(matches.items()), key=lambda pair: [len(v) for v in pair[1]])
       del matches[max_match_set]
       canonical_full_id, merged_full_id = max_match_set
 
@@ -243,7 +256,7 @@ class IdMap(object):
             # unmergeable.
             del matches[match_set]
 
-    return canonical_entries.values()
+    return list(canonical_entries.values())
 
   def _AssignIdsToCanonicalEntries(self, canonical_entries):
     assigned_ids = set()
@@ -272,6 +285,7 @@ class IdMap(object):
       canonical_entry._canonical_id = assigned_id
 
   def __repr__(self):
+    # pylint: disable=unsubscriptable-object
     cls_name = type(self).__name__
     if self._depth == 0:
       return '%s root' % cls_name
@@ -309,12 +323,13 @@ def LoadHTMLTrace(filename):
   """Load a trace from a vulcanized HTML trace file."""
   trace_components = collections.defaultdict(list)
 
-  for sub_trace in html2trace.ReadTracesFromHTMLFilePath(filename):
-    for name, component in TraceAsDict(sub_trace).iteritems():
-      trace_components[name].append(component)
+  with io.open(filename, 'r', encoding='utf-8') as file_handle:
+    for sub_trace in html2trace.ReadTracesFromHTMLFile(file_handle):
+      for name, component in TraceAsDict(sub_trace).items():
+        trace_components[name].append(component)
 
   trace = {}
-  for name, components in trace_components.iteritems():
+  for name, components in trace_components.items():
     if len(components) == 1:
       trace[name] = components[0]
     elif all(isinstance(component, list) for component in components):
@@ -333,7 +348,7 @@ def SaveTrace(trace, filename):
   """Save a JSON trace to a (possibly gzipped) file."""
   if filename is None:
     logging.info('Dumping trace to standard output...')
-    print json.dumps(trace)
+    print(json.dumps(trace))
   else:
     logging.info('Saving trace %r...', filename)
     if filename.endswith(HTML_FILENAME_SUFFIX):
@@ -374,12 +389,12 @@ def MergeTraces(traces):
   """Merge a collection of JSON traces into a single JSON trace."""
   trace_components = collections.defaultdict(collections.OrderedDict)
 
-  for filename, trace in traces.iteritems():
-    for name, component in TraceAsDict(trace).iteritems():
+  for filename, trace in traces.items():
+    for name, component in TraceAsDict(trace).items():
       trace_components[name][filename] = component
 
   merged_trace = {}
-  for component_name, components_by_filename in trace_components.iteritems():
+  for component_name, components_by_filename in trace_components.items():
     logging.info('Merging %d %r components...', len(components_by_filename),
                  component_name)
     merged_trace[component_name] = MergeComponents(component_name,
@@ -401,8 +416,8 @@ def MergeTraceEvents(events_by_filename):
   # Remove strings from the list of trace events
   # (https://github.com/catapult-project/catapult/issues/2497).
   events_by_filename = collections.OrderedDict(
-      (filename, [e for e in events if not isinstance(e, basestring)])
-      for filename, events in events_by_filename.iteritems())
+      (filename, [e for e in events if not isinstance(e, StringTypes)])
+      for filename, events in events_by_filename.items())
 
   timestamp_range_by_filename = _AdjustTimestampRanges(events_by_filename)
   process_map = _CreateProcessMapFromTraceEvents(events_by_filename)
@@ -430,7 +445,8 @@ def _AdjustTimestampRanges(events_by_filename):
   previous_trace_max_timestamp = 0
   timestamp_range_by_filename = collections.OrderedDict()
 
-  for index, (filename, events) in enumerate(events_by_filename.iteritems(), 1):
+  for index, (filename,
+              events) in enumerate(list(events_by_filename.items()), 1):
     # Skip metadata events, the timestamps of which are always zero.
     non_metadata_events = [e for e in events if e['ph'] != METADATA_PHASE]
     if not non_metadata_events:
@@ -470,7 +486,7 @@ def _CreateProcessMapFromTraceEvents(events_by_filename):
   logging.info('Creating process map from trace events...')
 
   process_map = ProcessIdMap()
-  for filename, events in events_by_filename.iteritems():
+  for filename, events in events_by_filename.items():
     for event in events:
       pid, tid = event['pid'], event['tid']
       process_map.AddEntry(source=filename, path=(pid, tid))
@@ -495,7 +511,8 @@ def _CombineTraceEvents(events_by_filename, process_map):
   type_name_event_by_pid = {}
   combined_events = []
 
-  for index, (filename, events) in enumerate(events_by_filename.iteritems(), 1):
+  for index, (filename,
+              events) in enumerate(list(events_by_filename.items()), 1):
     for event in events:
       if _UpdateTraceEventForMerge(event, process_map, filename, index,
                                    type_name_event_by_pid):
@@ -514,7 +531,7 @@ def _UpdateTraceEventForMerge(event, process_map, filename, index,
     # Update IDs in 'stackFrames' and 'typeNames' metadata events.
     if event['name'] == 'stackFrames':
       _UpdateDictIds(index, event['args'], 'stackFrames')
-      for frame in event['args']['stackFrames'].itervalues():
+      for frame in event['args']['stackFrames'].values():
         _UpdateFieldId(index, frame, 'parent')
     elif event['name'] == 'typeNames':
       _UpdateDictIds(index, event['args'], 'typeNames')
@@ -531,7 +548,7 @@ def _UpdateTraceEventForMerge(event, process_map, filename, index,
   elif event['ph'] == MEMORY_DUMP_PHASE:
     # Update stack frame and type name IDs in heap dump entries in process
     # memory dumps.
-    for heap_dump in event['args']['dumps'].get('heaps', {}).itervalues():
+    for heap_dump in event['args']['dumps'].get('heaps', {}).values():
       for heap_entry in heap_dump['entries']:
         _UpdateFieldId(index, heap_entry, 'bt', ignored_values=[''])
         _UpdateFieldId(index, heap_entry, 'type')
@@ -546,7 +563,7 @@ def _ConvertId(index, original_id):
 def _UpdateDictIds(index, parent_dict, key):
   parent_dict[key] = {
       _ConvertId(index, original_id): value
-      for original_id, value in parent_dict[key].iteritems()}
+      for original_id, value in parent_dict[key].items()}
 
 
 def _UpdateFieldId(index, parent_dict, key, ignored_values=()):
@@ -590,7 +607,7 @@ def _BuildInjectedTraceMarkerEvents(timestamp_range_by_filename, process_map):
 
   # Inject slices for each sub-trace denoting its beginning and end.
   for index, (filename, timestamp_range) in enumerate(
-      timestamp_range_by_filename.iteritems(), 1):
+      list(timestamp_range_by_filename.items()), 1):
     if timestamp_range is None:
       continue
     min_timestamp, max_timestamp = timestamp_range
@@ -628,7 +645,7 @@ def MergeGenericTraceComponents(component_name, components_by_filename):
   merging function (see MergeTraceEvents). It just returns the component's first
   provided value (in some trace).
   """
-  components = components_by_filename.itervalues()
+  components = list(components_by_filename.values())
   first_component = next(components)
   if not all(c == first_component for c in components):
     logging.warning(

@@ -1,15 +1,27 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """A common base class for pages that are used to edit configs."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
+from future_builtins import map  # pylint: disable=redefined-builtin
 
+import functools
+import itertools
+import json
+import operator
+
+from google.appengine.api import app_identity
+from google.appengine.api import mail
 from google.appengine.api import taskqueue
+from google.appengine.api import users
+from google.appengine.ext import deferred
 
 from dashboard import list_tests
-from dashboard import request_handler
-from dashboard import utils
-from dashboard import xsrf
+from dashboard.common import request_handler
+from dashboard.common import utils
+from dashboard.common import xsrf
 
 # Max number of entities to put in one request to /put_entities_task.
 _MAX_TESTS_TO_PUT_AT_ONCE = 25
@@ -21,6 +33,26 @@ _TASK_QUEUE_NAME = 'edit-sheriffs-queue'
 # may be executed before the sheriff is saved, so this is a workaround for that.
 # See http://crbug.com/621499
 _TASK_QUEUE_COUNTDOWN = 60
+
+_NUM_PATTERNS_PER_TASK = 10
+
+_NOTIFICATION_EMAIL_BODY = """
+The configuration of %(hostname)s was changed by %(user)s.
+
+Key: %(key)s
+
+New test path patterns:
+%(new_test_path_patterns)s
+
+Old test path patterns
+%(old_test_path_patterns)s
+"""
+
+# The mailing list to which config change notifications are sent,
+# so that the team can keep an audit record of these changes.
+# The "gasper-alerts" address is a historic legacy and not important.
+_NOTIFICATION_ADDRESS = 'chrome-performance-monitoring-alerts@google.com'
+_SENDER_ADDRESS = 'gasper-alerts@google.com'
 
 
 class EditConfigHandler(request_handler.RequestHandler):
@@ -101,9 +133,44 @@ class EditConfigHandler(request_handler.RequestHandler):
     entity.patterns = new_patterns
     self._UpdateFromRequestParameters(entity)
     entity.put()
-    added_test_paths, removed_test_paths = _ChangeTestPatterns(
-        old_patterns, new_patterns)
-    self._RenderResults(entity, added_test_paths, removed_test_paths)
+
+    self._RenderResults(entity, new_patterns, old_patterns)
+    self._QueueChangeTestPatternsAndEmail(entity, new_patterns, old_patterns)
+
+  def _QueueChangeTestPatternsAndEmail(self, entity, new_patterns,
+                                       old_patterns):
+    deferred.defer(_QueueChangeTestPatternsTasks, old_patterns, new_patterns)
+
+    user_email = users.get_current_user().email()
+    subject = 'Added or updated %s: %s by %s' % (
+        self._model_class.__name__, entity.key.string_id(), user_email)
+    email_key = entity.key.string_id()
+
+    email_body = _NOTIFICATION_EMAIL_BODY % {
+        'key':
+            email_key,
+        'new_test_path_patterns':
+            json.dumps(
+                list(new_patterns),
+                indent=2,
+                sort_keys=True,
+                separators=(',', ': ')),
+        'old_test_path_patterns':
+            json.dumps(
+                list(old_patterns),
+                indent=2,
+                sort_keys=True,
+                separators=(',', ': ')),
+        'hostname':
+            app_identity.get_default_version_hostname(),
+        'user':
+            user_email,
+    }
+    mail.send_mail(
+        sender=_SENDER_ADDRESS,
+        to=_NOTIFICATION_ADDRESS,
+        subject=subject,
+        body=email_body)
 
   def _UpdateFromRequestParameters(self, entity):
     """Updates the given entity based on query parameters.
@@ -115,27 +182,29 @@ class EditConfigHandler(request_handler.RequestHandler):
     """
     raise NotImplementedError()
 
-  def _RenderResults(self, entity, added_test_paths, removed_test_paths):
+  def _RenderResults(self, entity, new_patterns, old_patterns):
     """Outputs results using the results.html template.
 
     Args:
       entity: The entity that was edited.
-      added_test_paths: New tests that this config now applies to.
-      removed_test_paths: Tests that this config no longer applies to.
+      new_patterns: New test patterns that this config now applies to.
+      old_patterns: Old Test patterns that this config no longer applies to.
     """
+
     def ResultEntry(name, value):
       """Returns an entry in the results lists to embed on result.html."""
       return {'name': name, 'value': value, 'class': 'results-pre'}
 
-    self.RenderHtml('result.html', {
-        'headline': ('Added or updated %s "%s".' %
-                     (self._model_class.__name__, entity.key.string_id())),
-        'results': [
-            ResultEntry('Entity', str(entity)),
-            ResultEntry('Added tests', '\n'.join(added_test_paths)),
-            ResultEntry('Removed tests', '\n'.join(removed_test_paths)),
-        ]
-    })
+    self.RenderHtml(
+        'result.html', {
+            'headline': ('Added or updated %s "%s".' %
+                         (self._model_class.__name__, entity.key.string_id())),
+            'results': [
+                ResultEntry('Entity', str(entity)),
+                ResultEntry('New Patterns', '\n'.join(new_patterns)),
+                ResultEntry('Old Patterns', '\n'.join(old_patterns)),
+            ]
+        })
 
 
 def _SplitPatternLines(patterns_string):
@@ -162,7 +231,7 @@ def _IsValidTestPathPattern(test_path_pattern):
   return len(test_path_pattern.split('/')) >= 3
 
 
-def _ChangeTestPatterns(old_patterns, new_patterns):
+def _QueueChangeTestPatternsTasks(old_patterns, new_patterns):
   """Updates tests that are different between old_patterns and new_patterns.
 
   The two arguments both represent sets of test paths (i.e. sets of data
@@ -183,10 +252,23 @@ def _ChangeTestPatterns(old_patterns, new_patterns):
     are in the old set but not the new.
   """
   added_patterns, removed_patterns = _ComputeDeltas(old_patterns, new_patterns)
-  added_test_paths = _AllTestPathsMatchingPatterns(added_patterns)
-  removed_test_paths = _AllTestPathsMatchingPatterns(removed_patterns)
-  _AddTestsToPutToTaskQueue(added_test_paths + removed_test_paths)
-  return _RemoveOverlapping(added_test_paths, removed_test_paths)
+  patterns = list(added_patterns) + list(removed_patterns)
+
+  def Chunks(seq, size):
+    for i in itertools.count(0, size):
+      if i < len(seq):
+        yield seq[i:i + size]
+      else:
+        break
+
+  for pattern_sublist in Chunks(patterns, _NUM_PATTERNS_PER_TASK):
+    deferred.defer(_GetTestPathsAndAddTask, pattern_sublist)
+
+
+def _GetTestPathsAndAddTask(patterns):
+  test_paths = _AllTestPathsMatchingPatterns(patterns)
+
+  _AddTestsToPutToTaskQueue(test_paths)
 
 
 def _ComputeDeltas(old_items, new_items):
@@ -211,10 +293,16 @@ def _RemoveOverlapping(added_items, removed_items):
 
 def _AllTestPathsMatchingPatterns(patterns_list):
   """Returns a list of all test paths matching the given list of patterns."""
-  test_paths = set()
-  for pattern in patterns_list:
-    test_paths |= set(list_tests.GetTestsMatchingPattern(pattern))
-  return sorted(test_paths)
+
+  def GetResult(future):
+    return set(future.get_result())
+
+  return sorted(
+      functools.reduce(
+          operator.ior,
+          map(GetResult,
+              map(list_tests.GetTestsMatchingPatternAsync, patterns_list)),
+          set()))
 
 
 def _AddTestsToPutToTaskQueue(test_paths):
@@ -226,11 +314,15 @@ def _AddTestsToPutToTaskQueue(test_paths):
   Args:
     test_paths: List of test paths of tests to be re-put.
   """
+  futures = []
+  queue = taskqueue.Queue(_TASK_QUEUE_NAME)
   for start_index in range(0, len(test_paths), _MAX_TESTS_TO_PUT_AT_ONCE):
     group = test_paths[start_index:start_index + _MAX_TESTS_TO_PUT_AT_ONCE]
     urlsafe_keys = [utils.TestKey(t).urlsafe() for t in group]
-    taskqueue.add(
+    t = taskqueue.Task(
         url='/put_entities_task',
         params={'keys': ','.join(urlsafe_keys)},
-        queue_name=_TASK_QUEUE_NAME,
         countdown=_TASK_QUEUE_COUNTDOWN)
+    futures.append(queue.add_async(t))
+  for f in futures:
+    f.get_result()

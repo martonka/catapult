@@ -13,15 +13,26 @@ def _AddToPathIfNeeded(path):
 
 
 def UpdateSysPathIfNeeded():
-  p = TracingProject()
-  _AddToPathIfNeeded(p.catapult_path)
-  _AddToPathIfNeeded(p.py_vulcanize_path)
-  _AddToPathIfNeeded(p.vinn_path)
+  for path in GetDependencyPaths():
+    _AddToPathIfNeeded(path)
 
-  _AddToPathIfNeeded(os.path.join(p.catapult_third_party_path, 'WebOb'))
-  _AddToPathIfNeeded(os.path.join(p.catapult_third_party_path, 'Paste'))
-  _AddToPathIfNeeded(os.path.join(p.catapult_third_party_path, 'six'))
-  _AddToPathIfNeeded(os.path.join(p.catapult_third_party_path, 'webapp2'))
+
+def GetDependencyPaths():
+  # TODO(#3703): Separate the paths that are only used by the dev server into
+  # another call.
+  p = TracingProject()
+  return [
+      p.catapult_path,
+      p.py_vulcanize_path,
+      p.vinn_path,
+      p.protobuf_path,
+      os.path.join(p.catapult_third_party_path, 'WebOb'),
+      os.path.join(p.catapult_third_party_path, 'Paste'),
+      os.path.join(p.catapult_third_party_path, 'six'),
+      os.path.join(p.catapult_third_party_path, 'webapp2'),
+      os.path.join(p.catapult_path, 'common', 'py_utils'),
+      os.path.join(p.tracing_third_party_path, 'symbols')
+  ]
 
 
 def _FindAllFilesRecursive(source_paths):
@@ -59,6 +70,7 @@ class TracingProject(object):
 
   tracing_root_path = os.path.join(catapult_path, 'tracing')
   trace_processor_root_path = os.path.join(catapult_path, 'trace_processor')
+  common_root_path = os.path.join(catapult_path, 'common')
   tracing_src_path = os.path.join(tracing_root_path, 'tracing')
   extras_path = os.path.join(tracing_src_path, 'extras')
   ui_extras_path = os.path.join(tracing_src_path, 'ui', 'extras')
@@ -66,11 +78,18 @@ class TracingProject(object):
   catapult_third_party_path = os.path.join(catapult_path, 'third_party')
   polymer_path = os.path.join(catapult_third_party_path, 'polymer')
 
+  # We need google.protobuf for tests that use the proto. The dashboard uses
+  # the gae_ts_mon protobuf lib for its tests, so let's do the same for tracing.
+  protobuf_path = os.path.join(
+      catapult_third_party_path, 'gae_ts_mon', 'gae_ts_mon', 'protobuf')
+
   tracing_third_party_path = os.path.join(tracing_root_path, 'third_party')
-  py_vulcanize_path = os.path.join(catapult_third_party_path, 'py_vulcanize')
+  py_vulcanize_path = os.path.join(common_root_path, 'py_vulcanize')
   vinn_path = os.path.join(catapult_third_party_path, 'vinn')
 
   jszip_path = os.path.join(tracing_third_party_path, 'jszip')
+  pako_path = os.path.join(tracing_third_party_path, 'pako')
+  jpegjs_path = os.path.join(tracing_third_party_path, 'jpeg-js')
 
   glmatrix_path = os.path.join(
       tracing_third_party_path, 'gl-matrix', 'dist')
@@ -82,10 +101,12 @@ class TracingProject(object):
   d3_path = os.path.join(tracing_third_party_path, 'd3')
   chai_path = os.path.join(tracing_third_party_path, 'chai')
   mocha_path = os.path.join(tracing_third_party_path, 'mocha')
+  oboe_path = os.path.join(tracing_third_party_path, 'oboe')
 
   mre_path = os.path.join(tracing_src_path, 'mre')
 
   metrics_path = os.path.join(tracing_src_path, 'metrics')
+  diagnostics_path = os.path.join(tracing_src_path, 'value', 'diagnostics')
 
   value_ui_path = os.path.join(tracing_src_path, 'value', 'ui')
   metrics_ui_path = os.path.join(tracing_src_path, 'metrics', 'ui')
@@ -105,11 +126,14 @@ class TracingProject(object):
     self.source_paths.append(self.tracing_third_party_path)
     self.source_paths.append(self.mre_path)
     self.source_paths.append(self.jszip_path)
+    self.source_paths.append(self.pako_path)
+    self.source_paths.append(self.jpegjs_path)
     self.source_paths.append(self.glmatrix_path)
     self.source_paths.append(self.mannwhitneyu_path)
     self.source_paths.append(self.d3_path)
     self.source_paths.append(self.chai_path)
     self.source_paths.append(self.mocha_path)
+    self.source_paths.append(self.oboe_path)
 
   def CreateVulcanizer(self):
     from py_vulcanize import project as project_module
@@ -148,6 +172,16 @@ class TracingProject(object):
     all_metrics_module_filenames.sort()
     return [os.path.relpath(x, self.tracing_root_path)
             for x in all_metrics_module_filenames]
+
+  def FindAllDiagnosticsModuleRelPaths(self):
+    all_filenames = _FindAllFilesRecursive([self.tracing_src_path])
+    all_diagnostics_module_filenames = []
+    for x in all_filenames:
+      if x.startswith(self.diagnostics_path) and not _IsFilenameATest(x):
+        all_diagnostics_module_filenames.append(x)
+    all_diagnostics_module_filenames.sort()
+    return [os.path.relpath(x, self.tracing_root_path)
+            for x in all_diagnostics_module_filenames]
 
   def FindAllD8TestModuleRelPaths(self):
     return self.FindAllTestModuleRelPaths(pred=self.IsD8CompatibleFile)

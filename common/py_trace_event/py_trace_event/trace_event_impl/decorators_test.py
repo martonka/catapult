@@ -2,12 +2,12 @@
 # Copyright 2016 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-import decorators
+from __future__ import absolute_import
+from . import decorators
 import logging
 import unittest
 
-from trace_test import TraceTest
-#from .trace_test import TraceTest
+from .trace_test import TraceTest
 
 def generator():
   yield 1
@@ -47,7 +47,8 @@ class DecoratorTests(TraceTest):
 
 
   def test_func_names_work(self):
-    self.assertEquals('__main__.traced_func',
+    expected_method_name = __name__ + '.traced_func'
+    self.assertEquals(expected_method_name,
                       self._get_decorated_method_name(traced_func))
 
   def test_method_names_work(self):

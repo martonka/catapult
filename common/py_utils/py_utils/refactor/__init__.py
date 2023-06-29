@@ -8,11 +8,12 @@ This module provides components for modifying and querying Python code. They can
 be used to build custom refactorings and linters.
 """
 
+from __future__ import absolute_import
 import functools
 import multiprocessing
 
 # pylint: disable=wildcard-import
-from py_utils.refactor.annotated_symbol import *
+from py_utils.refactor.annotated_symbol import *  # pylint: disable=redefined-builtin
 from py_utils.refactor.module import Module
 
 

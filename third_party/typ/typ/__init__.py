@@ -57,6 +57,7 @@ functionality:
 """
 
 from typ.arg_parser import ArgumentParser
+from typ.expectations_parser import TestExpectations
 from typ.fakes.host_fake import FakeHost
 from typ.host import Host
 from typ.json_results import exit_code_from_full_results
@@ -68,9 +69,9 @@ from typ.printer import Printer
 from typ.test_case import convert_newlines, TestCase, MainTestCase
 from typ.version import VERSION
 
-
 __all__ = [
     'ArgumentParser',
+    'Expectation',
     'FakeHost',
     'Host',
     'MainTestCase',
@@ -81,6 +82,7 @@ __all__ = [
     'Runner',
     'Stats',
     'TestCase',
+    'TestExpectationParser',
     'TestInput',
     'TestSet',
     'VERSION',

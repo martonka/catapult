@@ -1,18 +1,33 @@
 #!/usr/bin/env python
+#
+# Copyright 2015 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Assorted utilities shared between parts of apitools."""
 
 import collections
 import os
 import random
 
-from protorpc import messages
 import six
 from six.moves import http_client
 import six.moves.urllib.error as urllib_error
 import six.moves.urllib.parse as urllib_parse
 import six.moves.urllib.request as urllib_request
 
-from apitools.base.py import encoding
+from apitools.base.protorpclite import messages
+from apitools.base.py import encoding_helper as encoding
 from apitools.base.py import exceptions
 
 __all__ = [
@@ -46,9 +61,12 @@ def DetectGce():
     Returns:
       True iff we're running on a GCE instance.
     """
+    metadata_url = 'http://{}'.format(
+        os.environ.get('GCE_METADATA_ROOT', 'metadata.google.internal'))
     try:
         o = urllib_request.build_opener(urllib_request.ProxyHandler({})).open(
-            urllib_request.Request('http://metadata.google.internal'))
+            urllib_request.Request(
+                metadata_url, headers={'Metadata-Flavor': 'Google'}))
     except urllib_error.URLError:
         return False
     return (o.getcode() == http_client.OK and
@@ -58,8 +76,10 @@ def DetectGce():
 def NormalizeScopes(scope_spec):
     """Normalize scope_spec to a set of strings."""
     if isinstance(scope_spec, six.string_types):
+        scope_spec = six.ensure_str(scope_spec)
         return set(scope_spec.split(' '))
     elif isinstance(scope_spec, collections.Iterable):
+        scope_spec = [six.ensure_str(x) for x in scope_spec]
         return set(scope_spec)
     raise exceptions.TypecheckError(
         'NormalizeScopes expected string or iterable, found %s' % (
@@ -206,6 +226,7 @@ def MapRequestParams(params, request_type):
             request_type, python_name=param_name)
         if field_remapping is not None:
             new_params[field_remapping] = new_params.pop(param_name)
+            param_name = field_remapping
         if isinstance(value, messages.Enum):
             new_params[param_name] = encoding.GetCustomJsonEnumMapping(
                 type(value), python_name=str(value)) or str(value)

@@ -7,8 +7,10 @@ found in the LICENSE file.
 
 <link rel="import" href="/tracing/metrics/all_metrics.html">
 <link rel="import" href="/tracing/metrics/metric_registry.html">
+<link rel="import" href="/tracing/mre/failure.html">
 <link rel="import" href="/tracing/mre/function_handle.html">
-<link rel="import" href="/tracing/value/value_set.html">
+<link rel="import" href="/tracing/value/diagnostics/reserved_names.html">
+<link rel="import" href="/tracing/value/histogram_set.html">
 
 <script>
 'use strict';
@@ -18,47 +20,163 @@ tr.exportTo('tr.metrics', function() {
    * @param {!tr.model.Model} model
    * @param {!Object} options
    * @param {!Array.<string>} options.metrics
-   * @return {!tr.v.ValueSet}
+   * @param {!Function} addFailureCb
+   * @return {!tr.v.HistogramSet}
    */
-  function runMetrics(model, options) {
-    if (options === undefined)
+  function runMetrics(model, options, addFailureCb) {
+    if (options === undefined) {
       throw new Error('Options are required.');
-
-    var metricNames = options.metrics;
-    if (!metricNames)
-      throw new Error('Metric names should be specified.');
-
-    var values = new tr.v.ValueSet();
-
-    for (var metricName of metricNames) {
-      var metric = tr.metrics.MetricRegistry.findTypeInfoWithName(metricName);
-      if (metric === undefined)
-        throw new Error('"' + metricName + '" is not a registered metric.');
-      metric.constructor(values, model, options);
     }
 
-    return values;
+    const metricNames = options.metrics;
+    if (!metricNames) {
+      throw new Error('Metric names should be specified.');
+    }
+
+    const allMetricsStart = new Date();
+    const durationBreakdown = new tr.v.d.Breakdown();
+
+    const categories = getTraceCategories(model);
+
+    const histograms = new tr.v.HistogramSet();
+
+    histograms.createHistogram('trace_import_duration',
+        tr.b.Unit.byName.timeDurationInMs_smallerIsBetter,
+        model.stats.traceImportDurationMs, {
+          binBoundaries: tr.v.HistogramBinBoundaries.createExponential(
+              1e-3, 1e5, 30),
+          description:
+            'Duration that trace viewer required to import the trace',
+          summaryOptions: tr.v.Histogram.AVERAGE_ONLY_SUMMARY_OPTIONS,
+        });
+
+    for (const metricName of metricNames) {
+      const metricStart = new Date();
+      const metric = tr.metrics.MetricRegistry.findTypeInfoWithName(metricName);
+      if (metric === undefined) {
+        throw new Error(`"${metricName}" is not a registered metric.`);
+      }
+      validateTraceCategories(metric.metadata.requiredCategories, categories);
+      try {
+        metric.constructor(histograms, model, options);
+      } catch (e) {
+        const err = tr.b.normalizeException(e);
+        addFailureCb(new tr.mre.Failure(
+            undefined, 'metricMapFunction', model.canonicalUrl, err.typeName,
+            err.message, err.stack));
+      }
+      const metricMs = new Date() - metricStart;
+      histograms.createHistogram(
+          metricName + '_duration',
+          tr.b.Unit.byName.timeDurationInMs_smallerIsBetter,
+          [metricMs]);
+      durationBreakdown.set(metricName, metricMs);
+    }
+
+    validateDiagnosticNames(histograms);
+
+    const allMetricsMs = new Date() - allMetricsStart +
+      model.stats.traceImportDurationMs;
+    durationBreakdown.set('traceImport', model.stats.traceImportDurationMs);
+    durationBreakdown.set('other', allMetricsMs - tr.b.math.Statistics.sum(
+        durationBreakdown, ([metricName, metricMs]) => metricMs));
+    const breakdownNames = tr.v.d.RelatedNameMap.fromEntries(new Map(
+        metricNames.map(metricName => [metricName, metricName + '_duration'])));
+    breakdownNames.set('traceImport', 'trace_import_duration');
+    histograms.createHistogram(
+        'metrics_duration',
+        tr.b.Unit.byName.timeDurationInMs_smallerIsBetter,
+        [
+          {
+            value: allMetricsMs,
+            diagnostics: {breakdown: durationBreakdown},
+          },
+        ], {
+          diagnostics: {breakdown: breakdownNames},
+        });
+
+    return histograms;
+  }
+
+  function getTraceCategories(model) {
+    for (const metadata of model.metadata) {
+      let config;
+      if (metadata.name === 'TraceConfig' && metadata.value) {
+        config = metadata.value;
+      }
+      if (metadata.name === 'metadata' && metadata.value &&
+          metadata.value['trace-config'] &&
+          metadata.value['trace-config'] !== '__stripped__') {
+        config = JSON.parse(metadata.value['trace-config']);
+      }
+      if (config) {
+        return {
+          excluded: config.excluded_categories || [],
+          included: config.included_categories || [],
+        };
+      }
+    }
+  }
+
+  function validateTraceCategories(requiredCategories, categories) {
+    if (!requiredCategories) return;
+
+    if (!categories) throw new Error('Missing trace config metadata');
+
+    for (const cat of requiredCategories) {
+      const isDisabledByDefault = (cat.indexOf('disabled-by-default') === 0);
+      let missing = false;
+      if (isDisabledByDefault) {
+        if (!categories.included.includes(cat)) {
+          missing = true;
+        }
+      } else if (categories.excluded.includes(cat)) {
+        missing = true;
+      }
+      if (missing) {
+        throw new Error(`Trace is missing required category "${cat}"`);
+      }
+    }
   }
 
   /**
-   * @param {!tr.v.ValueSet} values
+   * Ensure that metrics don't use reserved diagnostic names.
+   *
+   * @param {!tr.v.HistogramSet} histograms
+   */
+  function validateDiagnosticNames(histograms) {
+    for (const hist of histograms) {
+      for (const name of hist.diagnostics.keys()) {
+        if (name === tr.v.d.RESERVED_NAMES.ALERT_GROUPING) {
+          // Metrics can set alert grouping when they create histogram. It's
+          // still a reserved diagnostic because that helps us enforce the right
+          // diagnostic shape.
+          continue;
+        }
+        if (tr.v.d.RESERVED_NAMES_SET.has(name)) {
+          throw new Error(
+              `Illegal diagnostic name "${name}" on Histogram "${hist.name}"`);
+        }
+      }
+    }
+  }
+
+  /**
+   * @param {!tr.v.HistogramSet} histograms
    * @param {!tr.model.Model} model
    */
-  function addIterationInfo(values, model) {
-    var iterationInfo = new tr.v.d.IterationInfo();
-    for (var metadata of model.metadata) {
-      if (!metadata.value)
-        continue;
+  function addTelemetryInfo(histograms, model) {
+    for (const metadata of model.metadata) {
+      if (!metadata.value || !metadata.value.telemetry) continue;
 
-      if (metadata.value['iteration-info'])
-        iterationInfo.addInfo(metadata.value['iteration-info']);
-
-      if (metadata.value['os-version'])
-        iterationInfo.addInfo(metadata.value);
+      for (const [name, value] of Object.entries(metadata.value.telemetry)) {
+        const type = tr.v.d.RESERVED_NAMES_TO_TYPES.get(name);
+        if (type === undefined) {
+          throw new Error(`Unexpected telemetry.${name}`);
+        }
+        histograms.addSharedDiagnosticToAllHistograms(name, new type(value));
+      }
     }
-    // Values can be separated from their ValueSet and mixed into ValueSets
-    // with Values from other iterations, so add IterationInfo to each Value.
-    values.map(v => iterationInfo.addToValue(v));
   }
 
   /**
@@ -68,14 +186,21 @@ tr.exportTo('tr.metrics', function() {
    * @param {!Array.<string>} options.metrics
    */
   function metricMapFunction(result, model, options) {
-    var values = runMetrics(model, options);
-    addIterationInfo(values, model);
+    const histograms = runMetrics(
+        model, options, result.addFailure.bind(result));
+    addTelemetryInfo(histograms, model);
 
-    result.addPair('histograms', values.valueDicts);
+    if (model.canonicalUrl !== undefined) {
+      const info = tr.v.d.RESERVED_INFOS.TRACE_URLS;
+      histograms.addSharedDiagnosticToAllHistograms(
+          info.name, new info.type([model.canonicalUrl]));
+    }
 
-    var scalarDicts = [];
-    for (var value of values) {
-      for (var [statName, scalar] of value.statisticsScalars) {
+    result.addPair('histograms', histograms.asDicts());
+
+    const scalarDicts = [];
+    for (const value of histograms) {
+      for (const [statName, scalar] of value.statisticsScalars) {
         scalarDicts.push({
           name: value.name + '_' + statName,
           numeric: scalar.asDict(),
@@ -89,8 +214,8 @@ tr.exportTo('tr.metrics', function() {
   tr.mre.FunctionRegistry.register(metricMapFunction);
 
   return {
-    metricMapFunction: metricMapFunction,
-    runMetrics: runMetrics
+    metricMapFunction,
+    runMetrics,
   };
 });
 </script>

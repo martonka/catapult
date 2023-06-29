@@ -1,8 +1,10 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Map of test units to improvement direction."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 from google.appengine.ext import ndb
 
@@ -51,8 +53,8 @@ def UpdateFromJson(units_dict):
       units_to_direction_entity.put()
 
   # Add new UnitsToDirection entities.
-  for unit, value in units_dict.iteritems():
-    if type(value) != dict:
+  for unit, value in units_dict.items():
+    if not isinstance(value, dict):
       continue
     if unit not in existing_units:
       bigger_is_better = (value['improvement_direction'] == 'up')

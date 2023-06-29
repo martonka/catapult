@@ -1,14 +1,16 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Provides the web interface to query the status of a buildbucket job."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import json
 import time
 
-from dashboard import buildbucket_service
-from dashboard import request_handler
+from dashboard.common import request_handler
+from dashboard.services import buildbucket_service
 
 
 class BuildbucketJobStatusHandler(request_handler.RequestHandler):
@@ -27,13 +29,11 @@ class BuildbucketJobStatusHandler(request_handler.RequestHandler):
       error_reason = original_status['error'].get('reason')
       status_text = json.dumps(original_status, sort_keys=True, indent=4)
     else:
-      clean_status = _ConvertTimes(_ParseJsonKeys(
-          original_status.get('build')))
+      clean_status = _ConvertTimes(_ParseJsonKeys(original_status.get('build')))
       status_text = json.dumps(clean_status, sort_keys=True, indent=4)
 
     self.RenderHtml(
-        'buildbucket_job_status.html',
-        {
+        'buildbucket_job_status.html', {
             'job_id': job_id,
             'status_text': 'DATA:' + status_text,
             'build': None if error else clean_status,
@@ -85,7 +85,6 @@ def _ParseJsonKeys(dictionary):
 
   for key in result:
     if key.endswith('_json'):
-      result[key.replace('_json', '')] = json.loads(
-          result[key])
+      result[key.replace('_json', '')] = json.loads(result[key])
       result.pop(key)
   return result

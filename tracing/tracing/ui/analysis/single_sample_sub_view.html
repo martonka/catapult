@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-Copyright (c) 2013 The Chromium Authors. All rights reserved.
+Copyright (c) 2016 The Chromium Authors. All rights reserved.
 Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
@@ -29,20 +29,20 @@ Polymer({
   is: 'tr-ui-a-single-sample-sub-view',
   behaviors: [tr.ui.analysis.AnalysisSubView],
 
-  created: function() {
+  created() {
     this.currentSelection_ = undefined;
   },
 
-  ready: function() {
+  ready() {
     this.$.content.tableColumns = [
       {
-        title: 'FirstColumn',
-        value: function(row) { return row.title; },
-        width: '250px'
+        title: '',
+        value: row => row.title,
+        width: '100px'
       },
       {
-        title: 'SecondColumn',
-        value: function(row) { return row.value; },
+        title: '',
+        value: row => row.value,
         width: '100%'
       }
     ];
@@ -61,9 +61,9 @@ Polymer({
       return;
     }
 
-    var sample = tr.b.getOnlyElement(this.currentSelection_);
-    var table = this.$.content;
-    var rows = [];
+    const sample = tr.b.getOnlyElement(this.currentSelection_);
+    const table = this.$.content;
+    const rows = [];
 
     rows.push({
       title: 'Title',
@@ -71,18 +71,29 @@ Polymer({
     });
 
     rows.push({
-        title: 'Sample time',
-        value: tr.v.ui.createScalarSpan(sample.start, {
-          unit: tr.b.Unit.byName.timeStampInMs,
-          ownerDocument: this.ownerDocument
-        })
+      title: 'Sample time',
+      value: tr.v.ui.createScalarSpan(sample.start, {
+        unit: tr.b.Unit.byName.timeStampInMs,
+        ownerDocument: this.ownerDocument
+      })
     });
 
-    var sfEl = document.createElement('tr-ui-a-stack-frame');
-    sfEl.stackFrame = sample.leafStackFrame;
+    const callStackTableEl = document.createElement('tr-ui-b-table');
+    callStackTableEl.tableRows = sample.getNodesAsArray().reverse();
+    callStackTableEl.tableColumns = [
+      {
+        title: 'function name',
+        value: row => row.functionName || '(anonymous function)'
+      },
+      {
+        title: 'location',
+        value: row => row.url
+      }
+    ];
+    callStackTableEl.rebuild();
     rows.push({
-      title: 'Stack trace',
-      value: sfEl
+      title: 'Call stack',
+      value: callStackTableEl
     });
     table.tableRows = rows;
     table.rebuild();

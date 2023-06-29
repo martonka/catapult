@@ -5,8 +5,11 @@
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import zipfile
+
+import six
 
 from dependency_manager import exceptions
 
@@ -16,7 +19,7 @@ def _WinReadOnlyHandler(func, path, execinfo):
     os.chmod(path, stat.S_IWRITE)
     func(path)
   else:
-    raise execinfo[0], execinfo[1], execinfo[2]
+    six.reraise(*execinfo)
 
 
 def RemoveDir(dir_path):
@@ -87,6 +90,15 @@ def UnzipArchive(archive_path, unzip_path):
         'Attempting to unzip a non-archive file at %s' % archive_path)
   if not os.path.exists(unzip_path):
     os.makedirs(unzip_path)
+  # The Python ZipFile does not support symbolic links, which makes it
+  # unsuitable for Mac builds. so use ditto instead. crbug.com/700097.
+  if sys.platform.startswith('darwin'):
+    assert os.path.isabs(unzip_path)
+    unzip_cmd = ['ditto', '-x', '-k', archive_path, unzip_path]
+    proc = subprocess.Popen(unzip_cmd, bufsize=0, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    proc.communicate()
+    return
   try:
     with zipfile.ZipFile(archive_path, 'r') as archive:
       VerifySafeArchive(archive)

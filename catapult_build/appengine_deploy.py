@@ -2,47 +2,55 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-# TODO(qyearsley): Add a step to vulcanize each template HTML file.
-# TODO(qyearsley): Add a step to put static files in a versioned
-# directory and modify app.yaml and request_handler as needed.
-
+import os
 import subprocess
 import sys
 
-from catapult_build import module_finder
 from catapult_build import temp_deployment_dir
 
 
-def AppcfgUpdate(paths, app_id):
+def Deploy(paths, args, version=None):
   """Deploys a new version of an App Engine app from a temporary directory.
 
   Args:
     paths: List of paths to files and directories that should be linked
         (or copied) in the deployment directory.
-    app_id: The application ID to use.
+    args: Arguments passed to "gcloud app deploy".
   """
-  try:
-    import appcfg  # pylint: disable=unused-variable
-  except ImportError:
-    # TODO(qyearsley): Put the App Engine SDK in the path with the
-    # binary dependency manager.
-    # See: https://github.com/catapult-project/catapult/issues/2135
-    print 'This script requires the App Engine SDK to be in PYTHONPATH.'
-    sys.exit(1)
+  if version is None:
+    version = _VersionName()
   with temp_deployment_dir.TempDeploymentDir(
       paths, use_symlinks=False) as temp_dir:
     print 'Deploying from "%s".' % temp_dir
-    _Run([
-        module_finder.FindModule('appcfg'),
-        '--application=%s' % app_id,
-        '--version=%s' % _VersionName(),
-        'update',
-        temp_dir,
-    ])
+
+    # google-cloud-sdk/bin/gcloud is a shell script, which we can't subprocess
+    # on Windows with shell=False. So, execute the Python script directly.
+    if os.name == 'nt':
+      script_path = _FindScriptInPath('gcloud.cmd')
+    else:
+      script_path = _FindScriptInPath('gcloud')
+    if not script_path:
+      print 'This script requires the Google Cloud SDK to be in PATH.'
+      print 'Install at https://cloud.google.com/sdk and then run'
+      print '`gcloud components install app-engine-python`'
+      sys.exit(1)
+
+    subprocess.check_call([script_path, 'app', 'deploy', '--no-promote',
+                           '--quiet', '--version', version] + args,
+                          cwd=temp_dir)
+
+def _FindScriptInPath(script_name):
+  for path in os.environ['PATH'].split(os.pathsep):
+    script_path = os.path.join(path, script_name)
+    if os.path.exists(script_path):
+      return script_path
+
+  return None
 
 
 def _VersionName():
-  is_synced = not _Run(['git', 'diff', 'master']).strip()
+  is_synced = not _Run(
+      ['git', 'diff', 'origin/master', '--no-ext-diff']).strip()
   deployment_type = 'clean' if is_synced else 'dev'
   email = _Run(['git', 'config', '--get', 'user.email'])
   username = email[0:email.find('@')]

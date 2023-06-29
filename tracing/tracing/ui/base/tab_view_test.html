@@ -21,16 +21,17 @@ found in the LICENSE file.
 <script>
 'use strict';
 
-var nonSubViewBehavior = {};
+const nonSubViewBehavior = {};
 
 Polymer({
   is: 'tr-ui-b-tab-view-test-non-sub-view',
   behaviors: [nonSubViewBehavior]
 });
 
-tr.b.unittest.testSuite(function() {
+// See https://crbug.com/1143376.
+tr.b.unittest.skippedTestSuite(function() {
   function createPowerSampleSubView() {
-    var model = tr.c.TestUtils.newModel(function(m) {
+    const model = tr.c.TestUtils.newModel(function(m) {
       m.device.powerSeries = new tr.model.PowerSeries(m.device);
 
       m.device.vSyncTimestamps = [0];
@@ -40,16 +41,17 @@ tr.b.unittest.testSuite(function() {
       m.device.powerSeries.addPowerSample(4, 2);
     });
 
-    var subView = document.createElement('tr-ui-a-multi-power-sample-sub-view');
+    const subView = document.createElement(
+        'tr-ui-a-multi-power-sample-sub-view');
     subView.selection = new tr.model.EventSet(model.device.powerSeries.samples);
     subView.tabLabel = 'Power samples';
     return subView;
   }
 
   function createAlertSubView() {
-    var slice = tr.c.TestUtils.newSliceEx(
+    const slice = tr.c.TestUtils.newSliceEx(
         {title: 'b', start: 0, duration: 0.002});
-    var alertInfo = new tr.model.EventInfo(
+    const alertInfo = new tr.model.EventInfo(
         'Alert 1', 'Critical alert',
         [{
           label: 'Example',
@@ -57,8 +59,8 @@ tr.b.unittest.testSuite(function() {
           href: 'http://www.example.com'
         }]);
 
-    var alert = new tr.model.Alert(alertInfo, 5, [slice]);
-    var subView = document.createElement('tr-ui-a-alert-sub-view');
+    const alert = new tr.model.Alert(alertInfo, 5, [slice]);
+    const subView = document.createElement('tr-ui-a-alert-sub-view');
     subView.selection = new tr.model.EventSet(alert);
     subView.tabLabel = 'Alerts';
     subView.tabIcon = { text: '\u26A0', style: 'color: red;' };
@@ -67,20 +69,20 @@ tr.b.unittest.testSuite(function() {
   }
 
   test('instantiate_noTabs', function() {
-    var tabView = document.createElement('tr-ui-b-tab-view');
+    const tabView = document.createElement('tr-ui-b-tab-view');
     tabView.label = 'No items selected.';
     this.addHTMLOutput(tabView);
   });
 
   test('instantiate_oneTab', function() {
-    var tabView = document.createElement('tr-ui-b-tab-view');
+    const tabView = document.createElement('tr-ui-b-tab-view');
     tabView.label = '1 item selected.';
     tabView.addSubView(createPowerSampleSubView());
     this.addHTMLOutput(tabView);
   });
 
   test('instantiate_twoTabs', function() {
-    var tabView = document.createElement('tr-ui-b-tab-view');
+    const tabView = document.createElement('tr-ui-b-tab-view');
     tabView.label = '3 items selected.';
     tabView.addSubView(createPowerSampleSubView());
     tabView.addSubView(createAlertSubView());
@@ -88,7 +90,7 @@ tr.b.unittest.testSuite(function() {
   });
 
   test('clearSubViews_selectedSubViewNullAfter', function() {
-    var tabView = document.createElement('tr-ui-b-tab-view');
+    const tabView = document.createElement('tr-ui-b-tab-view');
     tabView.label = '3 items selected.';
     tabView.addSubView(createPowerSampleSubView());
     tabView.addSubView(createAlertSubView());
@@ -99,8 +101,8 @@ tr.b.unittest.testSuite(function() {
   });
 
   test('changeSelectedSubView', function() {
-    var selectedTabChangeEventCount = 0;
-    var tabView = document.createElement('tr-ui-b-tab-view');
+    let selectedTabChangeEventCount = 0;
+    const tabView = document.createElement('tr-ui-b-tab-view');
     tabView.addEventListener('selected-tab-change', function() {
       selectedTabChangeEventCount++;
     });
@@ -108,12 +110,12 @@ tr.b.unittest.testSuite(function() {
     assert.isUndefined(tabView.selectedSubView);
     assert.strictEqual(selectedTabChangeEventCount, 0);
 
-    var view1 = createPowerSampleSubView();
+    const view1 = createPowerSampleSubView();
     tabView.addSubView(view1);
     assert.strictEqual(tabView.selectedSubView, view1);
     assert.strictEqual(selectedTabChangeEventCount, 1);
 
-    var view2 = createAlertSubView();
+    const view2 = createAlertSubView();
     tabView.addSubView(view2);
     assert.strictEqual(tabView.selectedSubView, view1);
     assert.strictEqual(selectedTabChangeEventCount, 1);
@@ -121,6 +123,39 @@ tr.b.unittest.testSuite(function() {
     tabView.selectedSubView = view2;
     assert.strictEqual(tabView.selectedSubView, view2);
     assert.strictEqual(selectedTabChangeEventCount, 2);
-  })
+  });
+
+  // Regression test: https://github.com/catapult-project/catapult/issues/2754
+  test('instantiate_twoTabsSwitch', function() {
+    const tabView = document.createElement('tr-ui-b-tab-view');
+    tabView.label = '3 items selected.';
+    tabView.addSubView(createPowerSampleSubView());
+    tabView.addSubView(createAlertSubView());
+    this.addHTMLOutput(tabView);
+    Polymer.dom.flush();
+
+    tabView.selectedSubView = tabView.tabs[1];
+    Polymer.dom.flush();
+
+    const selectedLabel = tabView.$.tabs.querySelector(':checked ~ label');
+    assert.isTrue(selectedLabel && selectedLabel.innerText.includes('Alerts'));
+  });
+
+  // Regression test: https://github.com/catapult-project/catapult/issues/2755
+  test('instantiate_twoTabsSwitchAndChange', function() {
+    const tabView = document.createElement('tr-ui-b-tab-view');
+    this.addHTMLOutput(tabView);
+    tabView.addSubView(createPowerSampleSubView());
+    tabView.addSubView(createAlertSubView());
+    Polymer.dom.flush();
+
+    tabView.$.tabs.querySelectorAll('label')[2].click();
+    tabView.$.tabs.querySelectorAll('label')[1].click();
+    tabView.clearSubViews();
+    tabView.addSubView(createPowerSampleSubView());
+    Polymer.dom.flush();
+
+    assert.isTrue(!!tabView.$.tabs.querySelector(':checked'));
+  });
 });
 </script>

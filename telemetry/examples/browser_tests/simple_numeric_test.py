@@ -2,13 +2,15 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import string
+import sys
 import time
 
 from telemetry.testing import serially_executed_browser_test_case
 
 
-_prev_test_name = None
+_PREV_TEST_NAME = None
 
 class SimpleTest(
     serially_executed_browser_test_case.SeriallyExecutedBrowserTestCase):
@@ -33,11 +35,11 @@ class SimpleTest(
     del options  # unused
     prefix = 'Alphabetical_'
     test_names = []
-    for character in string.lowercase[:26]:
+    for character in string.ascii_lowercase[:26]:
       test_names.append(prefix + character)
-    for character in string.uppercase[:26]:
+    for character in string.ascii_uppercase[:26]:
       test_names.append(prefix + character)
-    for num in xrange(20):
+    for num in range(20):
       test_names.append(prefix + str(num))
 
     # Shuffle |test_names| so the tests will be generated in a random order.
@@ -48,9 +50,10 @@ class SimpleTest(
 
   def AlphabeticalTest(self):
     test_name = self.id()
-    global _prev_test_name
-    self.assertLess(_prev_test_name, test_name)
-    _prev_test_name = test_name
+    global _PREV_TEST_NAME # pylint: disable=global-statement
+    if _PREV_TEST_NAME:
+      self.assertLess(_PREV_TEST_NAME, test_name)
+    _PREV_TEST_NAME = test_name
 
   def AdderTest(self, a, b, partial_sum):
     self.assertEqual(a + b, partial_sum)
@@ -73,3 +76,9 @@ class SimpleTest(
 
   def TestException(self):
     raise Exception('Expected exception')
+
+
+def load_tests(loader, tests, pattern): # pylint: disable=invalid-name
+  del loader, tests, pattern  # Unused.
+  return serially_executed_browser_test_case.LoadAllTestsInModule(
+      sys.modules[__name__])

@@ -8,7 +8,7 @@ found in the LICENSE file.
 <link rel="import" href="/tracing/base/extension_registry_base.html">
 <link rel="import" href="/tracing/base/extension_registry_basic.html">
 <link rel="import" href="/tracing/base/extension_registry_type_based.html">
-<link rel="import" href="/tracing/base/iteration_helpers.html">
+<link rel="import" href="/tracing/base/utils.html">
 
 <script>
 'use strict';
@@ -31,7 +31,7 @@ found in the LICENSE file.
  *     registry.register(MySubclass, {titleWhenShownInTabStrip: 'MySub'})
  *
  * Some registries want a default object that is returned when a more precise
- * subtype has been registered. To provide one, set the defaultConstructor
+ * subtype has not been registered. To provide one, set the defaultConstructor
  * option on the registry options.
  *
  * TODO: Extension registry used to make reference to mandatoryBaseType but it
@@ -39,27 +39,28 @@ found in the LICENSE file.
  * enforce the types that can be put into a given registry.
  */
 tr.exportTo('tr.b', function() {
-
   function decorateExtensionRegistry(registry, registryOptions) {
-    if (registry.register)
+    if (registry.register) {
       throw new Error('Already has registry');
+    }
 
     registryOptions.freeze();
-    if (registryOptions.mode == tr.b.BASIC_REGISTRY_MODE) {
+    if (registryOptions.mode === tr.b.BASIC_REGISTRY_MODE) {
       tr.b._decorateBasicExtensionRegistry(registry, registryOptions);
-    } else if (registryOptions.mode == tr.b.TYPE_BASED_REGISTRY_MODE) {
+    } else if (registryOptions.mode === tr.b.TYPE_BASED_REGISTRY_MODE) {
       tr.b._decorateTypeBasedExtensionRegistry(registry, registryOptions);
     } else {
       throw new Error('Unrecognized mode');
     }
 
     // Make it an event target.
-    if (registry.addEventListener === undefined)
+    if (registry.addEventListener === undefined) {
       tr.b.EventTarget.decorate(registry);
+    }
   }
 
   return {
-    decorateExtensionRegistry: decorateExtensionRegistry
+    decorateExtensionRegistry,
   };
 });
 </script>

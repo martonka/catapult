@@ -1,7 +1,6 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """URL endpoint that takes a list of keys, gets them and puts them.
 
 This is used by /edit_sheriffs, which needs to re-save all the tests that match
@@ -12,11 +11,14 @@ to asynchronous tasks.
 This can also be called from the interactive shell (/_ah/stats/shell) to update
 entities with a field that needs to be indexed.
 """
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 from google.appengine.ext import ndb
 
-from dashboard import datastore_hooks
-from dashboard import request_handler
+from dashboard.common import datastore_hooks
+from dashboard.common import request_handler
 
 
 class PutEntitiesTaskHandler(request_handler.RequestHandler):
@@ -26,5 +28,19 @@ class PutEntitiesTaskHandler(request_handler.RequestHandler):
     datastore_hooks.SetPrivilegedRequest()
     urlsafe_keys = self.request.get('keys').split(',')
     keys = [ndb.Key(urlsafe=k) for k in urlsafe_keys]
-    entities = ndb.get_multi(keys)
+    results = ndb.get_multi(keys)
+
+    tests = []
+    entities = []
+
+    for e in results:
+      if e.key.kind() == 'TestMetadata':
+        tests.append(e)
+      else:
+        entities.append(e)
+
+    for t in tests:
+      t.UpdateSheriff()
+      t.put()
+
     ndb.put_multi(entities)

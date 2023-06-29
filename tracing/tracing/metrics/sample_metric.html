@@ -5,7 +5,7 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="import" href="/tracing/base/range.html">
+<link rel="import" href="/tracing/base/math/range.html">
 <link rel="import" href="/tracing/metrics/metric_registry.html">
 <link rel="import" href="/tracing/value/histogram.html">
 
@@ -13,13 +13,13 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.metrics', function() {
-  function sampleMetric(values, model) {
-    var hist = new tr.v.Histogram(
+  function sampleMetric(histograms, model) {
+    const hist = new tr.v.Histogram(
         'foo', tr.b.Unit.byName.sizeInBytes_smallerIsBetter);
     hist.addSample(9);
-    hist.addSample(91, {bar: new tr.v.d.Generic({hello: 42})});
+    hist.addSample(91, {bar: new tr.v.d.GenericSet([{hello: 42}])});
 
-    for (var expectation of model.userModel.expectations) {
+    for (const expectation of model.userModel.expectations) {
       if (expectation instanceof tr.model.um.ResponseExpectation) {
       } else if (expectation instanceof tr.model.um.AnimationExpectation) {
       } else if (expectation instanceof tr.model.um.IdleExpectation) {
@@ -27,19 +27,19 @@ tr.exportTo('tr.metrics', function() {
       }
     }
 
-    var chromeHelper = model.getOrCreateHelper(
+    const chromeHelper = model.getOrCreateHelper(
         tr.model.helpers.ChromeModelHelper);
 
-    tr.b.iterItems(model.processes, function(pid, process) {
-    });
+    for (const [pid, process] of Object.entries(model.processes)) {
+    }
 
-    values.addHistogram(hist);
+    histograms.addHistogram(hist);
   }
 
   tr.metrics.MetricRegistry.register(sampleMetric);
 
   return {
-    sampleMetric: sampleMetric
+    sampleMetric,
   };
 });
 </script>

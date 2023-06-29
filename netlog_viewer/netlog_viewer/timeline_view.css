@@ -1,7 +1,6 @@
 /* Copyright (c) 2012 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+ * found in the LICENSE file. */
 
 #timeline-view-selection-div {
   display: inline-block;
@@ -10,7 +9,7 @@
 
 #timeline-view-selection-toggle {
   background-color: #fff;
-  background-image: url(select.png);
+  background-image: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABMAAAAICAQAAACxSAwfAAAAUUlEQVR42mP4TxREZkYxpKHAKKzKEhOZvyG4zN8SE7Eq+6+wYCHbTwiT7eeChf8VsFsKVQhTxIDDbVCFfF8ginApgyp82wRShEcZVJIVzoJDAGqrgII2fJb+AAAAAElFTkSuQmCC);
   border: none;
   height: 8px;
   padding: none;
@@ -18,11 +17,11 @@
 }
 
 .timeline-view-rotateleft {
-  -webkit-transform: rotate(90deg);
+  transform: rotate(90deg);
 }
 
 .timeline-view-rotateright {
-  -webkit-transform: rotate(270deg);
+  transform: rotate(270deg);
 }
 
 #timeline-view-selection-div ul {
@@ -77,6 +76,7 @@
 }
 
 #timeline-view-graph-div {
+  flex: 1;
   background-color: white;
 }
 

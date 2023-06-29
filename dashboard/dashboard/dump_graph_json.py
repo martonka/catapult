@@ -1,12 +1,14 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Provides a web interface for dumping graph data as JSON.
 
 This is meant to be used with /load_from_prod in order to easily grab
 data for a graph to a local server for testing.
 """
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import base64
 import json
@@ -14,8 +16,8 @@ import json
 from google.appengine.ext import ndb
 from google.appengine.ext.ndb import model
 
-from dashboard import request_handler
-from dashboard import utils
+from dashboard.common import request_handler
+from dashboard.common import utils
 from dashboard.models import anomaly
 from dashboard.models import graph_data
 
@@ -66,7 +68,6 @@ class DumpGraphJsonHandler(request_handler.RequestHandler):
 
     # Get the Row entities.
     q = graph_data.Row.query()
-    print test_key
     q = q.filter(graph_data.Row.parent_test == utils.OldStyleTestKey(test_key))
     if end_rev:
       q = q.filter(graph_data.Row.revision <= int(end_rev))
@@ -74,14 +75,13 @@ class DumpGraphJsonHandler(request_handler.RequestHandler):
     entities += q.fetch(limit=num_points)
 
     # Get the Anomaly and Sheriff entities.
-    alerts = anomaly.Anomaly.GetAlertsForTest(test_key)
-    sheriff_keys = {alert.sheriff for alert in alerts}
-    sheriffs = [sheriff.get() for sheriff in sheriff_keys]
+    alerts, _, _ = anomaly.Anomaly.QueryAsync(test=test_key).get_result()
+    subscriptions = [s for a in alerts for s in a.subscriptions]
     entities += alerts
-    entities += sheriffs
+    entities += subscriptions
 
     # Convert the entities to protobuf message strings and output as JSON.
-    protobuf_strings = map(EntityToBinaryProtobuf, entities)
+    protobuf_strings = list(map(EntityToBinaryProtobuf, entities))
     self.response.out.write(json.dumps(protobuf_strings))
 
   def _DumpAnomalyDataForSheriff(self):
@@ -100,12 +100,9 @@ class DumpGraphJsonHandler(request_handler.RequestHandler):
     sheriff_name = self.request.get('sheriff')
     num_points = int(self.request.get('num_points', _DEFAULT_MAX_POINTS))
     num_anomalies = int(self.request.get('num_alerts', _DEFAULT_MAX_ANOMALIES))
-    sheriff = ndb.Key('Sheriff', sheriff_name).get()
-    if not sheriff:
-      self.ReportError('Unknown sheriff specified.')
-      return
 
-    anomalies = self._FetchAnomalies(sheriff, num_anomalies)
+    anomalies, _, _ = anomaly.Anomaly.QueryAsync(
+        subscriptions=[sheriff_name], limit=num_anomalies).get_result()
     test_keys = [a.GetTestMetadataKey() for a in anomalies]
 
     # List of datastore entities that will be dumped.
@@ -118,10 +115,11 @@ class DumpGraphJsonHandler(request_handler.RequestHandler):
 
     # Add the Anomaly and Sheriff entities.
     entities += anomalies
-    entities.append(sheriff)
+    subscriptions = [s for a in anomalies for s in a.subscriptions]
+    entities += subscriptions
 
     # Convert the entities to protobuf message strings and output as JSON.
-    protobuf_strings = map(EntityToBinaryProtobuf, entities)
+    protobuf_strings = list(map(EntityToBinaryProtobuf, entities))
     self.response.out.write(json.dumps(protobuf_strings))
 
   def _GetTestAncestors(self, test_keys):
@@ -159,13 +157,6 @@ class DumpGraphJsonHandler(request_handler.RequestHandler):
     for future in futures:
       rows.extend(future.get_result())
     return rows
-
-  def _FetchAnomalies(self, sheriff, num_anomalies):
-    """Fetches recent anomalies for 'sheriff'."""
-    q = anomaly.Anomaly.query(
-        anomaly.Anomaly.sheriff == sheriff.key)
-    q = q.order(-anomaly.Anomaly.timestamp)
-    return q.fetch(limit=num_anomalies)
 
 
 def EntityToBinaryProtobuf(entity):

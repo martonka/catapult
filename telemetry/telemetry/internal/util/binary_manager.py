@@ -2,45 +2,74 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+from __future__ import absolute_import
+import contextlib
 import logging
 import os
 
+import py_utils
 from py_utils import binary_manager
+from py_utils import cloud_storage
 from py_utils import dependency_util
 import dependency_manager
+from dependency_manager import base_config
+
 from devil import devil_env
+
 
 from telemetry.core import exceptions
 from telemetry.core import util
-from telemetry.core import platform as platform_module
 
 
 TELEMETRY_PROJECT_CONFIG = os.path.join(
-    util.GetTelemetryDir(), 'telemetry', 'internal', 'binary_dependencies.json')
+    util.GetTelemetryDir(), 'telemetry', 'binary_dependencies.json')
 
 
 CHROME_BINARY_CONFIG = os.path.join(util.GetCatapultDir(), 'common', 'py_utils',
                                     'py_utils', 'chrome_binaries.json')
 
 
-BATTOR_BINARY_CONFIG = os.path.join(util.GetCatapultDir(), 'common', 'battor',
-                                    'battor', 'battor_binary_dependencies.json')
+SUPPORTED_DEP_PLATFORMS = (
+    'linux_aarch64', 'linux_x86_64', 'linux_armv7l', 'linux_mips',
+    'mac_x86_64',
+    'win_x86', 'win_AMD64',
+    'android_arm64-v8a', 'android_armeabi-v7a', 'android_arm', 'android_x64',
+    'android_x86'
+)
 
+PLATFORMS_TO_DOWNLOAD_FOLDER_MAP = {
+    'linux_aarch64': 'bin/linux/aarch64',
+    'linux_x86_64': 'bin/linux/x86_64',
+    'linux_armv7l': 'bin/linux/armv7l',
+    'linux_mips': 'bin/linux/mips',
+    'mac_x86_64': 'bin/mac/x86_64',
+    'win_x86': 'bin/win/x86',
+    'win_AMD64': 'bin/win/AMD64',
+    'android_arm64-v8a': 'bin/android/arm64-v8a',
+    'android_armeabi-v7a': 'bin/android/armeabi-v7a',
+    'android_arm': 'bin/android/arm',
+    'android_x64': 'bin/android/x64',
+    'android_x86': 'bin/android/x86',
+}
 
 NoPathFoundError = dependency_manager.NoPathFoundError
 CloudStorageError = dependency_manager.CloudStorageError
 
 
 _binary_manager = None
+_installed_helpers = set()
 
+
+TELEMETRY_BINARY_BASE_CS_FOLDER = 'binary_dependencies'
+TELEMETRY_BINARY_CS_BUCKET = cloud_storage.PUBLIC_BUCKET
 
 def NeedsInit():
   return not _binary_manager
 
 
 def InitDependencyManager(client_configs):
-  global _binary_manager
-  if _binary_manager:
+  if GetBinaryManager():
     raise exceptions.InitializationError(
         'Trying to re-initialize the binary manager with config %s'
         % client_configs)
@@ -48,33 +77,64 @@ def InitDependencyManager(client_configs):
   if client_configs:
     configs += client_configs
   configs += [TELEMETRY_PROJECT_CONFIG, CHROME_BINARY_CONFIG]
-  _binary_manager = binary_manager.BinaryManager(configs)
+  SetBinaryManager(binary_manager.BinaryManager(configs))
 
   devil_env.config.Initialize()
 
 
-def FetchPath(binary_name, arch, os_name, os_version=None):
+@contextlib.contextmanager
+def TemporarilyReplaceBinaryManager(manager):
+  old_manager = GetBinaryManager()
+  try:
+    SetBinaryManager(manager)
+    yield
+  finally:
+    SetBinaryManager(old_manager)
+
+
+def GetBinaryManager():
+  return _binary_manager
+
+
+def SetBinaryManager(manager):
+  global _binary_manager # pylint: disable=global-statement
+  _binary_manager = manager
+
+
+def _IsChromeOSLocalMode(os_name):
+  """Determines if we're running telemetry on a Chrome OS device.
+
+  Used to differentiate local mode (telemetry running on the CrOS DUT) from
+  remote mode (running telemetry on another platform that communicates with
+  the CrOS DUT over SSH).
+  """
+  return os_name == 'chromeos' and py_utils.GetHostOsName() == 'chromeos'
+
+
+def FetchPath(binary_name, os_name, arch, os_version=None):
   """ Return a path to the appropriate executable for <binary_name>, downloading
       from cloud storage if needed, or None if it cannot be found.
   """
-  if _binary_manager is None:
+  if GetBinaryManager() is None:
     raise exceptions.InitializationError(
         'Called FetchPath with uninitialized binary manager.')
-  return _binary_manager.FetchPath(binary_name, os_name, arch, os_version)
+  return GetBinaryManager().FetchPath(
+      binary_name, 'linux' if _IsChromeOSLocalMode(os_name) else os_name,
+      arch, os_version)
 
 
-def LocalPath(binary_name, arch, os_name, os_version=None):
+def LocalPath(binary_name, os_name, arch, os_version=None):
   """ Return a local path to the given binary name, or None if an executable
       cannot be found. Will not download the executable.
       """
-  if _binary_manager is None:
+  if GetBinaryManager() is None:
     raise exceptions.InitializationError(
         'Called LocalPath with uninitialized binary manager.')
-  return _binary_manager.LocalPath(binary_name, os_name, arch, os_version)
+  return GetBinaryManager().LocalPath(binary_name, os_name, arch, os_version)
 
 
-def FetchBinaryDepdencies(platform, client_configs,
-                          fetch_reference_chrome_binary):
+def FetchBinaryDependencies(
+    platform, client_configs, fetch_reference_chrome_binary):
   """ Fetch all binary dependenencies for the given |platform|.
 
   Note: we don't fetch browser binaries by default because the size of the
@@ -89,25 +149,30 @@ def FetchBinaryDepdencies(platform, client_configs,
   """
   configs = [
       dependency_manager.BaseConfig(TELEMETRY_PROJECT_CONFIG),
-      dependency_manager.BaseConfig(BATTOR_BINARY_CONFIG)
   ]
   dep_manager = dependency_manager.DependencyManager(configs)
-  target_platform = '%s_%s' % (platform.GetOSName(), platform.GetArchName())
+  os_name = platform.GetOSName()
+  # If we're running directly on a Chrome OS device, fetch the binaries for
+  # linux instead, which should be compatible with CrOS. Otherwise, if we're
+  # running remotely on CrOS, fetch the binaries for the host platform like
+  # we do with android below.
+  if _IsChromeOSLocalMode(os_name):
+    os_name = 'linux'
+  target_platform = '%s_%s' % (os_name, platform.GetArchName())
   dep_manager.PrefetchPaths(target_platform)
 
   host_platform = None
   fetch_devil_deps = False
-  if platform.GetOSName() == 'android':
+  if os_name in ('android', 'chromeos'):
     host_platform = '%s_%s' % (
-        platform_module.GetHostPlatform().GetOSName(),
-        platform_module.GetHostPlatform().GetArchName())
+        py_utils.GetHostOsName(), py_utils.GetHostArchName())
     dep_manager.PrefetchPaths(host_platform)
-    # TODO(aiolos): this is a hack to prefetch the devil deps.
-    if host_platform == 'linux_x86_64':
-      fetch_devil_deps = True
-    else:
-      logging.error('Devil only supports 64 bit linux as a host platform. '
-                    'Android tests may fail.')
+    if os_name == 'android':
+      if host_platform == 'linux_x86_64':
+        fetch_devil_deps = True
+      else:
+        logging.error('Devil only supports 64 bit linux as a host platform. '
+                      'Android tests may fail.')
 
   if fetch_reference_chrome_binary:
     _FetchReferenceBrowserBinary(platform)
@@ -118,8 +183,8 @@ def FetchBinaryDepdencies(platform, client_configs,
   # (https://github.com/catapult-project/catapult/issues/2192)
   # For now this is ok because the client configs usually don't include cloud
   # storage infos.
-  # TODO(nednguyen): remove the logic of swallowing exception once the issue is
-  # fixed on Chromium side.
+  # TODO(crbug.com/1111556): remove the logic of swallowing exception once the
+  # issue is fixed on Chromium side.
   if client_configs:
     manager = dependency_manager.DependencyManager(
         list(dependency_manager.BaseConfig(c) for c in client_configs))
@@ -130,22 +195,43 @@ def FetchBinaryDepdencies(platform, client_configs,
 
     except dependency_manager.NoPathFoundError as e:
       logging.error('Error when trying to prefetch paths for %s: %s',
-                    target_platform, e.message)
+                    target_platform, e)
 
-  # TODO(aiolos, jbudorick): we should have a devil pre-fetch API to call here
-  # and/or switch devil to use the same platform names so we can include it in
-  # the primary loop.
   if fetch_devil_deps:
     devil_env.config.Initialize()
-    devil_env.config._dm.PrefetchPaths(target_platform)
-    devil_env.config._dm.PrefetchPaths('linux2_x86_64')
+    devil_env.config.PrefetchPaths(arch=platform.GetArchName())
+    devil_env.config.PrefetchPaths()
+
+
+def ReinstallAndroidHelperIfNeeded(binary_name, install_path, device):
+  """ Install a binary helper to a specific location.
+
+  Args:
+    binary_name: (str) The name of the binary from binary_dependencies.json
+    install_path: (str) The path to install the binary at
+    device: (device_utils.DeviceUtils) a device to install the helper to
+  Raises:
+    Exception: When the binary could not be fetched or could not be pushed to
+        the device.
+  """
+  if (device.serial, install_path) in _installed_helpers:
+    return
+  host_path = FetchPath(binary_name, 'android', device.GetABI())
+  if not host_path:
+    raise Exception(
+        '%s binary could not be fetched as %s', binary_name, host_path)
+  device.PushChangedFiles([(host_path, install_path)])
+  device.RunShellCommand(['chmod', '777', install_path], check_return=True)
+  _installed_helpers.add((device.serial, install_path))
 
 
 def _FetchReferenceBrowserBinary(platform):
   os_name = platform.GetOSName()
+  if _IsChromeOSLocalMode(os_name):
+    os_name = 'linux'
   arch_name = platform.GetArchName()
   manager = binary_manager.BinaryManager(
-             [CHROME_BINARY_CONFIG])
+      [CHROME_BINARY_CONFIG])
   if os_name == 'android':
     os_version = dependency_util.GetChromeApkOsVersion(
         platform.GetOSVersionName())
@@ -153,4 +239,34 @@ def _FetchReferenceBrowserBinary(platform):
         'chrome_stable', os_name, arch_name, os_version)
   else:
     manager.FetchPath(
-        'reference_build', os_name, arch_name)
+        'chrome_stable', os_name, arch_name)
+
+
+def UpdateDependency(dependency, dep_local_path, version,
+                     os_name=None, arch_name=None):
+  config = os.path.join(
+      util.GetTelemetryDir(), 'telemetry', 'binary_dependencies.json')
+
+  if not os_name:
+    assert not arch_name, 'arch_name is specified but not os_name'
+    os_name = py_utils.GetHostOsName()
+    arch_name = py_utils.GetHostArchName()
+  else:
+    assert arch_name, 'os_name is specified but not arch_name'
+
+  dep_platform = '%s_%s' % (os_name, arch_name)
+
+  c = base_config.BaseConfig(config, writable=True)
+  try:
+    old_version = c.GetVersion(dependency, dep_platform)
+    print('Updating from version: {}'.format(old_version))
+  except ValueError:
+    raise RuntimeError(
+        ('binary_dependencies.json entry for %s missing or invalid; please add '
+         'it first! (need download_path and path_within_archive)') %
+        dep_platform)
+
+  if dep_local_path:
+    c.AddCloudStorageDependencyUpdateJob(
+        dependency, dep_platform, dep_local_path, version=version,
+        execute_job=True)

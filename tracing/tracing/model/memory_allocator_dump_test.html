@@ -5,77 +5,77 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
+<link rel="import" href="/tracing/base/scalar.html">
 <link rel="import" href="/tracing/base/unit.html">
 <link rel="import" href="/tracing/model/container_memory_dump.html">
 <link rel="import" href="/tracing/model/memory_allocator_dump.html">
 <link rel="import" href="/tracing/model/memory_dump_test_utils.html">
-<link rel="import" href="/tracing/value/numeric.html">
 
 <script>
 'use strict';
 
 tr.b.unittest.testSuite(function() {
-  var ContainerMemoryDump = tr.model.ContainerMemoryDump;
-  var MemoryAllocatorDump = tr.model.MemoryAllocatorDump;
-  var MemoryAllocatorDumpLink = tr.model.MemoryAllocatorDumpLink;
-  var ScalarNumeric = tr.v.ScalarNumeric;
-  var unitlessNumber_smallerIsBetter =
+  const ContainerMemoryDump = tr.model.ContainerMemoryDump;
+  const MemoryAllocatorDump = tr.model.MemoryAllocatorDump;
+  const MemoryAllocatorDumpLink = tr.model.MemoryAllocatorDumpLink;
+  const Scalar = tr.b.Scalar;
+  const unitlessNumber_smallerIsBetter =
       tr.b.Unit.byName.unitlessNumber_smallerIsBetter;
-  var sizeInBytes = tr.b.Unit.byName.sizeInBytes;
-  var powerInWatts = tr.b.Unit.byName.powerInWatts;
-  var newAllocatorDump = tr.model.MemoryDumpTestUtils.newAllocatorDump;
-  var addChildDump = tr.model.MemoryDumpTestUtils.addChildDump;
-  var checkDumpNumericsAndDiagnostics =
+  const sizeInBytes = tr.b.Unit.byName.sizeInBytes;
+  const powerInWatts = tr.b.Unit.byName.powerInWatts;
+  const newAllocatorDump = tr.model.MemoryDumpTestUtils.newAllocatorDump;
+  const addChildDump = tr.model.MemoryDumpTestUtils.addChildDump;
+  const checkDumpNumericsAndDiagnostics =
       tr.model.MemoryDumpTestUtils.checkDumpNumericsAndDiagnostics;
 
   test('memoryAllocatorDump_instantiate', function() {
-    var containerDump = new ContainerMemoryDump(42);
+    const containerDump = new ContainerMemoryDump(42);
     containerDump.containerName = 'super dump';
-    var dump = new MemoryAllocatorDump(containerDump, 'v8/objects/object7');
+    const dump = new MemoryAllocatorDump(containerDump, 'v8/objects/object7');
 
-    assert.equal(dump.name, 'object7');
-    assert.equal(dump.fullName, 'v8/objects/object7');
+    assert.strictEqual(dump.name, 'object7');
+    assert.strictEqual(dump.fullName, 'v8/objects/object7');
     assert.strictEqual(dump.containerMemoryDump, containerDump);
-    assert.equal(dump.quantifiedName, '\'v8/objects/object7\' in super dump');
+    assert.strictEqual(
+        dump.quantifiedName, '\'v8/objects/object7\' in super dump');
   });
 
   test('memoryAllocatorDumps_aggregateNumericsRecursively', function() {
-    var md = new ContainerMemoryDump(42);
+    const md = new ContainerMemoryDump(42);
 
-    var oilpanDump = newAllocatorDump(md, 'oilpan', {numerics: {
-      objects_count: new ScalarNumeric(unitlessNumber_smallerIsBetter, 7)
+    const oilpanDump = newAllocatorDump(md, 'oilpan', {numerics: {
+      objects_count: new Scalar(unitlessNumber_smallerIsBetter, 7)
     }});
 
     addChildDump(oilpanDump, 'bucket1', {numerics: {
       size: 512,
-      objects_count: new ScalarNumeric(unitlessNumber_smallerIsBetter, 3),
+      objects_count: new Scalar(unitlessNumber_smallerIsBetter, 3),
       inner_size: 256,
       outer_size: 1024
     }});
 
-    var oilpanBucket2Dump = addChildDump(oilpanDump, 'bucket2');
+    const oilpanBucket2Dump = addChildDump(oilpanDump, 'bucket2');
 
-    var oilpanBucket2StringsDump = addChildDump(oilpanBucket2Dump, 'strings', {
-      numerics: {
-        size: 512,
-        objects_count: new ScalarNumeric(unitlessNumber_smallerIsBetter, 4),
-        inner_size: 512,
-        outer_size: 2048
-      }
-    });
+    const oilpanBucket2StringsDump = addChildDump(
+        oilpanBucket2Dump, 'strings', {numerics: {
+          size: 512,
+          objects_count: new Scalar(unitlessNumber_smallerIsBetter, 4),
+          inner_size: 512,
+          outer_size: 2048
+        }});
 
     oilpanDump.aggregateNumericsRecursively();
 
     // oilpan has *some* numerics aggregated.
     checkDumpNumericsAndDiagnostics(oilpanDump, {
-      objects_count: new ScalarNumeric(unitlessNumber_smallerIsBetter, 7),
+      objects_count: new Scalar(unitlessNumber_smallerIsBetter, 7),
       inner_size: 768,
       outer_size: 3072
     }, {});
 
     // oilpan/bucket2 has *all* numerics aggregated (except for size).
     checkDumpNumericsAndDiagnostics(oilpanBucket2Dump, {
-      objects_count: new ScalarNumeric(unitlessNumber_smallerIsBetter, 4),
+      objects_count: new Scalar(unitlessNumber_smallerIsBetter, 4),
       inner_size: 512,
       outer_size: 2048
     }, {});
@@ -83,7 +83,7 @@ tr.b.unittest.testSuite(function() {
     // oilpan/bucket2/strings has *no* numerics aggregated.
     checkDumpNumericsAndDiagnostics(oilpanBucket2StringsDump, {
       size: 512,
-      objects_count: new ScalarNumeric(unitlessNumber_smallerIsBetter, 4),
+      objects_count: new Scalar(unitlessNumber_smallerIsBetter, 4),
       inner_size: 512,
       outer_size: 2048
     }, {});
@@ -93,28 +93,29 @@ tr.b.unittest.testSuite(function() {
     function checkAggregateNumerics(numerics, expectedValue, expectedUnit,
         opt_expectedWarningCount) {
       function checkResult(result) {
-          if (expectedValue === undefined) {
+        if (expectedValue === undefined) {
           assert.isUndefined(result);
           assert.isUndefined(expectedUnit);  // Test sanity check.
         } else {
-          assert.instanceOf(result, ScalarNumeric);
+          assert.instanceOf(result, Scalar);
           assert.strictEqual(result.value, expectedValue);
           assert.strictEqual(result.unit, expectedUnit);
         }
       }
 
       // Without model parameter.
-      var result1 = MemoryAllocatorDump.aggregateNumerics(numerics);
+      const result1 = MemoryAllocatorDump.aggregateNumerics(numerics);
       checkResult(result1);
 
       // With model parameter.
-      var mockModel = {
+      const mockModel = {
         warnings: [],
-        importWarning: function(warning) {
+        importWarning(warning) {
           this.warnings.push(warning);
         }
       };
-      var result2 = MemoryAllocatorDump.aggregateNumerics(numerics, mockModel);
+      const result2 = MemoryAllocatorDump.aggregateNumerics(
+          numerics, mockModel);
       checkResult(result2);
       assert.lengthOf(mockModel.warnings, opt_expectedWarningCount || 0);
     }
@@ -126,47 +127,47 @@ tr.b.unittest.testSuite(function() {
 
     // Consistent units.
     checkAggregateNumerics(
-        [new ScalarNumeric(unitlessNumber_smallerIsBetter, 10)],
+        [new Scalar(unitlessNumber_smallerIsBetter, 10)],
         10, unitlessNumber_smallerIsBetter);
     checkAggregateNumerics(
-        [new ScalarNumeric(sizeInBytes, 10),
-         new ScalarNumeric(sizeInBytes, 20),
-         new ScalarNumeric(sizeInBytes, 40)],
+        [new Scalar(sizeInBytes, 10),
+          new Scalar(sizeInBytes, 20),
+          new Scalar(sizeInBytes, 40)],
         70, sizeInBytes);
     checkAggregateNumerics(
         [undefined,
-         new ScalarNumeric(sizeInBytes, 16),
-         undefined,
-         new ScalarNumeric(sizeInBytes, 32),
-         undefined],
+          new Scalar(sizeInBytes, 16),
+          undefined,
+          new Scalar(sizeInBytes, 32),
+          undefined],
         48, sizeInBytes);
 
     // Inconsistent units.
     checkAggregateNumerics(
-        [new ScalarNumeric(sizeInBytes, 10),
-         new ScalarNumeric(powerInWatts, 20)],
+        [new Scalar(sizeInBytes, 10),
+          new Scalar(powerInWatts, 20)],
         30, unitlessNumber_smallerIsBetter, 1 /* opt_expectedWarningCount */);
     checkAggregateNumerics(
         [undefined,
-         new ScalarNumeric(powerInWatts, 16),
-         undefined,
-         new ScalarNumeric(unitlessNumber_smallerIsBetter, 32),
-         undefined,
-         new ScalarNumeric(sizeInBytes, 64),
-         undefined],
+          new Scalar(powerInWatts, 16),
+          undefined,
+          new Scalar(unitlessNumber_smallerIsBetter, 32),
+          undefined,
+          new Scalar(sizeInBytes, 64),
+          undefined],
         112, unitlessNumber_smallerIsBetter, 1 /* opt_expectedWarningCount */);
   });
 
   test('memoryAllocatorDumps_isDescendantOf', function() {
-    var md = new ContainerMemoryDump(42);
+    const md = new ContainerMemoryDump(42);
 
-    var v8Dump = new MemoryAllocatorDump(md, 'v8');
-    var v8HeapsDump = addChildDump(v8Dump, 'heaps');
-    var v8ObjectsDump = addChildDump(v8Dump, 'objects');
-    var v8Object1Dump = addChildDump(v8ObjectsDump, 'obj1');
-    var v8Object2Dump = addChildDump(v8ObjectsDump, 'obj2');
+    const v8Dump = new MemoryAllocatorDump(md, 'v8');
+    const v8HeapsDump = addChildDump(v8Dump, 'heaps');
+    const v8ObjectsDump = addChildDump(v8Dump, 'objects');
+    const v8Object1Dump = addChildDump(v8ObjectsDump, 'obj1');
+    const v8Object2Dump = addChildDump(v8ObjectsDump, 'obj2');
 
-    var oilpanDump = new MemoryAllocatorDump(md, 'oilpan');
+    const oilpanDump = new MemoryAllocatorDump(md, 'oilpan');
 
     assert.isTrue(v8Dump.isDescendantOf(v8Dump));
     assert.isTrue(v8HeapsDump.isDescendantOf(v8Dump));
@@ -188,15 +189,15 @@ tr.b.unittest.testSuite(function() {
   });
 
   test('memoryAllocatorDumps_getDescendantDumpByFullName', function() {
-    var containerDump = new ContainerMemoryDump(42);
+    const containerDump = new ContainerMemoryDump(42);
 
-    var gpuDump = new MemoryAllocatorDump(containerDump, 'gpu');
+    const gpuDump = new MemoryAllocatorDump(containerDump, 'gpu');
     containerDump.memoryAllocatorDumps = [gpuDump];
 
-    var memtrackDump = addChildDump(gpuDump, 'android_memtrack');
-    var glDump = addChildDump(memtrackDump, 'gl');
-    var gfxDump = addChildDump(memtrackDump, 'gfx');
-    var tileDump = addChildDump(gfxDump, 'tile');
+    const memtrackDump = addChildDump(gpuDump, 'android_memtrack');
+    const glDump = addChildDump(memtrackDump, 'gl');
+    const gfxDump = addChildDump(memtrackDump, 'gfx');
+    const tileDump = addChildDump(gfxDump, 'tile');
 
     assert.strictEqual(gpuDump.getDescendantDumpByFullName(
         'android_memtrack'), memtrackDump);
@@ -208,9 +209,9 @@ tr.b.unittest.testSuite(function() {
   });
 
   test('memoryAllocatorDumpLink_instantiate', function() {
-    var d1 = new MemoryAllocatorDump('v8/isolate1');
-    var d2 = new MemoryAllocatorDump('oilpan/document1');
-    var link = new MemoryAllocatorDumpLink(d1, d2, 3);
+    const d1 = new MemoryAllocatorDump('v8/isolate1');
+    const d2 = new MemoryAllocatorDump('oilpan/document1');
+    const link = new MemoryAllocatorDumpLink(d1, d2, 3);
 
     assert.strictEqual(link.source, d1);
     assert.strictEqual(link.target, d2);

@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry import story
 from telemetry.page import page
 from telemetry.internal.testing.pages.external_page import ExternalPage
@@ -16,10 +17,9 @@ class TestPageSet(story.StorySet):
 
   def __init__(self):
     super(TestPageSet, self).__init__(
-      archive_data_file='data/archive_files/test.json',
-      credentials_path='data/credential',
-      user_agent_type='desktop',
-      bucket=story.PUBLIC_BUCKET)
+        archive_data_file='data/archive_files/test.json',
+        user_agent_type='desktop',
+        bucket=story.PUBLIC_BUCKET)
 
     #top google property; a google tab is often open
     class Google(page.Page):

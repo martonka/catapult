@@ -20,25 +20,25 @@ tr.exportTo('tr.ui.tracks', function() {
    * @constructor
    * @extends {tr.ui.tracks.Track}
    */
-  var SpacingTrack = tr.ui.b.define('spacing-track', tr.ui.tracks.Track);
+  const SpacingTrack = tr.ui.b.define('spacing-track', tr.ui.tracks.Track);
 
   SpacingTrack.prototype = {
     __proto__: tr.ui.tracks.Track.prototype,
 
-    decorate: function(viewport) {
+    decorate(viewport) {
       tr.ui.tracks.Track.prototype.decorate.call(this, viewport);
       Polymer.dom(this).classList.add('spacing-track');
 
-      this.heading_ = document.createElement('tr-ui-heading');
+      this.heading_ = document.createElement('tr-ui-b-heading');
       Polymer.dom(this).appendChild(this.heading_);
     },
 
-    addAllEventsMatchingFilterToSelection: function(filter, selection) {
+    addAllEventsMatchingFilterToSelection(filter, selection) {
     }
   };
 
   return {
-    SpacingTrack: SpacingTrack
+    SpacingTrack,
   };
 });
 </script>

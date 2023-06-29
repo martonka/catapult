@@ -5,8 +5,8 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="import" href="/tracing/ui/extras/drive/comments_side_panel.html">
 <link rel="import" href="/tracing/core/test_utils.html">
+<link rel="import" href="/tracing/ui/extras/drive/comments_side_panel.html">
 
 <script>
 'use strict';
@@ -27,43 +27,43 @@ tr.b.unittest.testSuite(function() {
   StubCommentProvider.prototype = {
     comments_: [],
 
-    attachToElement: function(attachedElement) {
+    attachToElement(attachedElement) {
       this.attachedElement_ = attachedElement;
       this.updateComments();
     },
 
-    detachFromElement: function() {
+    detachFromElement() {
     },
 
-    updateComments: function() {
+    updateComments() {
       this.attachedElement_.comments_ = this.comments_;
     },
 
-    addDummyComment: function(content) {
-      var newComment = {
-          author: {
-            displayName: 'Casper the Friendly Ghost',
-            picture: {
-              url: 'https://lh3.googleusercontent.com/-XdUIqdMkCWA/' +
+    addDummyComment(content) {
+      const newComment = {
+        author: {
+          displayName: 'Casper the Friendly Ghost',
+          picture: {
+            url: 'https://lh3.googleusercontent.com/-XdUIqdMkCWA/' +
                       'AAAAAAAAAAI/AAAAAAAAAAA/4252rscbv5M/s128/photo.jpg'
-            }
-          },
-          createdDate: Date.now(),
-          anchor: (this.comments_.length) % 2 ? 1 : 0,
-          content: content
+          }
+        },
+        createdDate: Date.now(),
+        anchor: (this.comments_.length) % 2 ? 1 : 0,
+        content
       };
 
       this.comments_.push(newComment);
     },
 
-    addComment: function(body) {
+    addComment(body) {
       this.addDummyComment(body);
       this.updateComments();
     }
   };
 
   test('instantiate', function() {
-    var panel = document.createElement('tr-ui-e-drive-comments-side-panel');
+    const panel = document.createElement('tr-ui-e-drive-comments-side-panel');
     panel.setCommentProvider(new StubCommentProvider);
     this.addHTMLOutput(panel);
   });

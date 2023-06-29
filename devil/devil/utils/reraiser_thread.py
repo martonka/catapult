@@ -1,7 +1,6 @@
 # Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Thread and ThreadGroup that reraise exceptions on the main thread."""
 # pylint: disable=W0212
 
@@ -11,12 +10,15 @@ import threading
 import time
 import traceback
 
+from devil import base_error
 from devil.utils import watchdog_timer
 
 
-class TimeoutError(Exception):
+class TimeoutError(base_error.BaseError):
   """Module-specific timeout exception."""
-  pass
+
+  def __init__(self, message):
+    super(TimeoutError, self).__init__(message)
 
 
 def LogThreadStack(thread, error_log_func=logging.critical):
@@ -47,10 +49,13 @@ class ReraiserThread(threading.Thread):
       func: callable to call on a new thread.
       args: list of positional arguments for callable, defaults to empty.
       kwargs: dictionary of keyword arguments for callable, defaults to empty.
-      name: thread name, defaults to Thread-N.
+      name: thread name, defaults to the function name.
     """
-    if not name and func.__name__ != '<lambda>':
-      name = func.__name__
+    if not name:
+      if hasattr(func, '__name__') and func.__name__ != '<lambda>':
+        name = func.__name__
+      else:
+        name = 'anonymous'
     super(ReraiserThread, self).__init__(name=name)
     if not args:
       args = []
@@ -64,10 +69,18 @@ class ReraiserThread(threading.Thread):
     self._exc_info = None
     self._thread_group = None
 
-  def ReraiseIfException(self):
-    """Reraise exception if an exception was raised in the thread."""
-    if self._exc_info:
-      raise self._exc_info[0], self._exc_info[1], self._exc_info[2]
+  if sys.version_info < (3, ):
+    # pylint: disable=exec-used
+    exec ('''def ReraiseIfException(self):
+  """Reraise exception if an exception was raised in the thread."""
+  if self._exc_info:
+    raise self._exc_info[0], self._exc_info[1], self._exc_info[2]''')
+  else:
+
+    def ReraiseIfException(self):
+      """Reraise exception if an exception was raised in the thread."""
+      if self._exc_info:
+        raise self._exc_info[1]
 
   def GetReturnValue(self):
     """Reraise exception if present, otherwise get the return value."""
@@ -151,7 +164,7 @@ class ReraiserThreadGroup(object):
                                (len(alive_threads), len(self._threads)))
           # Allow the main thread to periodically check for interrupts.
           thread.join(0.1)
-          if not thread.isAlive():
+          if not thread.is_alive():
             alive_threads.remove(thread)
       # All threads are allowed to complete before reraising exceptions.
       for thread in self._threads:
@@ -159,13 +172,13 @@ class ReraiserThreadGroup(object):
     finally:
       self.blocked_parent_thread_group = None
 
-  def IsAlive(self):
+  def is_alive(self):
     """Check whether any of the threads are still alive.
 
     Returns:
       Whether any of the threads are still alive.
     """
-    return any(t.isAlive() for t in self._threads)
+    return any(t.is_alive() for t in self._threads)
 
   def JoinAll(self, watcher=None, timeout=None,
               error_log_func=logging.critical):
@@ -186,7 +199,7 @@ class ReraiserThreadGroup(object):
       self._JoinAll(watcher, timeout)
     except TimeoutError:
       error_log_func('Timed out. Dumping threads.')
-      for thread in (t for t in self._threads if t.isAlive()):
+      for thread in (t for t in self._threads if t.is_alive()):
         LogThreadStack(thread, error_log_func=error_log_func)
       raise
 
@@ -196,7 +209,7 @@ class ReraiserThreadGroup(object):
     Args:
       watcher: same as in |JoinAll|. Only used if threads are alive.
     """
-    if any([t.isAlive() for t in self._threads]):
+    if any([t.is_alive() for t in self._threads]):
       self.JoinAll(watcher)
     return [t.GetReturnValue() for t in self._threads]
 

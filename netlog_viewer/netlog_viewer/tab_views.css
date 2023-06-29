@@ -9,11 +9,16 @@
   * CSS should live in its respective component.
   */
 
-#top-bar-view {
+#top-bar-view-content {
   border-bottom: 1px solid gray;
   color: #fff;
   display: -webkit-flex;
   padding: 2px 2px 4px 7px;
+  align-items: center;
+}
+
+#top-bar-view-content a {
+  color: #fff;
 }
 
 #import-view-command-line,
@@ -86,4 +91,23 @@ table.borderless-table,
   border: 0px;
   padding-left: 4px;
   padding-right: 4px;
+}
+
+td.reporting-centered {
+  text-align: center;
+}
+td.reporting-right-justified {
+  text-align: right;
+}
+td .reporting-content-summary {
+}
+td .reporting-content-expand-button {
+  color: rgb(0, 0, 255);
+  cursor: pointer;
+  float: right;
+  font-size: 80%;
+  margin-left: 1em;
+  text-decoration: underline;
+}
+td .reporting-content-detail {
 }

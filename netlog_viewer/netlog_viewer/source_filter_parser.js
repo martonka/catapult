@@ -41,13 +41,13 @@ var SourceFilterParser = (function() {
       if (filter) {
         if (negated) {
           filter = (function(func, sourceEntry) {
-            return !func(sourceEntry);
-          }).bind(null, filter);
+                     return !func(sourceEntry);
+                   }).bind(null, filter);
         }
         filterFunctions.push(filter);
         continue;
       }
-      textFilters.push({ text: filterElement, negated: negated });
+      textFilters.push({text: filterElement, negated: negated});
     }
 
     // Create a single filter for all text filters, so they can share a
@@ -73,7 +73,7 @@ var SourceFilterParser = (function() {
     var match = /^sort:(.*)$/.exec(filterElement);
     if (!match)
       return null;
-    return { method: match[1], backwards: backwards };
+    return {method: match[1], backwards: backwards};
   }
 
   /**
@@ -85,10 +85,14 @@ var SourceFilterParser = (function() {
     if (!match)
       return null;
     if (match[1] == 'active') {
-      return function(sourceEntry) { return !sourceEntry.isInactive(); };
+      return function(sourceEntry) {
+        return !sourceEntry.isInactive();
+      };
     }
     if (match[1] == 'error') {
-      return function(sourceEntry) { return sourceEntry.isError(); };
+      return function(sourceEntry) {
+        return sourceEntry.isError();
+      };
     }
     return null;
   }
@@ -149,8 +153,7 @@ var SourceFilterParser = (function() {
       while (position < filterText.length) {
         var nextCharacter = filterText[position];
         ++position;
-        if (nextCharacter == '\\' &&
-            position < filterText.length) {
+        if (nextCharacter == '\\' && position < filterText.length) {
           // If there's a backslash, skip the backslash and add the next
           // character to the element.
           filterElement += filterText[position];
@@ -192,20 +195,22 @@ var SourceFilterParser = (function() {
    * filters in the (possibly empty) list.
    */
   function textFilter_(textFilters, sourceEntry) {
-    var tablePrinter = null;
+    let tablePrinter = null;
     for (var i = 0; i < textFilters.length; ++i) {
-      var text = textFilters[i].text;
-      var negated = textFilters[i].negated;
-      var match = false;
-      // The description is often not contained in one of the log entries.
-      // The source type almost never is, so check for them directly.
-      var description = sourceEntry.getDescription().toLowerCase();
-      var type = sourceEntry.getSourceTypeString().toLowerCase();
-      if (description.indexOf(text) != -1 || type.indexOf(text) != -1) {
+      let text = textFilters[i].text;
+      let negated = textFilters[i].negated;
+      let match = false;
+      // The description, id, and source type are not always contained in the
+      // log entries, so search them directly.
+      let description = sourceEntry.getDescription().toLowerCase();
+      let type = sourceEntry.getSourceTypeString().toLowerCase();
+      let id = sourceEntry.getSourceId() + '';
+      if (description.indexOf(text) != -1 || type.indexOf(text) != -1 ||
+          id.indexOf(text) != -1) {
         match = true;
       } else {
         if (!tablePrinter)
-          tablePrinter = sourceEntry.createTablePrinter();
+          tablePrinter = sourceEntry.createTablePrinter(true /* forSearch */);
         match = tablePrinter.search(text);
       }
       if (negated)

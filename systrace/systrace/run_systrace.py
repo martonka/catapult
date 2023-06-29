@@ -11,22 +11,15 @@ the kernel.  It creates an HTML file for visualizing the trace.
 """
 
 # Make sure we're using a new enough version of Python.
-# The flags= parameter of re.sub() is new in Python 2.7. And Systrace does not
-# support Python 3 yet.
+# The flags= parameter of re.sub() is new in Python 2.7.
 
+# pylint: disable=wrong-import-position
+from __future__ import print_function
 import sys
-
-version = sys.version_info[:2]
-if version != (2, 7):
-  sys.stderr.write('This script does not support Python %d.%d. '
-                   'Please use Python 2.7.\n' % version)
-  sys.exit(1)
-
 
 import optparse
 import os
 import time
-from distutils.spawn import find_executable
 
 _SYSTRACE_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.path.pardir))
@@ -44,11 +37,14 @@ from systrace import systrace_runner
 from systrace import util
 from systrace.tracing_agents import atrace_agent
 from systrace.tracing_agents import atrace_from_file_agent
-from systrace.tracing_agents import battor_trace_agent
+from systrace.tracing_agents import atrace_process_dump
 from systrace.tracing_agents import ftrace_agent
+from systrace.tracing_agents import walt_agent
+from systrace.tracing_agents import android_cgroup_agent
 
-ALL_MODULES = [atrace_agent, atrace_from_file_agent,
-               battor_trace_agent, ftrace_agent]
+
+ALL_MODULES = [atrace_agent, atrace_from_file_agent, atrace_process_dump,
+               ftrace_agent, walt_agent, android_cgroup_agent]
 
 
 def parse_options(argv):
@@ -79,7 +75,11 @@ def parse_options(argv):
   options, categories = parser.parse_args(argv[1:])
 
   if options.output_file is None:
-    options.output_file = 'trace.json' if options.write_json else 'trace.html'
+    base = 'trace'
+    if options.from_file is not None:
+      base = os.path.splitext(options.from_file)[0]
+    suffix = '.json' if options.write_json else '.html'
+    options.output_file = base + suffix
 
   if options.link_assets or options.asset_dir != 'trace-viewer':
     parser.error('--link-assets and --asset-dir are deprecated.')
@@ -92,12 +92,29 @@ def parse_options(argv):
 
   return (options, categories)
 
+def find_adb():
+  """Finds adb on the path.
+
+  This method is provided to avoid the issue of diskutils.spawn's
+  find_executable which first searches the current directory before
+  searching $PATH. That behavior results in issues where systrace.py
+  uses a different adb than the one in the path.
+  """
+  paths = os.environ['PATH'].split(os.pathsep)
+  executable = 'adb'
+  if sys.platform == 'win32':
+    executable = executable + '.exe'
+  for p in paths:
+    f = os.path.join(p, executable)
+    if os.path.isfile(f):
+      return f
+  return None
 
 def initialize_devil():
   """Initialize devil to use adb from $PATH"""
-  adb_path = find_executable('adb')
+  adb_path = find_adb()
   if adb_path is None:
-    print >> sys.stderr, "Unable to find adb, is it in your path?"
+    print("Unable to find adb, is it in your path?", file=sys.stderr)
     sys.exit(1)
   devil_dynamic_config = {
     'config_type': 'BaseConfig',
@@ -129,15 +146,22 @@ def main_impl(arguments):
       raise RuntimeError('Categories are only valid for atrace/ftrace. Target '
                          'platform must be either Android or Linux.')
 
+  # Include atrace categories by default in Systrace.
+  if options.target == 'android' and not options.atrace_categories:
+    options.atrace_categories = atrace_agent.DEFAULT_CATEGORIES
+
   if options.target == 'android' and not options.from_file:
     initialize_devil()
+    devices = [a.GetDeviceSerial() for a in adb_wrapper.AdbWrapper.Devices()]
     if not options.device_serial_number:
-      devices = [a.GetDeviceSerial() for a in adb_wrapper.AdbWrapper.Devices()]
       if len(devices) == 0:
         raise RuntimeError('No ADB devices connected.')
       elif len(devices) >= 2:
         raise RuntimeError('Multiple devices connected, serial number required')
       options.device_serial_number = devices[0]
+    elif options.device_serial_number not in devices:
+      raise RuntimeError('Device with the serial number "%s" is not connected.'
+                         % options.device_serial_number)
 
   # If list_categories is selected, just print the list of categories.
   # In this case, use of the tracing controller is not necessary.

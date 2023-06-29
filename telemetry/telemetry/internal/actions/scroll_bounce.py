@@ -2,24 +2,32 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry.internal.actions import page_action
 from telemetry.internal.actions import utils
+from telemetry.util import js_template
 
 
-class ScrollBounceAction(page_action.PageAction):
-  def __init__(self, selector=None, text=None, element_function=None,
-               left_start_ratio=0.5, top_start_ratio=0.5,
-               direction='down', distance=100,
-               overscroll=10, repeat_count=10,
+class ScrollBounceAction(page_action.ElementPageAction):
+
+  def __init__(self,
+               selector=None,
+               text=None,
+               element_function=None,
+               left_start_ratio=0.5,
+               top_start_ratio=0.5,
+               direction='down',
+               distance=100,
+               overscroll=10,
+               repeat_count=10,
                speed_in_pixels_per_second=400,
-               synthetic_gesture_source=page_action.GESTURE_SOURCE_DEFAULT):
-    super(ScrollBounceAction, self).__init__()
+               synthetic_gesture_source=page_action.GESTURE_SOURCE_DEFAULT,
+               timeout=page_action.DEFAULT_TIMEOUT):
+    super(ScrollBounceAction, self).__init__(
+        selector, text, element_function, timeout=timeout)
     if direction not in ['down', 'up', 'left', 'right']:
       raise page_action.PageActionNotSupported(
           'Invalid scroll direction: %s' % self.direction)
-    self._selector = selector
-    self._text = text
-    self._element_function = element_function
     self._left_start_ratio = left_start_ratio
     self._top_start_ratio = top_start_ratio
     # Should be big enough to do more than just hide the URL bar.
@@ -33,8 +41,8 @@ class ScrollBounceAction(page_action.PageAction):
     self._repeat_count = repeat_count
     # 7 pixels per frame should be plenty of frames.
     self._speed = speed_in_pixels_per_second
-    self._synthetic_gesture_source = ('chrome.gpuBenchmarking.%s_INPUT' %
-                                      synthetic_gesture_source)
+    self._synthetic_gesture_source = (
+        'chrome.gpuBenchmarking.%s_INPUT' % synthetic_gesture_source)
 
     if (self._selector is None and self._text is None and
         self._element_function is None):
@@ -56,41 +64,40 @@ class ScrollBounceAction(page_action.PageAction):
       raise page_action.PageActionNotSupported(
           'Touch scroll not supported for this browser')
 
-    if (self._synthetic_gesture_source ==
-        'chrome.gpuBenchmarking.MOUSE_INPUT'):
+    if self._synthetic_gesture_source == 'chrome.gpuBenchmarking.MOUSE_INPUT':
       raise page_action.PageActionNotSupported(
           'ScrollBounce page action does not support mouse input')
 
-    done_callback = 'function() { window.__scrollBounceActionDone = true; }'
     tab.ExecuteJavaScript("""
         window.__scrollBounceActionDone = false;
-        window.__scrollBounceAction = new __ScrollBounceAction(%s);"""
-        % (done_callback))
+        window.__scrollBounceAction = new __ScrollBounceAction(
+            function() { window.__scrollBounceActionDone = true; });""")
 
   def RunAction(self, tab):
-    code = '''
+    code = js_template.Render(
+        """
         function(element, info) {
           if (!element) {
             throw Error('Cannot find element: ' + info);
           }
           window.__scrollBounceAction.start({
             element: element,
-            left_start_ratio: %s,
-            top_start_ratio: %s,
-            direction: '%s',
-            distance: %s,
-            overscroll: %s,
-            repeat_count: %s,
-            speed: %s
+            left_start_ratio: {{ left_start_ratio }},
+            top_start_ratio: {{ top_start_ratio }},
+            direction: {{ direction }},
+            distance: {{ distance }},
+            overscroll: {{ overscroll }},
+            repeat_count: {{ repeat_count }},
+            speed: {{ speed }}
           });
-        }''' % (self._left_start_ratio,
-                self._top_start_ratio,
-                self._direction,
-                self._distance,
-                self._overscroll,
-                self._repeat_count,
-                self._speed)
-    page_action.EvaluateCallbackWithElement(
-        tab, code, selector=self._selector, text=self._text,
-        element_function=self._element_function)
-    tab.WaitForJavaScriptExpression('window.__scrollBounceActionDone', 60)
+        }""",
+        left_start_ratio=self._left_start_ratio,
+        top_start_ratio=self._top_start_ratio,
+        direction=self._direction,
+        distance=self._distance,
+        overscroll=self._overscroll,
+        repeat_count=self._repeat_count,
+        speed=self._speed)
+    self.EvaluateCallback(tab, code)
+    tab.WaitForJavaScriptCondition(
+        'window.__scrollBounceActionDone', timeout=self.timeout)

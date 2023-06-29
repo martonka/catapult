@@ -2,8 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry.timeline import atrace_config
 from telemetry.timeline import chrome_trace_config
+from telemetry.timeline import system_trace_config
 
 
 class TracingConfig(object):
@@ -26,8 +28,6 @@ class TracingConfig(object):
       enable_android_graphics_memtrack: a boolean that specifies whether
           to enable the memtrack_helper daemon to track graphics memory on
           Android (see goo.gl/4Y30p9). Doesn't have any effects on other OSs.
-      enable_battor_trace: a boolean that specifies whether to enable BattOr
-          tracing.
 
   Detailed configurations:
       atrace_config: Stores configuration options specific to Atrace.
@@ -39,12 +39,14 @@ class TracingConfig(object):
     self._enable_atrace_trace = False
     self._enable_platform_display_trace = False
     self._enable_android_graphics_memtrack = False
-    self._enable_battor_trace = False
     self._enable_cpu_trace = False
     self._enable_chrome_trace = False
+    self._enable_experimental_system_tracing = False
+    self._force_sideload_perfetto = False
 
     self._atrace_config = atrace_config.AtraceConfig()
     self._chrome_trace_config = chrome_trace_config.ChromeTraceConfig()
+    self._system_trace_config = system_trace_config.SystemTraceConfig()
 
   @property
   def enable_atrace_trace(self):
@@ -79,14 +81,6 @@ class TracingConfig(object):
     self._enable_android_graphics_memtrack = value
 
   @property
-  def enable_battor_trace(self):
-    return self._enable_battor_trace
-
-  @enable_battor_trace.setter
-  def enable_battor_trace(self, value):
-    self._enable_battor_trace = value
-
-  @property
   def enable_chrome_trace(self):
     return self._enable_chrome_trace
 
@@ -95,9 +89,29 @@ class TracingConfig(object):
     self._enable_chrome_trace = value
 
   @property
+  def enable_experimental_system_tracing(self):
+    return self._enable_experimental_system_tracing
+
+  @enable_experimental_system_tracing.setter
+  def enable_experimental_system_tracing(self, value):
+    self._enable_experimental_system_tracing = value
+
+  @property
+  def force_sideload_perfetto(self):
+    return self._force_sideload_perfetto
+
+  @force_sideload_perfetto.setter
+  def force_sideload_perfetto(self, value):
+    self._force_sideload_perfetto = value
+
+  @property
   def atrace_config(self):
     return self._atrace_config
 
   @property
   def chrome_trace_config(self):
     return self._chrome_trace_config
+
+  @property
+  def system_trace_config(self):
+    return self._system_trace_config

@@ -12,23 +12,19 @@ found in the LICENSE file.
 'use strict';
 
 tr.b.unittest.testSuite(function() {
-  var Sample = tr.model.Sample;
-  var StackFrame = tr.model.StackFrame;
-  var Thread = tr.model.Thread;
+  const Sample = tr.model.Sample;
+  const StackFrame = tr.model.StackFrame;
+  const Thread = tr.model.Thread;
 
   test('sampleStackTrace', function() {
-    var thread = tr.c.TestUtils.newFakeThread();
+    const thread = tr.c.TestUtils.newFakeThread();
 
-    var model = new tr.Model();
-    var fABC = tr.c.TestUtils.newStackTrace(model, ['a', 'b', 'c']);
+    const model = new tr.Model();
+    const node = tr.c.TestUtils.newProfileNodes(model, ['a', 'b', 'c']);
 
-    var s = new Sample(undefined, thread, 'instructions_retired',
-                       10, fABC, 10);
-    var stackTrace = s.stackTrace;
-    var stackTraceNames = stackTrace.map(function(f) { return f.title; });
-    assert.deepEqual(
-        stackTraceNames,
-        ['c', 'b', 'a']);
+    const s = new Sample(
+        10, 'instructions_retired', node, thread, undefined, 10);
+    assert.deepEqual(s.userFriendlyStack, ['c', 'b', 'a']);
   });
 });
 </script>

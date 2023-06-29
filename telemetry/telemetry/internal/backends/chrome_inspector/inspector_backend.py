@@ -2,11 +2,14 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import functools
 import logging
-import os
 import socket
 import sys
+import time
+import six
+from six.moves import input # pylint: disable=redefined-builtin
 
 from py_trace_event import trace_event
 
@@ -14,11 +17,16 @@ from telemetry.core import exceptions
 from telemetry import decorators
 from telemetry.internal.backends.chrome_inspector import devtools_http
 from telemetry.internal.backends.chrome_inspector import inspector_console
+from telemetry.internal.backends.chrome_inspector import inspector_log
 from telemetry.internal.backends.chrome_inspector import inspector_memory
 from telemetry.internal.backends.chrome_inspector import inspector_page
 from telemetry.internal.backends.chrome_inspector import inspector_runtime
+from telemetry.internal.backends.chrome_inspector import inspector_serviceworker
+from telemetry.internal.backends.chrome_inspector import inspector_storage
 from telemetry.internal.backends.chrome_inspector import inspector_websocket
-from telemetry.internal.backends.chrome_inspector import websocket
+from telemetry.util import js_template
+
+import py_utils
 
 
 def _HandleInspectorWebSocketExceptions(func):
@@ -29,31 +37,30 @@ def _HandleInspectorWebSocketExceptions(func):
   information.
   """
   @functools.wraps(func)
-  def inner(inspector_backend, *args, **kwargs):
+  def Inner(inspector_backend, *args, **kwargs):
     try:
       return func(inspector_backend, *args, **kwargs)
-    except (socket.error, websocket.WebSocketException,
+    except (socket.error, inspector_websocket.WebSocketException,
             inspector_websocket.WebSocketDisconnected) as e:
       inspector_backend._ConvertExceptionFromInspectorWebsocket(e)
 
-  return inner
+  return Inner
 
 
-class InspectorBackend(object):
+class InspectorBackend(six.with_metaclass(trace_event.TracedMetaClass, object)):
   """Class for communicating with a devtools client.
 
   The owner of an instance of this class is responsible for calling
   Disconnect() before disposing of the instance.
   """
 
-  __metaclass__ = trace_event.TracedMetaClass
-
-  def __init__(self, app, devtools_client, context, timeout=120):
+  def __init__(self, devtools_client, context, timeout=120):
     self._websocket = inspector_websocket.InspectorWebsocket()
     self._websocket.RegisterDomain(
         'Inspector', self._HandleInspectorDomainNotification)
+    self._cast_issue_message, self._cast_sink_list = None, []
+    self._websocket.RegisterDomain('Cast', self._HandleCastDomainNotification)
 
-    self._app = app
     self._devtools_client = devtools_client
     # Be careful when using the context object, since the data may be
     # outdated since this is never updated once InspectorBackend is
@@ -65,11 +72,16 @@ class InspectorBackend(object):
     try:
       self._websocket.Connect(self.debugger_url, timeout)
       self._console = inspector_console.InspectorConsole(self._websocket)
+      self._log = inspector_log.InspectorLog(self._websocket)
       self._memory = inspector_memory.InspectorMemory(self._websocket)
       self._page = inspector_page.InspectorPage(
           self._websocket, timeout=timeout)
       self._runtime = inspector_runtime.InspectorRuntime(self._websocket)
-    except (websocket.WebSocketException, exceptions.TimeoutException) as e:
+      self._serviceworker = inspector_serviceworker.InspectorServiceWorker(
+          self._websocket, timeout=timeout)
+      self._storage = inspector_storage.InspectorStorage(self._websocket)
+    except (inspector_websocket.WebSocketException, exceptions.TimeoutException,
+            py_utils.TimeoutException) as e:
       self._ConvertExceptionFromInspectorWebsocket(e)
 
   def Disconnect(self):
@@ -86,7 +98,7 @@ class InspectorBackend(object):
 
   @property
   def app(self):
-    return self._app
+    return self._devtools_client.app_backend.app
 
   @property
   def url(self):
@@ -98,12 +110,18 @@ class InspectorBackend(object):
     return self._devtools_client.GetUrl(self.id)
 
   @property
-  def id(self):
+  def id(self): # pylint: disable=invalid-name
     return self._context['id']
 
   @property
   def debugger_url(self):
     return self._context['webSocketDebuggerUrl']
+
+  def StopAllServiceWorkers(self, timeout):
+    self._serviceworker.StopAllWorkers(timeout)
+
+  def ClearDataForOrigin(self, url, timeout):
+    self._storage.ClearDataForOrigin(url, timeout)
 
   def GetWebviewInspectorBackends(self):
     """Returns a list of InspectorBackend instances associated with webviews.
@@ -131,17 +149,17 @@ class InspectorBackend(object):
   @property
   @decorators.Cache
   def screenshot_supported(self):
-    if (self.app.platform.GetOSName() == 'linux' and (
-        os.getenv('DISPLAY') not in [':0', ':0.0'])):
-      # Displays other than 0 mean we are likely running in something like
-      # xvfb where screenshotting doesn't work.
-      return False
     return True
 
   @_HandleInspectorWebSocketExceptions
   def Screenshot(self, timeout):
     assert self.screenshot_supported, 'Browser does not support screenshotting'
     return self._page.CaptureScreenshot(timeout)
+
+  @_HandleInspectorWebSocketExceptions
+  def FullScreenshot(self, timeout):
+    assert self.screenshot_supported, 'Browser does not support screenshotting'
+    return self._page.CaptureFullScreenshot(timeout)
 
   # Memory public methods.
 
@@ -156,10 +174,14 @@ class InspectorBackend(object):
     """
     dom_counters = self._memory.GetDOMCounters(timeout)
     return {
-      'document_count': dom_counters['documents'],
-      'node_count': dom_counters['nodes'],
-      'event_listener_count': dom_counters['jsEventListeners']
+        'document_count': dom_counters['documents'],
+        'node_count': dom_counters['nodes'],
+        'event_listener_count': dom_counters['jsEventListeners']
     }
+
+  @_HandleInspectorWebSocketExceptions
+  def PrepareForLeakDetection(self, timeout):
+    self._memory.PrepareForLeakDetection(timeout)
 
   # Page public methods.
 
@@ -184,28 +206,143 @@ class InspectorBackend(object):
   # Runtime public methods.
 
   @_HandleInspectorWebSocketExceptions
-  def ExecuteJavaScript(self, expr, context_id=None, timeout=60):
-    """Executes a javascript expression without returning the result.
+  def ExecuteJavaScript(self, statement, **kwargs):
+    """Executes a given JavaScript statement. Does not return the result.
+
+    Example: runner.ExecuteJavaScript('var foo = {{ value }};', value='hi');
+
+    Args:
+      statement: The statement to execute (provided as a string).
+
+    Optional keyword args:
+      timeout: The number of seconds to wait for the statement to execute.
+      context_id: The id of an iframe where to execute the code; the main page
+          has context_id=1, the first iframe context_id=2, etc.
+      user_gesture: Whether execution should be treated as initiated by user
+          in the UI. Code that plays media or requests fullscreen may not take
+          effects without user_gesture set to True.
+      Additional keyword arguments provide values to be interpolated within
+          the statement. See telemetry.util.js_template for details.
 
     Raises:
+      py_utils.TimeoutException
       exceptions.EvaluateException
-      exceptions.WebSocketDisconnected
-      exceptions.TimeoutException
+      exceptions.WebSocketException
       exceptions.DevtoolsTargetCrashException
     """
-    self._runtime.Execute(expr, context_id, timeout)
+    # Use the default both when timeout=None or the option is ommited.
+    timeout = kwargs.pop('timeout', None) or 60
+    context_id = kwargs.pop('context_id', None)
+    user_gesture = kwargs.pop('user_gesture', None) or False
+    statement = js_template.Render(statement, **kwargs)
+    self._runtime.Execute(statement, context_id, timeout,
+                          user_gesture=user_gesture)
 
-  @_HandleInspectorWebSocketExceptions
-  def EvaluateJavaScript(self, expr, context_id=None, timeout=60):
-    """Evaluates a javascript expression and returns the result.
+  def EvaluateJavaScript(self, expression, **kwargs):
+    """Returns the result of evaluating a given JavaScript expression.
+
+    Example: runner.ExecuteJavaScript('document.location.href');
+
+    Args:
+      expression: The expression to execute (provided as a string).
+
+    Optional keyword args:
+      timeout: The number of seconds to wait for the expression to evaluate.
+      context_id: The id of an iframe where to execute the code; the main page
+          has context_id=1, the first iframe context_id=2, etc.
+      user_gesture: Whether execution should be treated as initiated by user
+          in the UI. Code that plays media or requests fullscreen may not take
+          effects without user_gesture set to True.
+      promise: Whether the execution is a javascript promise, and should
+          wait for the promise to resolve prior to returning.
+      Additional keyword arguments provide values to be interpolated within
+          the expression. See telemetry.util.js_template for details.
 
     Raises:
+      py_utils.TimeoutException
       exceptions.EvaluateException
-      exceptions.WebSocketDisconnected
-      exceptions.TimeoutException
+      exceptions.WebSocketException
       exceptions.DevtoolsTargetCrashException
     """
-    return self._runtime.Evaluate(expr, context_id, timeout)
+    # Use the default both when timeout=None or the option is ommited.
+    timeout = kwargs.pop('timeout', None) or 60
+    context_id = kwargs.pop('context_id', None)
+    user_gesture = kwargs.pop('user_gesture', None) or False
+    promise = kwargs.pop('promise', None) or False
+    expression = js_template.Render(expression, **kwargs)
+    return self._EvaluateJavaScript(expression, context_id, timeout,
+                                    user_gesture=user_gesture,
+                                    promise=promise)
+
+  def WaitForJavaScriptCondition(self, condition, **kwargs):
+    """Wait for a JavaScript condition to become truthy.
+
+    Example: runner.WaitForJavaScriptCondition('window.foo == 10');
+
+    Args:
+      condition: The JavaScript condition (provided as string).
+
+    Optional keyword args:
+      timeout: The number in seconds to wait for the condition to become
+          True (default to 60).
+      context_id: The id of an iframe where to execute the code; the main page
+          has context_id=1, the first iframe context_id=2, etc.
+      Additional keyword arguments provide values to be interpolated within
+          the expression. See telemetry.util.js_template for details.
+
+    Returns:
+      The value returned by the JavaScript condition that got interpreted as
+      true.
+
+    Raises:
+      py_utils.TimeoutException
+      exceptions.EvaluateException
+      exceptions.WebSocketException
+      exceptions.DevtoolsTargetCrashException
+    """
+    # Use the default both when timeout=None or the option is ommited.
+    timeout = kwargs.pop('timeout', None) or 60
+    context_id = kwargs.pop('context_id', None)
+    condition = js_template.Render(condition, **kwargs)
+
+    def IsJavaScriptExpressionTrue():
+      try:
+        return self._EvaluateJavaScript(condition, context_id, timeout)
+      except exceptions.DevtoolsTargetClosedException:
+        # Ignore errors caused by navigation.
+        return False
+
+    try:
+      return py_utils.WaitFor(IsJavaScriptExpressionTrue, timeout)
+    except py_utils.TimeoutException as toe:
+      # Try to make timeouts a little more actionable by dumping console output.
+      debug_message = None
+      try:
+        debug_message = (
+            'Console output:\n%s' %
+            self.GetCurrentConsoleOutputBuffer())
+      except Exception as e: # pylint: disable=broad-except
+        debug_message = (
+            'Exception thrown when trying to capture console output: %s' %
+            repr(e))
+      # Rethrow with the original stack trace for better debugging.
+      six.reraise(
+          py_utils.TimeoutException,
+          py_utils.TimeoutException(
+              'Timeout after %ss while waiting for JavaScript:'
+              % timeout + condition + '\n' + repr(toe) + '\n' + debug_message
+          ),
+          sys.exc_info()[2]
+      )
+
+
+  def AddTimelineMarker(self, marker):
+    return self.ExecuteJavaScript(
+        """
+        console.time({{ marker }});
+        console.timeEnd({{ marker }});
+        """,
+        marker=str(marker))
 
   @_HandleInspectorWebSocketExceptions
   def EnableAllContexts(self):
@@ -219,12 +356,13 @@ class InspectorBackend(object):
     return self._runtime.EnableAllContexts()
 
   @_HandleInspectorWebSocketExceptions
-  def SynthesizeScrollGesture(self, x=100, y=800, xDistance=0, yDistance=-500,
-                              xOverscroll=None, yOverscroll=None,
-                              preventFling=True, speed=None,
-                              gestureSourceType=None, repeatCount=None,
-                              repeatDelayMs=None, interactionMarkerName=None,
-                              timeout=60):
+  def SynthesizeScrollGesture(
+      self, x=100, y=800, x_distance=0, y_distance=-500,
+      x_overscroll=None, y_overscroll=None,
+      prevent_fling=None, speed=None,
+      gesture_source_type=None, repeat_count=None,
+      repeat_delay_ms=None, interaction_marker_name=None,
+      timeout=60):
     """Runs an inspector command that causes a repeatable browser driven scroll.
 
     Args:
@@ -232,14 +370,14 @@ class InspectorBackend(object):
       y: Y coordinate of the start of the gesture in CSS pixels.
       xDistance: Distance to scroll along the X axis (positive to scroll left).
       yDistance: Distance to scroll along the Y axis (positive to scroll up).
-      xOverscroll: Number of additional pixels to scroll back along the X axis.
-      xOverscroll: Number of additional pixels to scroll back along the Y axis.
+      x_overscroll: Number of additional pixels to scroll back along the X axis.
+      yOverscroll: Number of additional pixels to scroll back along the Y axis.
       preventFling: Prevents a fling gesture.
       speed: Swipe speed in pixels per second.
-      gestureSourceType: Which type of input events to be generated.
-      repeatCount: Number of additional repeats beyond the first scroll.
-      repeatDelayMs: Number of milliseconds delay between each repeat.
-      interactionMarkerName: The name of the interaction markers to generate.
+      gesture_source_type: Which type of input events to be generated.
+      repeat_count: Number of additional repeats beyond the first scroll.
+      repeat_delay_ms: Number of milliseconds delay between each repeat.
+      interaction_marker_name: The name of the interaction markers to generate.
 
     Raises:
       exceptions.TimeoutException
@@ -248,45 +386,48 @@ class InspectorBackend(object):
     params = {
         'x': x,
         'y': y,
-        'xDistance': xDistance,
-        'yDistance': yDistance,
-        'preventFling': preventFling,
+        'xDistance': x_distance,
+        'yDistance': y_distance
     }
 
-    if xOverscroll is not None:
-      params['xOverscroll'] = xOverscroll
+    if prevent_fling is not None:
+      params['preventFling'] = prevent_fling
 
-    if yOverscroll is not None:
-      params['yOverscroll'] = yOverscroll
+    if x_overscroll is not None:
+      params['xOverscroll'] = x_overscroll
+
+    if y_overscroll is not None:
+      params['yOverscroll'] = y_overscroll
 
     if speed is not None:
       params['speed'] = speed
 
-    if repeatCount is not None:
-      params['repeatCount'] = repeatCount
+    if repeat_count is not None:
+      params['repeatCount'] = repeat_count
 
-    if gestureSourceType is not None:
-      params['gestureSourceType'] = gestureSourceType
+    if gesture_source_type is not None:
+      params['gestureSourceType'] = gesture_source_type
 
-    if repeatDelayMs is not None:
-      params['repeatDelayMs'] = repeatDelayMs
+    if repeat_delay_ms is not None:
+      params['repeatDelayMs'] = repeat_delay_ms
 
-    if interactionMarkerName is not None:
-      params['interactionMarkerName'] = interactionMarkerName
+    if interaction_marker_name is not None:
+      params['interactionMarkerName'] = interaction_marker_name
 
     scroll_command = {
-      'method': 'Input.synthesizeScrollGesture',
-      'params': params
+        'method': 'Input.synthesizeScrollGesture',
+        'params': params
     }
     return self._runtime.RunInspectorCommand(scroll_command, timeout)
 
   @_HandleInspectorWebSocketExceptions
-  def DispatchKeyEvent(self, keyEventType='char', modifiers=None,
-                       timestamp=None, text=None, unmodifiedText=None,
-                       keyIdentifier=None, domCode=None, domKey=None,
-                       windowsVirtualKeyCode=None, nativeVirtualKeyCode=None,
-                       autoRepeat=None, isKeypad=None, isSystemKey=None,
-                       timeout=60):
+  def DispatchKeyEvent(
+      self, key_event_type='char', modifiers=None,
+      timestamp=None, text=None, unmodified_text=None,
+      key_identifier=None, dom_code=None, dom_key=None,
+      windows_virtual_key_code=None, native_virtual_key_code=None,
+      auto_repeat=None, is_keypad=None, is_system_key=None,
+      timeout=60):
     """Dispatches a key event to the page.
 
     Args:
@@ -298,24 +439,24 @@ class InspectorBackend(object):
           seconds since January 1, 1970 (default: current time).
       text: Text as generated by processing a virtual key code with a keyboard
           layout. Not needed for for keyUp and rawKeyDown events (default: '').
-      unmodifiedText: Text that would have been generated by the keyboard if no
+      unmodified_text: Text that would have been generated by the keyboard if no
           modifiers were pressed (except for shift). Useful for shortcut
           (accelerator) key handling (default: "").
-      keyIdentifier: Unique key identifier (e.g., 'U+0041') (default: '').
-      windowsVirtualKeyCode: Windows virtual key code (default: 0).
-      nativeVirtualKeyCode: Native virtual key code (default: 0).
-      autoRepeat: Whether the event was generated from auto repeat (default:
+      key_identifier: Unique key identifier (e.g., 'U+0041') (default: '').
+      windows_virtual_key_code: Windows virtual key code (default: 0).
+      native_virtual_key_code: Native virtual key code (default: 0).
+      auto_repeat: Whether the event was generated from auto repeat (default:
           False).
-      isKeypad: Whether the event was generated from the keypad (default:
+      is_keypad: Whether the event was generated from the keypad (default:
           False).
-      isSystemKey: Whether the event was a system key event (default: False).
+      is_system_key: Whether the event was a system key event (default: False).
 
     Raises:
       exceptions.TimeoutException
       exceptions.DevtoolsTargetCrashException
     """
     params = {
-      'type': keyEventType,
+        'type': key_event_type,
     }
 
     if modifiers is not None:
@@ -324,30 +465,183 @@ class InspectorBackend(object):
       params['timestamp'] = timestamp
     if text is not None:
       params['text'] = text
-    if unmodifiedText is not None:
-      params['unmodifiedText'] = unmodifiedText
-    if keyIdentifier is not None:
-      params['keyIdentifier'] = keyIdentifier
-    if domCode is not None:
-      params['code'] = domCode
-    if domKey is not None:
-      params['key'] = domKey
-    if windowsVirtualKeyCode is not None:
-      params['windowsVirtualKeyCode'] = windowsVirtualKeyCode
-    if nativeVirtualKeyCode is not None:
-      params['nativeVirtualKeyCode'] = nativeVirtualKeyCode
-    if autoRepeat is not None:
-      params['autoRepeat'] = autoRepeat
-    if isKeypad is not None:
-      params['isKeypad'] = isKeypad
-    if isSystemKey is not None:
-      params['isSystemKey'] = isSystemKey
+    if unmodified_text is not None:
+      params['unmodifiedText'] = unmodified_text
+    if key_identifier is not None:
+      params['keyIdentifier'] = key_identifier
+    if dom_code is not None:
+      params['code'] = dom_code
+    if dom_key is not None:
+      params['key'] = dom_key
+    if windows_virtual_key_code is not None:
+      params['windowsVirtualKeyCode'] = windows_virtual_key_code
+    if native_virtual_key_code is not None:
+      params['nativeVirtualKeyCode'] = native_virtual_key_code
+    if auto_repeat is not None:
+      params['autoRepeat'] = auto_repeat
+    if is_keypad is not None:
+      params['isKeypad'] = is_keypad
+    if is_system_key is not None:
+      params['isSystemKey'] = is_system_key
 
     key_command = {
-      'method': 'Input.dispatchKeyEvent',
-      'params': params
+        'method': 'Input.dispatchKeyEvent',
+        'params': params
     }
     return self._runtime.RunInspectorCommand(key_command, timeout)
+
+  @_HandleInspectorWebSocketExceptions
+  def EnableCast(self, presentation_url, timeout=60):
+    """Starts observing Cast-enabled sinks.
+
+    Args:
+      presentation_url: string, the URL for making a presentation request.
+
+    Raises:
+      exceptions.TimeoutException
+      exceptions.DevtoolsTargetCrashException
+    """
+    params = {'presentationUrl': presentation_url} if presentation_url else {}
+    enable_command = {
+        'method': 'Cast.enable',
+        'params': params
+    }
+    return self._runtime.RunInspectorCommand(enable_command, timeout)
+
+  @_HandleInspectorWebSocketExceptions
+  def GetCastSinks(self):
+    """Returns a list of available Cast-enabled sinks.
+
+    Returns:
+      The list of sinks that supports Casting.
+      Returns an empty list if there is no available sink.
+
+    Raises:
+      exceptions.TimeoutException
+      exceptions.DevtoolsTargetCrashException
+    """
+    return self._cast_sink_list
+
+  @_HandleInspectorWebSocketExceptions
+  def GetCastIssue(self):
+    """Returns the error message when there is an issue while casting.
+
+    Returns:
+      The same error message as in extension dialog.
+      Returns an empty string if there is no error.
+
+    Raises:
+      exceptions.TimeoutException
+      exceptions.DevtoolsTargetCrashException
+    """
+    return self._cast_issue_message
+
+  @_HandleInspectorWebSocketExceptions
+  def SetCastSinkToUse(self, sink_name, timeout=60):
+    """Sets the sink to be used for a Cast session.
+
+    Args:
+      sink_name: string, name of the sink to start a casting session.
+
+    Raises:
+      exceptions.TimeoutException
+      exceptions.DevtoolsTargetCrashException
+    """
+    params = {'sinkName': sink_name}
+    set_sink_command = {
+        'method': 'Cast.setSinkToUse',
+        'params': params
+    }
+    return self._runtime.RunInspectorCommand(set_sink_command, timeout)
+
+  @_HandleInspectorWebSocketExceptions
+  def StartTabMirroring(self, sink_name, timeout=60):
+    """Starts a tab mirroring session.
+
+    Args:
+      sink_name: string, name of the sink to start a mirroring session.
+
+    Raises:
+      exceptions.TimeoutException
+      exceptions.DevtoolsTargetCrashException
+    """
+    params = {'sinkName': sink_name}
+    start_mirroring_command = {
+        'method': 'Cast.startTabMirroring',
+        'params': params
+    }
+    return self._runtime.RunInspectorCommand(start_mirroring_command, timeout)
+
+  @_HandleInspectorWebSocketExceptions
+  def StopCasting(self, sink_name, timeout=60):
+    """Stops all session on a specific Cast enabled sink.
+
+    Args:
+      sink_name: string, name of the sink to stop a session.
+
+    Raises:
+      exceptions.TimeoutException
+      exceptions.DevtoolsTargetCrashException
+    """
+    params = {'sinkName': sink_name}
+    stop_casting_command = {
+        'method': 'Cast.stopCasting',
+        'params': params
+    }
+    return self._runtime.RunInspectorCommand(stop_casting_command, timeout)
+
+  @_HandleInspectorWebSocketExceptions
+  def StartMobileDeviceEmulation(
+      self, width=360, height=640, dsr=2, timeout=60):
+    """Emulates a mobile device.
+
+    This method is intended for benchmarks used to gather non-performance
+    metrics only. Mobile emulation is not guaranteed to have the same
+    performance characteristics as real devices.
+
+    Example device parameters:
+    https://gist.github.com/devinmancuso/0c94410cb14c83ddad6f
+
+    Args:
+      width: Screen width.
+      height: Screen height.
+      dsr: Screen device scale factor.
+
+    Raises:
+      exceptions.TimeoutException
+      exceptions.DevtoolsTargetCrashException
+    """
+    params = {
+        'width': width,
+        'height': height,
+        'deviceScaleFactor': dsr,
+        'mobile': True,
+    }
+    emulate_command = {
+        'method': 'Emulation.setDeviceMetricsOverride',
+        'params': params,
+    }
+    return self._runtime.RunInspectorCommand(emulate_command, timeout)
+
+  @_HandleInspectorWebSocketExceptions
+  def StopMobileDeviceEmulation(self, timeout=60):
+    """Stops emulation of a mobile device.
+
+    Raises:
+      exceptions.TimeoutException
+      exceptions.DevtoolsTargetCrashException
+    """
+    params = {
+        'width': 0,
+        'height': 0,
+        'deviceScaleFactor': 0,
+        'mobile': False,
+    }
+    emulate_command = {
+        'method': 'Emulation.setDeviceMetricsOverride',
+        'params': params,
+    }
+    return self._runtime.RunInspectorCommand(emulate_command, timeout)
 
   # Methods used internally by other backends.
 
@@ -363,12 +657,24 @@ class InspectorBackend(object):
 
   def _WaitForInspectorToGoAway(self):
     self._websocket.Disconnect()
-    raw_input('The connection to Chrome was lost to the inspector ui.\n'
-              'Please close the inspector and press enter to resume '
-              'Telemetry run...')
+    input('The connection to Chrome was lost to the inspector ui.\n'
+          'Please close the inspector and press enter to resume '
+          'Telemetry run...')
     raise exceptions.DevtoolsTargetCrashException(
         self.app, 'Devtool connection with the browser was interrupted due to '
         'the opening of an inspector.')
+
+  def _HandleCastDomainNotification(self, msg):
+    """Runs an inspector command that starts observing Cast-enabled sinks.
+
+    Raises:
+      exceptions.TimeoutException
+      exceptions.DevtoolsTargetCrashException
+    """
+    if msg['method'] == 'Cast.sinksUpdated':
+      self._cast_sink_list = msg['params'].get('sinks', [])
+    elif msg['method'] == 'Cast.issueUpdated':
+      self._cast_issue_message = msg['params']
 
   def _ConvertExceptionFromInspectorWebsocket(self, error):
     """Converts an Exception from inspector_websocket.
@@ -377,13 +683,15 @@ class InspectorBackend(object):
     information. The exact exception raised depends on |error|.
 
     Args:
-      error: An instance of socket.error or websocket.WebSocketException.
+      error: An instance of socket.error or
+        inspector_websocket.WebSocketException.
     Raises:
       exceptions.TimeoutException: A timeout occurred.
       exceptions.DevtoolsTargetCrashException: On any other error, the most
         likely explanation is that the devtool's target crashed.
     """
-    if isinstance(error, websocket.WebSocketTimeoutException):
+    # pylint: disable=redefined-variable-type
+    if isinstance(error, inspector_websocket.WebSocketException):
       new_error = exceptions.TimeoutException()
       new_error.AddDebuggingMessage(exceptions.AppCrashException(
           self.app, 'The app is probably crashed:\n'))
@@ -394,7 +702,7 @@ class InspectorBackend(object):
     new_error.AddDebuggingMessage(original_error_msg)
     self._AddDebuggingInformation(new_error)
 
-    raise new_error, None, sys.exc_info()[2]
+    six.reraise(type(new_error), new_error, sys.exc_info()[2])
 
   def _AddDebuggingInformation(self, error):
     """Adds debugging information to error.
@@ -414,6 +722,31 @@ class InspectorBackend(object):
       )
     error.AddDebuggingMessage(msg)
     error.AddDebuggingMessage('Debugger url: %s' % self.debugger_url)
+
+  @_HandleInspectorWebSocketExceptions
+  def _EvaluateJavaScript(self, expression, context_id, timeout,
+                          user_gesture=False, promise=False):
+    try:
+      return self._runtime.Evaluate(expression, context_id, timeout,
+                                    user_gesture, promise)
+    except inspector_websocket.WebSocketException as e:
+      logging.error('Renderer process hung; forcibly crashing it and '
+                    'GPU process. Note that GPU process minidumps '
+                    'require --enable-gpu-benchmarking browser arg.')
+      # In Telemetry-based GPU tests, the GPU process is likely hung, and that's
+      # the reason the renderer process is hung. Crash it so we can see a
+      # symbolized minidump. From manual testing, it is important that this be
+      # done before crashing the renderer process, or the GPU process's minidump
+      # doesn't show up for some reason.
+      self._runtime.CrashGpuProcess(timeout)
+      # Assume the renderer's main thread is hung. Try to use DevTools to crash
+      # the target renderer process (on its IO thread) so we get a minidump we
+      # can symbolize.
+      self._runtime.CrashRendererProcess(context_id, timeout)
+      # Wait several seconds for these minidumps to be written, so the calling
+      # code has a better chance of discovering them.
+      time.sleep(5)
+      raise e
 
   @_HandleInspectorWebSocketExceptions
   def CollectGarbage(self):

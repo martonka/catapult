@@ -2,8 +2,11 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import division
+from __future__ import absolute_import
 import posixpath
 import re
+import six
 
 from telemetry.timeline import event as timeline_event
 
@@ -52,81 +55,81 @@ class MmapCategory(object):
 
 
 ROOT_CATEGORY = MmapCategory('/', None, [
-  MmapCategory('Android', r'^\/dev\/ashmem(?!\/libc malloc)', [
-    MmapCategory('Java runtime', r'^\/dev\/ashmem\/dalvik-', [
-      MmapCategory('Spaces', r'\/dalvik-(alloc|main|large'
-                             r' object|non moving|zygote) space', [
-        MmapCategory('Normal', r'\/dalvik-(alloc|main)'),
-        MmapCategory('Large', r'\/dalvik-large object'),
-        MmapCategory('Zygote', r'\/dalvik-zygote'),
-        MmapCategory('Non-moving', r'\/dalvik-non moving')
-      ]),
-      MmapCategory('Linear Alloc', r'\/dalvik-LinearAlloc'),
-      MmapCategory('Indirect Reference Table', r'\/dalvik-indirect.ref'),
-      MmapCategory('Cache', r'\/dalvik-jit-code-cache'),
-      MmapCategory('Accounting', None)
+    MmapCategory('Android', r'^\/dev\/ashmem(?!\/libc malloc)', [
+        MmapCategory('Java runtime', r'^\/dev\/ashmem\/dalvik-', [
+            MmapCategory('Spaces', r'\/dalvik-(alloc|main|large'
+                         r' object|non moving|zygote) space', [
+                             MmapCategory('Normal', r'\/dalvik-(alloc|main)'),
+                             MmapCategory('Large', r'\/dalvik-large object'),
+                             MmapCategory('Zygote', r'\/dalvik-zygote'),
+                             MmapCategory('Non-moving', r'\/dalvik-non moving')
+                         ]),
+            MmapCategory('Linear Alloc', r'\/dalvik-LinearAlloc'),
+            MmapCategory('Indirect Reference Table', r'\/dalvik-indirect.ref'),
+            MmapCategory('Cache', r'\/dalvik-jit-code-cache'),
+            MmapCategory('Accounting', None)
+        ]),
+        MmapCategory('Cursor', r'\/CursorWindow'),
+        MmapCategory('Ashmem', None)
     ]),
-    MmapCategory('Cursor', r'\/CursorWindow'),
-    MmapCategory('Ashmem', None)
-  ]),
-  MmapCategory('Native heap',
-               r'^((\[heap\])|(\[anon:)|(\/dev\/ashmem\/libc malloc)|$)'),
-  MmapCategory('Stack', r'^\[stack'),
-  MmapCategory('Files',
-               r'\.((((so)|(jar)|(apk)|(ttf)|(odex)|(oat)|(art))$)|(dex))', [
-    MmapCategory('so', r'\.so$'),
-    MmapCategory('jar', r'\.jar$'),
-    MmapCategory('apk', r'\.apk$'),
-    MmapCategory('ttf', r'\.ttf$'),
-    MmapCategory('dex', r'\.((dex)|(odex$))'),
-    MmapCategory('oat', r'\.oat$'),
-    MmapCategory('art', r'\.art$'),
-  ]),
-  MmapCategory('Devices', r'(^\/dev\/)|(anon_inode:dmabuf)', [
-    MmapCategory('GPU', r'\/((nv)|(mali)|(kgsl))'),
-    MmapCategory('DMA', r'anon_inode:dmabuf'),
-  ]),
-  MmapCategory('Discounted tracing overhead',
-               r'\[discounted tracing overhead\]')
+    MmapCategory('Native heap',
+                 r'^((\[heap\])|(\[anon:)|(\/dev\/ashmem\/libc malloc)|$)'),
+    MmapCategory('Stack', r'^\[stack'),
+    MmapCategory('Files',
+                 r'\.((((so)|(jar)|(apk)|(ttf)|(odex)|(oat)|(art))$)|(dex))', [
+                     MmapCategory('so', r'\.so$'),
+                     MmapCategory('jar', r'\.jar$'),
+                     MmapCategory('apk', r'\.apk$'),
+                     MmapCategory('ttf', r'\.ttf$'),
+                     MmapCategory('dex', r'\.((dex)|(odex$))'),
+                     MmapCategory('oat', r'\.oat$'),
+                     MmapCategory('art', r'\.art$'),
+                 ]),
+    MmapCategory('Devices', r'(^\/dev\/)|(anon_inode:dmabuf)', [
+        MmapCategory('GPU', r'\/((nv)|(mali)|(kgsl))'),
+        MmapCategory('DMA', r'anon_inode:dmabuf'),
+    ]),
+    MmapCategory('Discounted tracing overhead',
+                 r'\[discounted tracing overhead\]')
 ])
 
 
 # Map long descriptive attribute names, as understood by MemoryBucket.GetValue,
 # to the short keys used by events in raw json traces.
 BUCKET_ATTRS = {
-  'proportional_resident': 'pss',
-  'private_dirty_resident': 'pd',
-  'private_clean_resident': 'pc',
-  'shared_dirty_resident': 'sd',
-  'shared_clean_resident': 'sc',
-  'swapped': 'sw'}
+    'proportional_resident': 'pss',
+    'private_dirty_resident': 'pd',
+    'private_clean_resident': 'pc',
+    'shared_dirty_resident': 'sd',
+    'shared_clean_resident': 'sc',
+    'swapped': 'sw'}
 
 
 # Map of {memory_key: (category_path, discount_tracing), ...}.
 # When discount_tracing is True, we have to discount the resident_size of the
 # tracing allocator to get the correct value for that key.
 MMAPS_METRICS = {
-  'mmaps_overall_pss': ('/.proportional_resident', True),
-  'mmaps_private_dirty' : ('/.private_dirty_resident', True),
-  'mmaps_java_heap': ('/Android/Java runtime/Spaces.proportional_resident',
-                      False),
-  'mmaps_ashmem': ('/Android/Ashmem.proportional_resident', False),
-  'mmaps_native_heap': ('/Native heap.proportional_resident', True)}
+    'mmaps_overall_pss': ('/.proportional_resident', True),
+    'mmaps_private_dirty' : ('/.private_dirty_resident', True),
+    'mmaps_java_heap': ('/Android/Java runtime/Spaces.proportional_resident',
+                        False),
+    'mmaps_ashmem': ('/Android/Ashmem.proportional_resident', False),
+    'mmaps_native_heap': ('/Native heap.proportional_resident', True)}
 
 
 class MemoryBucket(object):
   """Simple object to hold and aggregate memory values."""
   def __init__(self):
-    self._bucket = dict.fromkeys(BUCKET_ATTRS.iterkeys(), 0)
+    self._bucket = dict.fromkeys(six.iterkeys(BUCKET_ATTRS), 0)
 
   def __repr__(self):
     values = ', '.join('%s=%d' % (src_key, self._bucket[dst_key])
                        for dst_key, src_key
-                       in sorted(BUCKET_ATTRS.iteritems()))
+                       in sorted(six.iteritems(BUCKET_ATTRS)))
     return '%s[%s]' % (type(self).__name__, values)
 
   def AddRegion(self, byte_stats):
-    for dst_key, src_key in BUCKET_ATTRS.iteritems():
+    for dst_key, src_key in six.iteritems(BUCKET_ATTRS):
       self._bucket[dst_key] += int(byte_stats.get(src_key, '0'), 16)
 
   def GetValue(self, name):
@@ -153,6 +156,7 @@ class ProcessMemoryDumpEvent(timeline_event.TimelineEvent):
   def __init__(self, process, dump_events):
     assert dump_events
 
+    #2To3-division: these lines are unchanged as result is expected floats.
     start_time = min(event['ts'] for event in dump_events) / 1000.0
     duration = max(event['ts'] for event in dump_events) / 1000.0 - start_time
     super(ProcessMemoryDumpEvent, self).__init__('memory', 'memory_dump',
@@ -180,7 +184,7 @@ class ProcessMemoryDumpEvent(timeline_event.TimelineEvent):
     self._allocators = {}
     parent_path = ''
     parent_has_size = False
-    for allocator_name, size_values in sorted(allocator_dumps.iteritems()):
+    for allocator_name, size_values in sorted(six.iteritems(allocator_dumps)):
       if ((allocator_name.startswith(parent_path) and parent_has_size) or
           allocator_name.startswith('global/')):
         continue
@@ -195,7 +199,7 @@ class ProcessMemoryDumpEvent(timeline_event.TimelineEvent):
           name_parts[1] == 'android_memtrack'):
         allocator_name = '_'.join(name_parts[1:3])
       allocator = self._allocators.setdefault(allocator_name, {})
-      for size_key, size_value in size_values['attrs'].iteritems():
+      for size_key, size_value in six.iteritems(size_values['attrs']):
         if size_value['units'] == 'bytes':
           allocator[size_key] = (allocator.get(size_key, 0)
                                  + int(size_value['value'], 16))
@@ -219,16 +223,17 @@ class ProcessMemoryDumpEvent(timeline_event.TimelineEvent):
     category = ROOT_CATEGORY
     while category:
       path = posixpath.join(path, category.name)
-      self.GetMemoryBucket(path).AddRegion(vm_region['bs'])
+      if 'bs' in vm_region:
+        self.GetMemoryBucket(path).AddRegion(vm_region['bs'])
       mapped_file = vm_region['mf']
       category = category.GetMatchingChild(mapped_file)
 
   def __repr__(self):
     values = ['pid=%d' % self.process.pid]
-    for key, value in sorted(self.GetMemoryUsage().iteritems()):
+    for key, value in sorted(six.iteritems(self.GetMemoryUsage())):
       values.append('%s=%d' % (key, value))
-    values = ', '.join(values)
-    return '%s[%s]' % (type(self).__name__, values)
+    values_str = ', '.join(values)
+    return '%s[%s]' % (type(self).__name__, values_str)
 
   def GetMemoryBucket(self, path):
     """Return the MemoryBucket associated with a category path.
@@ -261,7 +266,7 @@ class ProcessMemoryDumpEvent(timeline_event.TimelineEvent):
   def GetMemoryUsage(self):
     """Get a dictionary with the memory usage of this process."""
     usage = {}
-    for name, values in self._allocators.iteritems():
+    for name, values in six.iteritems(self._allocators):
       # If you wish to track more attributes here, make sure they are correctly
       # calculated by the ProcessMemoryDumpEvent method. All dumps whose parent
       # has "size" attribute are ignored to avoid double counting. So, the
@@ -274,7 +279,7 @@ class ProcessMemoryDumpEvent(timeline_event.TimelineEvent):
         usage[name] = values['memtrack_pss']
     if self.has_mmaps:
       usage.update((key, self.GetMemoryValue(*value))
-                   for key, value in MMAPS_METRICS.iteritems())
+                   for key, value in six.iteritems(MMAPS_METRICS))
     return usage
 
 
@@ -329,15 +334,15 @@ class GlobalMemoryDump(object):
 
   def __repr__(self):
     values = ['id=%s' % self.dump_id]
-    for key, value in sorted(self.GetMemoryUsage().iteritems()):
+    for key, value in sorted(six.iteritems(self.GetMemoryUsage())):
       values.append('%s=%d' % (key, value))
-    values = ', '.join(values)
-    return '%s[%s]' % (type(self).__name__, values)
+    values_str = ', '.join(values)
+    return '%s[%s]' % (type(self).__name__, values_str)
 
   def GetMemoryUsage(self):
     """Get the aggregated memory usage over all processes in this dump."""
     result = {}
     for dump in self._process_dumps:
-      for key, value in dump.GetMemoryUsage().iteritems():
+      for key, value in six.iteritems(dump.GetMemoryUsage()):
         result[key] = result.get(key, 0) + value
     return result

@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry import decorators
 from telemetry.internal.actions import tap
 from telemetry.testing import tab_test_case
@@ -13,7 +14,9 @@ class TapActionTest(tab_test_case.TabTestCase):
     action.WillRunAction(self._tab)
     action.RunAction(self._tab)
 
-  @decorators.Disabled('win')  # http://crbug.com/634343
+  # https://github.com/catapult-project/catapult/issues/3099 (Android)
+  # http://crbug.com/634343 (Windows)
+  @decorators.Disabled('android', 'win')
   def testTapSinglePage(self):
     self.Navigate('page_with_clickables.html')
 
@@ -29,11 +32,12 @@ class TapActionTest(tab_test_case.TabTestCase):
     self._PerformTapAction(element_function='document.body.firstElementChild')
     self.assertEqual(3, self._tab.EvaluateJavaScript('valueToTest'))
 
-  @decorators.Disabled('win')  # http://crbug.com/634343
+  # http://crbug.com/634343, http://crbug.com/1254282
+  @decorators.Disabled('win', 'chromeos')
   def testTapNavigate(self):
     self.Navigate('page_with_link.html')
     self._PerformTapAction(selector='#clickme')
-    self._tab.WaitForJavaScriptExpression(
+    self._tab.WaitForJavaScriptCondition(
         'document.location.pathname === "/blank.html"', timeout=5)
-    self._tab.WaitForJavaScriptExpression(
+    self._tab.WaitForJavaScriptCondition(
         'document.readyState === "complete"', timeout=5)

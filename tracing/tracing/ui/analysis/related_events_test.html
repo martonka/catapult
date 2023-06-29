@@ -5,8 +5,8 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="import" href="/tracing/base/iteration_helpers.html">
 <link rel="import" href="/tracing/base/raf.html">
+<link rel="import" href="/tracing/base/utils.html">
 <link rel="import" href="/tracing/core/test_utils.html">
 <link rel="import" href="/tracing/model/event_set.html">
 <link rel="import" href="/tracing/model/model.html">
@@ -18,16 +18,17 @@ found in the LICENSE file.
 'use strict';
 
 tr.b.unittest.testSuite(function() {
-  var newSliceEx = tr.c.TestUtils.newSliceEx;
-  var newFlowEventEx = tr.c.TestUtils.newFlowEventEx;
+  const newSliceEx = tr.c.TestUtils.newSliceEx;
+  const newFlowEventEx = tr.c.TestUtils.newFlowEventEx;
 
   function createModel() {
-    var m = tr.c.TestUtils.newModel(function(m) {
+    const m = tr.c.TestUtils.newModel(function(m) {
       m.p1 = m.getOrCreateProcess(1);
 
       m.t2 = m.p1.getOrCreateThread(2);
       m.t3 = m.p1.getOrCreateThread(3);
       m.t4 = m.p1.getOrCreateThread(4);
+      const node = tr.c.TestUtils.newProfileNodes(m, ['fake']);
 
       // Setup samples and slices in this way:
       //     0    5    10   15   20
@@ -44,34 +45,34 @@ tr.b.unittest.testSuite(function() {
       // t4                      |c
       // -----------------------------
       m.samples.push(
-        new tr.model.Sample(null, m.t3, 'b10_1', 10),
-        new tr.model.Sample(null, m.t3, 'b7', 7),
-        new tr.model.Sample(null, m.t3, 'b12', 12),
-        new tr.model.Sample(null, m.t3, 'b20', 20),
-        new tr.model.Sample(null, m.t3, 'b10_2', 10),
-        new tr.model.Sample(null, m.t3, 'b15_1', 15),
-        new tr.model.Sample(null, m.t3, 'b15_2', 15),
-        new tr.model.Sample(null, m.t2, 'a12', 12)
+          new tr.model.Sample(10, 'b10_1', node, m.t3),
+          new tr.model.Sample(7, 'b7', node, m.t3),
+          new tr.model.Sample(12, 'b12', node, m.t3),
+          new tr.model.Sample(20, 'b20', node, m.t3),
+          new tr.model.Sample(10, 'b10_2', node, m.t3),
+          new tr.model.Sample(15, 'b15_1', node, m.t3),
+          new tr.model.Sample(15, 'b15_2', node, m.t3),
+          new tr.model.Sample(12, 'a12', node, m.t2)
       );
 
       m.sA = m.t2.sliceGroup.pushSlice(
           newSliceEx({title: 'a', start: 0, end: 5,
-                      type: tr.model.ThreadSlice}));
+            type: tr.model.ThreadSlice}));
       m.sAA = m.t2.sliceGroup.pushSlice(
           newSliceEx({title: 'aa', start: 6, end: 8,
-                      type: tr.model.ThreadSlice}));
+            type: tr.model.ThreadSlice}));
       m.sB = m.t3.sliceGroup.pushSlice(
           newSliceEx({title: 'b', start: 10, end: 15,
-                      type: tr.model.ThreadSlice}));
+            type: tr.model.ThreadSlice}));
       m.sBB = m.t3.sliceGroup.pushSlice(
           newSliceEx({title: 'bb', start: 11, end: 14,
-                      type: tr.model.ThreadSlice}));
+            type: tr.model.ThreadSlice}));
       m.sBBB = m.t3.sliceGroup.pushSlice(
           newSliceEx({title: 'bbb', start: 12, end: 13,
-                      type: tr.model.ThreadSlice}));
+            type: tr.model.ThreadSlice}));
       m.sC = m.t4.sliceGroup.pushSlice(
           newSliceEx({title: 'c', start: 20, end: 20,
-                      type: tr.model.ThreadSlice}));
+            type: tr.model.ThreadSlice}));
 
       m.t2.createSubSlices();
       m.t3.createSubSlices();
@@ -79,34 +80,34 @@ tr.b.unittest.testSuite(function() {
 
       // Add flow events.
       m.f0 = newFlowEventEx({
-        'title': 'a_aa', start: 5, end: 6,
+        title: 'a_aa', start: 5, end: 6,
         startSlice: m.sA,
         endSlice: m.sAA
       });
       m.f1 = newFlowEventEx({
-        'title': 'a_b', start: 0, end: 10,
+        title: 'a_b', start: 0, end: 10,
         startSlice: m.sA,
         endSlice: m.sB
       });
       m.f2 = newFlowEventEx({
-        'title': 'b_bbb', start: 10, end: 12,
+        title: 'b_bbb', start: 10, end: 12,
         startSlice: m.sB,
         endSlice: m.sBBB
       });
       m.f3 = newFlowEventEx({
-        'title': 'bbb_c', start: 13, end: 20,
+        title: 'bbb_c', start: 13, end: 20,
         startSlice: m.sBBB,
         endSlice: m.sC
       });
     });
     return m;
-  };
+  }
 
   test('instantiate', function() {
-    var m = createModel();
+    const m = createModel();
 
-    var viewEl = document.createElement('tr-ui-a-related-events');
-    var selection = new tr.model.EventSet(
+    const viewEl = document.createElement('tr-ui-a-related-events');
+    const selection = new tr.model.EventSet(
         [m.sA, m.f0, m.sAA, m.f1, m.sB, m.f2, m.sBB, m.sBBB, m.f3, m.sC]);
     viewEl.setRelatedEvents(selection);
     this.addHTMLOutput(viewEl);
@@ -119,14 +120,16 @@ tr.b.unittest.testSuite(function() {
   });
 
   test('validateFlows', function() {
-    var m = createModel();
+    const m = createModel();
 
-    var viewEl = document.createElement('tr-ui-a-related-events');
+    const viewEl = document.createElement('tr-ui-a-related-events');
     viewEl.setRelatedEvents(new tr.model.EventSet([m.sB, m.sBB, m.sBBB]));
     this.addHTMLOutput(viewEl);
     tr.b.forceAllPendingTasksToRunForTest();
 
-    var inFlows, outFlows, internalFlows;
+    let inFlows;
+    let outFlows;
+    let internalFlows;
     viewEl.$.table.tableRows.forEach(function(row) {
       if (row.type === 'Incoming flow') {
         assert.isUndefined(inFlows);
@@ -141,23 +144,25 @@ tr.b.unittest.testSuite(function() {
         internalFlows = row.selection;
       }
     });
-    assert.equal(inFlows.length, 1);
-    assert.equal(tr.b.getOnlyElement(inFlows).title, 'a_b');
-    assert.equal(outFlows.length, 1);
-    assert.equal(tr.b.getOnlyElement(outFlows).title, 'bbb_c');
-    assert.equal(internalFlows.length, 1);
-    assert.equal(tr.b.getOnlyElement(internalFlows).title, 'b_bbb');
+    assert.strictEqual(inFlows.length, 1);
+    assert.strictEqual(tr.b.getOnlyElement(inFlows).title, 'a_b');
+    assert.strictEqual(outFlows.length, 1);
+    assert.strictEqual(tr.b.getOnlyElement(outFlows).title, 'bbb_c');
+    assert.strictEqual(internalFlows.length, 1);
+    assert.strictEqual(tr.b.getOnlyElement(internalFlows).title, 'b_bbb');
   });
 
   test('validateConnectedEvents', function() {
-    var m = createModel();
+    const m = createModel();
 
-    var viewEl = document.createElement('tr-ui-a-related-events');
+    const viewEl = document.createElement('tr-ui-a-related-events');
     viewEl.setRelatedEvents(new tr.model.EventSet([m.sBB]));
     this.addHTMLOutput(viewEl);
     tr.b.forceAllPendingTasksToRunForTest();
 
-    var precedingEvents, followingEvents, allEvents;
+    let precedingEvents;
+    let followingEvents;
+    let allEvents;
     viewEl.$.table.tableRows.forEach(function(row) {
       if (row.type === 'Preceding events') {
         assert.isUndefined(precedingEvents);
@@ -173,17 +178,17 @@ tr.b.unittest.testSuite(function() {
       }
     });
 
-    var precedingTitles = precedingEvents.map(function(e) {
+    const precedingTitles = precedingEvents.map(function(e) {
       return e.title;
     });
     assert.sameMembers(precedingTitles, ['a', 'a_b', 'b', 'bb']);
 
-    var followingTitles = followingEvents.map(function(e) {
+    const followingTitles = followingEvents.map(function(e) {
       return e.title;
     });
     assert.sameMembers(followingTitles, ['bb', 'bbb', 'bbb_c', 'c']);
 
-    var allTitles = allEvents.map(function(e) {
+    const allTitles = allEvents.map(function(e) {
       return e.title;
     });
     assert.sameMembers(allTitles,
@@ -191,14 +196,14 @@ tr.b.unittest.testSuite(function() {
   });
 
   test('validateOverlappingSamples', function() {
-    var m = createModel();
+    const m = createModel();
 
-    var viewEl = document.createElement('tr-ui-a-related-events');
+    const viewEl = document.createElement('tr-ui-a-related-events');
     viewEl.setRelatedEvents(new tr.model.EventSet([m.sB]));
     this.addHTMLOutput(viewEl);
     tr.b.forceAllPendingTasksToRunForTest();
 
-    var overlappingSamples;
+    let overlappingSamples;
     viewEl.$.table.tableRows.forEach(function(row) {
       if (row.type === 'Overlapping samples') {
         assert.isUndefined(overlappingSamples);
@@ -206,12 +211,11 @@ tr.b.unittest.testSuite(function() {
       }
     });
 
-    var samplesTitles = overlappingSamples.map(function(e) {
+    const samplesTitles = overlappingSamples.map(function(e) {
       return e.title;
     });
     assert.sameMembers(samplesTitles,
         ['b10_1', 'b10_2', 'b12', 'b15_1', 'b15_2']);
   });
-
 });
 </script>

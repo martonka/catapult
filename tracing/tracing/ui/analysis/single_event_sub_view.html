@@ -6,8 +6,8 @@ found in the LICENSE file.
 -->
 
 <link rel="import" href="/tracing/base/base.html">
-<link rel="import" href="/tracing/base/iteration_helpers.html">
 <link rel="import" href="/tracing/base/unit.html">
+<link rel="import" href="/tracing/base/utils.html">
 <link rel="import" href="/tracing/model/event_set.html">
 <link rel="import" href="/tracing/ui/analysis/analysis_sub_view.html">
 <link rel="import" href="/tracing/ui/analysis/generic_object_view.html">
@@ -21,10 +21,11 @@ found in the LICENSE file.
     <style>
     :host {
       display: flex;
+      flex: 0 1;
       flex-direction: column;
     }
     #table {
-      flex: 1 1 auto;
+      flex: 0 1 auto;
       align-self: stretch;
       font-size: 12px;
     }
@@ -47,18 +48,18 @@ Polymer({
     }
   },
 
-  ready: function() {
+  ready() {
     this.currentSelection_ = undefined;
     this.$.table.tableColumns = [
       {
         title: 'Label',
-        value: function(row) { return row.name; },
+        value(row) { return row.name; },
         width: '150px'
       },
       {
         title: 'Value',
         width: '100%',
-        value: function(row) { return row.value; }
+        value(row) { return row.value; }
       }
     ];
     this.$.table.showHeader = false;
@@ -69,21 +70,21 @@ Polymer({
   },
 
   set selection(selection) {
-    if (selection.length !== 1)
+    if (selection.length !== 1) {
       throw new Error('Only supports single slices');
+    }
     this.setSelectionWithoutErrorChecks(selection);
   },
 
-  setSelectionWithoutErrorChecks: function(selection) {
+  setSelectionWithoutErrorChecks(selection) {
     this.currentSelection_ = selection;
     this.updateContents_();
   },
 
-  getFlowEventRows_: function(event) {
+  getFlowEventRows_(event) {
     // TODO(nduca): Figure out if there is a cleaner way to do this.
 
-    var rows = this.getEventRowsHelper_(event);
-    // var rows = this.__proto__.__proto__.getEventRows_(event);
+    const rows = this.getEventRowsHelper_(event);
 
     // Put the ID up top.
     rows.splice(0, 0, {
@@ -92,9 +93,9 @@ Polymer({
     });
 
     function createLinkTo(slice) {
-      var linkEl = document.createElement('tr-ui-a-analysis-link');
+      const linkEl = document.createElement('tr-ui-a-analysis-link');
       linkEl.setSelectionAndContent(function() {
-          return new tr.model.EventSet(slice);
+        return new tr.model.EventSet(slice);
       });
       Polymer.dom(linkEl).textContent = slice.userFriendlyName;
       return linkEl;
@@ -111,26 +112,40 @@ Polymer({
     return rows;
   },
 
-  getEventRowsHelper_: function(event) {
-    var rows = [];
+  getEventRowsHelper_(event) {
+    const rows = [];
 
-    if (event.error)
+    if (event.error) {
       rows.push({ name: 'Error', value: event.error });
-
-    if (event.title)
-      rows.push({ name: 'Title', value: event.title });
-
-    if (event.category)
-      rows.push({ name: 'Category', value: event.category });
-
-    if (event.model !== undefined) {
-      var ufc = event.model.getUserFriendlyCategoryFromEvent(event);
-      if (ufc !== undefined)
-        rows.push({ name: 'User Friendly Category', value: ufc });
     }
 
-    if (event.name)
+    if (event.title) {
+      let title = event.title;
+      if (tr.isExported('tr-ui-e-chrome-codesearch')) {
+        const container = document.createElement('div');
+        container.appendChild(document.createTextNode(title));
+        const link = document.createElement('tr-ui-e-chrome-codesearch');
+        link.searchPhrase = title;
+        container.appendChild(link);
+        title = container;
+      }
+      rows.push({ name: 'Title', value: title });
+    }
+
+    if (event.category) {
+      rows.push({ name: 'Category', value: event.category });
+    }
+
+    if (event.model !== undefined) {
+      const ufc = event.model.getUserFriendlyCategoryFromEvent(event);
+      if (ufc !== undefined) {
+        rows.push({ name: 'User Friendly Category', value: ufc });
+      }
+    }
+
+    if (event.name) {
       rows.push({ name: 'Name', value: event.name });
+    }
 
     rows.push({
       name: 'Start',
@@ -138,6 +153,17 @@ Polymer({
         unit: tr.b.Unit.byName.timeStampInMs
       })
     });
+
+    if (event.category === 'android' && event.model !== undefined) {
+      rows.push({
+        name: 'Start (Absolute time)',
+        value: tr.v.ui.createScalarSpan(
+            event.model.convertTimestampFromModelTime('traceEventClock',
+                event.start), {
+              unit: tr.b.Unit.byName.timeStampInMs
+            })
+      });
+    }
 
     if (event.duration) {
       rows.push({
@@ -168,7 +194,7 @@ Polymer({
       }
 
       if (event.cpuSelfTime) {
-        var cpuSelfTimeEl = tr.v.ui.createScalarSpan(event.cpuSelfTime, {
+        const cpuSelfTimeEl = tr.v.ui.createScalarSpan(event.cpuSelfTime, {
           unit: tr.b.Unit.byName.timeDurationInMs
         });
         if (event.cpuSelfTime > event.selfTime) {
@@ -192,34 +218,32 @@ Polymer({
     }
 
     function createStackFrameEl(sf) {
-      var sfEl = document.createElement('tr-ui-a-stack-frame');
+      const sfEl = document.createElement('tr-ui-a-stack-frame');
       sfEl.stackFrame = sf;
       return sfEl;
     }
     if (event.startStackFrame && event.endStackFrame) {
       if (event.startStackFrame === event.endStackFrame) {
         rows.push({name: 'Start+End Stack Trace',
-            value: createStackFrameEl(event.startStackFrame)});
-
+          value: createStackFrameEl(event.startStackFrame)});
       } else {
         rows.push({ name: 'Start Stack Trace',
-            value: createStackFrameEl(event.startStackFrame)});
+          value: createStackFrameEl(event.startStackFrame)});
         rows.push({ name: 'End Stack Trace',
-            value: createStackFrameEl(event.endStackFrame)});
+          value: createStackFrameEl(event.endStackFrame)});
       }
     } else if (event.startStackFrame) {
       rows.push({ name: 'Start Stack Trace',
-          value: createStackFrameEl(event.startStackFrame)});
-
+        value: createStackFrameEl(event.startStackFrame)});
     } else if (event.endStackFrame) {
       rows.push({ name: 'End Stack Trace',
-          value: createStackFrameEl(event.endStackFrame)});
+        value: createStackFrameEl(event.endStackFrame)});
     }
 
     if (event.info) {
-      var descriptionEl = tr.ui.b.createDiv({
-          textContent: event.info.description,
-          maxWidth: '300px'
+      const descriptionEl = tr.ui.b.createDiv({
+        textContent: event.info.description,
+        maxWidth: '300px'
       });
       rows.push({
         name: 'Description',
@@ -229,7 +253,7 @@ Polymer({
 
       if (event.info.docLinks) {
         event.info.docLinks.forEach(function(linkObject) {
-          var linkEl = document.createElement('a');
+          const linkEl = document.createElement('a');
           linkEl.target = '_blank';
           linkEl.href = linkObject.href;
           Polymer.dom(linkEl).textContent = Polymer.dom(linkObject).textContent;
@@ -242,9 +266,9 @@ Polymer({
     }
 
     if (event.associatedAlerts.length) {
-      var alertSubRows = [];
+      const alertSubRows = [];
       event.associatedAlerts.forEach(function(alert) {
-        var linkEl = document.createElement('tr-ui-a-analysis-link');
+        const linkEl = document.createElement('tr-ui-a-analysis-link');
         linkEl.setSelectionAndContent(function() {
           return new tr.model.EventSet(alert);
         }, alert.info.description);
@@ -262,28 +286,28 @@ Polymer({
     return rows;
   },
 
-  getEventRows_: function(event) {
-
-    if (this.isFlow)
+  getEventRows_(event) {
+    if (this.isFlow) {
       return this.getFlowEventRows_(event);
+    }
 
     return this.getEventRowsHelper_(event);
   },
 
-  addArgsToRows_: function(rows, args) {
-    var n = 0;
-    for (var argName in args) {
+  addArgsToRows_(rows, args) {
+    let n = 0;
+    for (const argName in args) {
       n += 1;
     }
     if (n > 0) {
-      var subRows = [];
-      for (var argName in args) {
+      const subRows = [];
+      for (const argName in args) {
         n += 1;
       }
       if (n > 0) {
-        var subRows = [];
-        for (var argName in args) {
-          var argView =
+        const subRows = [];
+        for (const argName in args) {
+          const argView =
               document.createElement('tr-ui-a-generic-object-view');
           argView.object = args[argName];
           subRows.push({name: argName, value: argView});
@@ -292,16 +316,16 @@ Polymer({
           name: 'Args',
           value: '',
           isExpanded: true,
-          subRows: subRows
+          subRows
         });
       }
     }
   },
 
-  addContextsToRows_: function(rows, contexts) {
+  addContextsToRows_(rows, contexts) {
     if (contexts.length) {
-      var subRows = contexts.map(function(context) {
-        var contextView =
+      const subRows = contexts.map(function(context) {
+        const contextView =
             document.createElement('tr-ui-a-generic-object-view');
         contextView.object = context;
         return {name: 'Context', value: contextView};
@@ -310,28 +334,29 @@ Polymer({
         name: 'Contexts',
         value: '',
         isExpanded: true,
-        subRows: subRows
+        subRows
       });
     }
   },
 
-  updateContents_: function() {
+  updateContents_() {
     if (this.currentSelection_ === undefined) {
       this.$.table.rows = [];
       this.$.table.rebuild();
       return;
     }
 
-    var event = tr.b.getOnlyElement(this.currentSelection_);
+    const event = tr.b.getOnlyElement(this.currentSelection_);
 
-    var rows = this.getEventRows_(event);
-    if (event.argsStripped)
+    const rows = this.getEventRows_(event);
+    if (event.argsStripped) {
       rows.push({ name: 'Args', value: 'Stripped' });
-    else
+    } else {
       this.addArgsToRows_(rows, event.args);
+    }
     this.addContextsToRows_(rows, event.contexts);
 
-    var customizeRowsEvent = new tr.b.Event('customize-rows');
+    const customizeRowsEvent = new tr.b.Event('customize-rows');
     customizeRowsEvent.rows = rows;
     this.dispatchEvent(customizeRowsEvent);
 

@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """A very very simple mock object harness."""
-from types import ModuleType
 
 DONT_CARE = ''
 
@@ -83,13 +82,13 @@ class MockObject(object):
   def _install_hook(self, func_name):
     def handler(*args, **_):
       got_call = MockFunctionCall(
-        func_name).WithArgs(*args).WillReturn(DONT_CARE)
+          func_name).WithArgs(*args).WillReturn(DONT_CARE)
       if self._trace.next_call_index >= len(self._trace.expected_calls):
         raise Exception(
-          'Call to %s was not expected, at end of programmed trace.' %
-          repr(got_call))
+            'Call to %s was not expected, at end of programmed trace.' %
+            repr(got_call))
       expected_call = self._trace.expected_calls[
-        self._trace.next_call_index]
+          self._trace.next_call_index]
       expected_call.VerifyEquals(got_call)
       self._trace.next_call_index += 1
       for h in expected_call.when_called_handlers:
@@ -97,36 +96,3 @@ class MockObject(object):
       return expected_call.return_value
     handler.is_hook = True
     setattr(self, func_name, handler)
-
-
-class MockTimer(object):
-  """ A mock timer to fake out the timing for a module.
-    Args:
-      module: module to fake out the time
-  """
-  def __init__(self, module=None):
-    self._elapsed_time = 0
-    self._module = module
-    self._actual_time = None
-    if module:
-      assert isinstance(module, ModuleType)
-      self._actual_time = module.time
-      self._module.time = self
-
-  def sleep(self, time):
-    self._elapsed_time += time
-
-  def time(self):
-    return self._elapsed_time
-
-  def SetTime(self, time):
-    self._elapsed_time = time
-
-  def __del__(self):
-    self.Restore()
-
-  def Restore(self):
-    if self._module:
-      self._module.time = self._actual_time
-      self._module = None
-      self._actual_time = None

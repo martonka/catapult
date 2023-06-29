@@ -12,9 +12,8 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.model', function() {
-
-  var Event = tr.model.Event;
-  var EventRegistry = tr.model.EventRegistry;
+  const Event = tr.model.Event;
+  const EventRegistry = tr.model.EventRegistry;
 
   /**
    * A sample that contains a power measurement (in W).
@@ -26,8 +25,8 @@ tr.exportTo('tr.model', function() {
     Event.call(this);
 
     this.series_ = series;
-    this.start_ = start;
-    this.powerInW_ = powerInW;
+    this.start_ = parseFloat(start);
+    this.powerInW_ = parseFloat(powerInW);
   }
 
   PowerSample.prototype = {
@@ -53,7 +52,7 @@ tr.exportTo('tr.model', function() {
       this.powerInW_ = value;
     },
 
-    addBoundsToRange: function(range) {
+    addBoundsToRange(range) {
       range.addValue(this.start);
     }
   };
@@ -66,7 +65,7 @@ tr.exportTo('tr.model', function() {
       });
 
   return {
-    PowerSample: PowerSample
+    PowerSample,
   };
 });
 </script>

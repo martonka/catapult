@@ -164,6 +164,9 @@ class DependencyManagerUtilTest(unittest.TestCase):
     dependency_manager_util.RemoveDir(unzip_path)
 
   def testUnzipFileFailure(self):
+    # zipfile is not used on MacOS. See crbug.com/700097.
+    if sys.platform.startswith('darwin'):
+      return
     unzip_path = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()))
     self.assertFalse(os.path.exists(unzip_path))
     with mock.patch(
@@ -181,7 +184,7 @@ class DependencyManagerUtilTest(unittest.TestCase):
       dependency_manager_util.VerifySafeArchive(archive)
 
   def testVerifySafeArchiveFailsOnRelativePathWithPardir(self):
-    tmp_file = tempfile.NamedTemporaryFile(delete=False)
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, mode='w+')
     tmp_file_name = tmp_file.name
     tmp_file.write('Bad file!')
     tmp_file.close()

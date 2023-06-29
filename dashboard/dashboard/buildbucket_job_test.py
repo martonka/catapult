@@ -2,10 +2,14 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
+
 import unittest
 
 from dashboard import buildbucket_job
-from dashboard import testing_common
+from dashboard.common import testing_common
 
 
 class BuildbucketJobTest(testing_common.TestCase):
@@ -50,6 +54,7 @@ class BuildbucketJobTest(testing_common.TestCase):
     with self.assertRaises(ValueError):
       job = buildbucket_job.BisectJob(**self._args_base)
       _ = job.GetBuildParameters()
+
 
 if __name__ == '__main__':
   unittest.main()

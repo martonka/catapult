@@ -1,9 +1,16 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 import threading
 import traceback
-import Queue
+from six.moves import range  # pylint: disable=redefined-builtin
+try:
+  import queue
+except ImportError:
+  import six.moves.queue as queue # pylint: disable=import-error
 
 
 class ThreadedWorkQueue(object):
@@ -37,8 +44,8 @@ class ThreadedWorkQueue(object):
     else:
       self._RunMultiThreaded()
 
-    self._main_thread_tasks = Queue.Queue()
-    self._any_thread_tasks = Queue.Queue()
+    self._main_thread_tasks = queue.Queue()
+    self._any_thread_tasks = queue.Queue()
 
     r = self._stop_result
     self._stop_result = None
@@ -58,8 +65,8 @@ class ThreadedWorkQueue(object):
 
   def Reset(self):
     assert not self.is_running
-    self._main_thread_tasks = Queue.Queue()
-    self._any_thread_tasks = Queue.Queue()
+    self._main_thread_tasks = queue.Queue()
+    self._any_thread_tasks = queue.Queue()
 
   def PostMainThreadTask(self, cb, *args, **kwargs):
     def RunTask():
@@ -71,16 +78,16 @@ class ThreadedWorkQueue(object):
       cb(*args, **kwargs)
     self._any_thread_tasks.put(RunTask)
 
-  def _TryToRunOneTask(self, queue, block=False):
+  def _TryToRunOneTask(self, task_queue, block=False):
     if block:
       try:
-        task = queue.get(True, 0.1)
-      except Queue.Empty:
+        task = task_queue.get(True, 0.1)
+      except queue.Empty:
         return
     else:
-      if queue.empty():
+      if task_queue.empty():
         return
-      task = queue.get()
+      task = task_queue.get()
 
     try:
       task()
@@ -89,11 +96,16 @@ class ThreadedWorkQueue(object):
     except Exception:  # pylint: disable=broad-except
       traceback.print_exc()
     finally:
-      queue.task_done()
+      task_queue.task_done()
 
   def _RunSingleThreaded(self):
     while True:
       if self._stop:
+        break
+      # Since this is single-threaded, if both task-lists are empty, then
+      # nothing will be able to add any more tasks to either task-queue.
+      if self._any_thread_tasks.empty() and self._main_thread_tasks.empty():
+        self.Stop()
         break
       self._TryToRunOneTask(self._any_thread_tasks)
       self._TryToRunOneTask(self._main_thread_tasks)

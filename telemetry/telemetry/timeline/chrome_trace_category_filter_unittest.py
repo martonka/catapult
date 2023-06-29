@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import unittest
 
 from telemetry.timeline import chrome_trace_category_filter
@@ -9,11 +10,11 @@ from telemetry.timeline import chrome_trace_category_filter
 
 class ChromeTraceCategoryFilterTest(unittest.TestCase):
   def CheckBasicCategoryFilters(self, cf):
-    self.assertEquals(set(['x']), set(cf.included_categories))
-    self.assertEquals(set(['y']), set(cf.excluded_categories))
-    self.assertEquals(set(['disabled-by-default-z']),
-        set(cf.disabled_by_default_categories))
-    self.assertEquals(set(['DELAY(7;foo)']), set(cf.synthetic_delays))
+    self.assertEquals({'x'}, set(cf.included_categories))
+    self.assertEquals({'y'}, set(cf.excluded_categories))
+    self.assertEquals(
+        {'disabled-by-default-z'}, set(cf.disabled_by_default_categories))
+    self.assertEquals({'DELAY(7;foo)'}, set(cf.synthetic_delays))
 
     self.assertTrue('x' in cf.filter_string)
     self.assertEquals(
@@ -28,6 +29,14 @@ class ChromeTraceCategoryFilterTest(unittest.TestCase):
   def testBasicWithSpace(self):
     cf = chrome_trace_category_filter.ChromeTraceCategoryFilter(
         ' x ,\n-y\t,disabled-by-default-z ,DELAY(7;foo)')
+    self.CheckBasicCategoryFilters(cf)
+
+  def testAddFilter(self):
+    cf = chrome_trace_category_filter.ChromeTraceCategoryFilter()
+    cf.AddFilter('x')
+    cf.AddFilter('-y')
+    cf.AddFilter('disabled-by-default-z')
+    cf.AddFilter('DELAY(7;foo)')
     self.CheckBasicCategoryFilters(cf)
 
   def testNoneAndEmptyCategory(self):

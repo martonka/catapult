@@ -7,8 +7,8 @@
  */
 var TimelineGraphView = (function() {
   'use strict';
-  // We inherit from TopMidBottomView.
-  var superClass = TopMidBottomView;
+  // We inherit from DivView.
+  var superClass = DivView;
 
   // Default starting scale factor, in terms of milliseconds per pixel.
   var DEFAULT_SCALE = 1000;
@@ -47,22 +47,20 @@ var TimelineGraphView = (function() {
   // Which side of the canvas y-axis labels should go on, for a given Graph.
   // TODO(mmenke):  Figure out a reasonable way to handle more than 2 sets
   //                of labels.
-  var LabelAlign = {
-    LEFT: 0,
-    RIGHT: 1
-  };
+  var LabelAlign = {LEFT: 0, RIGHT: 1};
 
   /**
    * @constructor
    */
-  function TimelineGraphView(divId, canvasId, scrollbarId, scrollbarInnerId) {
-    this.scrollbar_ = new HorizontalScrollbarView(scrollbarId,
-                                                  scrollbarInnerId,
-                                                  this.onScroll_.bind(this));
+  function TimelineGraphView(graphDivId, canvasId, scrollbarId,
+                             scrollbarInnerId) {
     // Call superclass's constructor.
-    superClass.call(this, null, new DivView(divId), this.scrollbar_);
+    superClass.call(this, graphDivId);
 
-    this.graphDiv_ = $(divId);
+    this.scrollbar_ = new HorizontalScrollbarView(
+        scrollbarId, scrollbarInnerId, this.onScroll_.bind(this));
+
+    this.graphDiv_ = $(graphDivId);
     this.canvas_ = $(canvasId);
     this.canvas_.onmousewheel = this.onMouseWheel_.bind(this);
     this.canvas_.onmousedown = this.onMouseDown_.bind(this);
@@ -97,6 +95,8 @@ var TimelineGraphView = (function() {
 
     // Initialize the scrollbar.
     this.updateScrollbarRange_(true);
+
+    this.initResizePolling_(true);
   }
 
   // Smallest allowed scaling factor.
@@ -106,23 +106,21 @@ var TimelineGraphView = (function() {
     // Inherit the superclass's methods.
     __proto__: superClass.prototype,
 
-    setGeometry: function(left, top, width, height) {
-      superClass.prototype.setGeometry.call(this, left, top, width, height);
-
+    getPreferredCanvasSize_: function() {
       // The size of the canvas can only be set by using its |width| and
       // |height| properties, which do not take padding into account, so we
       // need to use them ourselves.
       var style = getComputedStyle(this.canvas_);
-      var horizontalPadding = parseInt(style.paddingRight) +
-                                  parseInt(style.paddingLeft);
-      var verticalPadding = parseInt(style.paddingTop) +
-                                parseInt(style.paddingBottom);
+      var horizontalPadding =
+          parseInt(style.paddingRight) + parseInt(style.paddingLeft);
+      var verticalPadding =
+          parseInt(style.paddingTop) + parseInt(style.paddingBottom);
       var canvasWidth =
-          parseInt(this.graphDiv_.style.width) - horizontalPadding;
+          parseInt(this.graphDiv_.clientWidth) - horizontalPadding;
       // For unknown reasons, there's an extra 3 pixels border between the
       // bottom of the canvas and the bottom margin of the enclosing div.
       var canvasHeight =
-          parseInt(this.graphDiv_.style.height) - verticalPadding - 3;
+          parseInt(this.graphDiv_.clientHeight) - verticalPadding - 3;
 
       // Protect against degenerates.
       if (canvasWidth < 10)
@@ -130,8 +128,19 @@ var TimelineGraphView = (function() {
       if (canvasHeight < 10)
         canvasHeight = 10;
 
-      this.canvas_.width = canvasWidth;
-      this.canvas_.height = canvasHeight;
+      return {
+        width: canvasWidth,
+        height: canvasHeight
+      };
+    },
+
+    onResized: function() {
+      this.scrollbar_.onResized();
+
+      let preferredSize = this.getPreferredCanvasSize_();
+
+      this.canvas_.width = preferredSize.width;
+      this.canvas_.height = preferredSize.height;
 
       // Use the same font style for the canvas as we use elsewhere.
       // Has to be updated every resize.
@@ -143,8 +152,33 @@ var TimelineGraphView = (function() {
 
     show: function(isVisible) {
       superClass.prototype.show.call(this, isVisible);
+
+      this.initResizePolling_(isVisible);
+
       if (isVisible)
         this.repaint();
+    },
+
+    // TODO(eroman): This is a bit silly, but good enough for now. Canvas needs
+    // to be sized explicitly, however in this case we want it to occupy all
+    // remaining space. Use polling to check when the canvas logical dimensions
+    // needs to be updated to match the layout size.
+    initResizePolling_: function(active) {
+      if (active && !this.resizeTimer_) {
+        this.resizeTimer_ = window.setInterval(
+            this.checkForResize_.bind(this), 1000);
+      } else if (!active && this.resizeTimer_) {
+        window.clearInterval(this.resizeTimer_);
+        this.resizeTimer_ = null;
+      }
+    },
+
+    checkForResize_: function() {
+      let preferredSize = this.getPreferredCanvasSize_();
+      if ((preferredSize.width != this.canvas_.width) ||
+          (preferredSize.height != this.canvas_.height)) {
+        this.onResized();
+      }
     },
 
     // Returns the total length of the graph, in pixels.
@@ -267,10 +301,11 @@ var TimelineGraphView = (function() {
     onMouseWheel_: function(event) {
       event.preventDefault();
       this.horizontalScroll_(
-          MOUSE_WHEEL_SCROLL_RATE *
-              -event.wheelDeltaX / MOUSE_WHEEL_UNITS_PER_CLICK);
-      this.zoom_(Math.pow(MOUSE_WHEEL_ZOOM_RATE,
-                 -event.wheelDeltaY / MOUSE_WHEEL_UNITS_PER_CLICK));
+          MOUSE_WHEEL_SCROLL_RATE * -event.wheelDeltaX /
+          MOUSE_WHEEL_UNITS_PER_CLICK);
+      this.zoom_(Math.pow(
+          MOUSE_WHEEL_ZOOM_RATE,
+          -event.wheelDeltaY / MOUSE_WHEEL_UNITS_PER_CLICK));
     },
 
     onMouseDown_: function(event) {
@@ -366,8 +401,8 @@ var TimelineGraphView = (function() {
 
       // Layout graphs and have them draw their tick marks.
       for (var i = 0; i < this.graphs_.length; ++i) {
-        this.graphs_[i].layout(width, height, fontHeight, visibleStartTime,
-                               this.scale_);
+        this.graphs_[i].layout(
+            width, height, fontHeight, visibleStartTime, this.scale_);
         this.graphs_[i].drawTicks(context);
       }
 
@@ -393,18 +428,16 @@ var TimelineGraphView = (function() {
 
       // The desired spacing for text labels.
       var targetSpacing = context.measureText(sampleText).width +
-                              LABEL_LABEL_HORIZONTAL_SPACING;
+          LABEL_LABEL_HORIZONTAL_SPACING;
 
       // The allowed time step values between adjacent labels.  Anything much
       // over a couple minutes isn't terribly realistic, given how much memory
       // we use, and how slow a lot of the net-internals code is.
       var timeStepValues = [
         1000,  // 1 second
-        1000 * 5,
-        1000 * 30,
+        1000 * 5, 1000 * 30,
         1000 * 60,  // 1 minute
-        1000 * 60 * 5,
-        1000 * 60 * 30,
+        1000 * 60 * 5, 1000 * 60 * 30,
         1000 * 60 * 60,  // 1 hour
         1000 * 60 * 60 * 5
       ];

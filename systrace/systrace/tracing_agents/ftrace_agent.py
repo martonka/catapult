@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
 import optparse
 import os
 import py_utils
@@ -46,7 +47,8 @@ all_categories = {
     },
     "freq": {
           "desc": "CPU Frequency",
-          "req": ["power/cpu_frequency/", "power/clock_set_rate/"]
+          "req": ["power/cpu_frequency/"],
+          "opt": ["power/clock_set_rate/", "clk/clk_set_rate/"]
     },
     "irq": {
           "desc": "CPU IRQS and IPIS",
@@ -173,7 +175,7 @@ class FtraceAgent(tracing_agents.TracingAgent):
       self._category_enable(category)
 
     self._categories = categories # need to store list of categories to disable
-    print 'starting tracing.'
+    print('starting tracing.')
 
     self._fio.writeFile(FT_TRACE, '')
     self._fio.writeFile(FT_TRACE_ON, '1')
@@ -228,12 +230,12 @@ class FtraceAgent(tracing_agents.TracingAgent):
   def _print_avail_categories(self):
     avail = self._avail_categories()
     if len(avail):
-      print "tracing config:"
+      print("tracing config:")
       for category in self._avail_categories():
         desc = all_categories[category]["desc"]
-        print "{0: <16}".format(category), ": ", desc
+        print("{0: <16}".format(category), ": ", desc)
     else:
-      print "No tracing categories available - perhaps you need root?"
+      print("No tracing categories available - perhaps you need root?")
 
   def _category_enable_paths(self, category):
     events_dir = FT_DIR + "events/"

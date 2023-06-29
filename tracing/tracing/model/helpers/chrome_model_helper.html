@@ -6,10 +6,11 @@ found in the LICENSE file.
 -->
 
 <link rel="import" href="/tracing/base/guid.html">
-<link rel="import" href="/tracing/base/iteration_helpers.html">
+<link rel="import" href="/tracing/base/utils.html">
 <link rel="import" href="/tracing/model/helpers/chrome_browser_helper.html">
 <link rel="import" href="/tracing/model/helpers/chrome_gpu_helper.html">
 <link rel="import" href="/tracing/model/helpers/chrome_renderer_helper.html">
+<link rel="import" href="/tracing/model/helpers/telemetry_helper.html">
 
 <script>
 'use strict';
@@ -29,26 +30,29 @@ tr.exportTo('tr.model.helpers', function() {
   }
 
   function findChromeGpuProcess(model) {
-    var gpuProcesses = model.getAllProcesses(
+    const gpuProcesses = model.getAllProcesses(
         tr.model.helpers.ChromeGpuHelper.isGpuProcess);
-    if (gpuProcesses.length !== 1)
-      return undefined;
+    if (gpuProcesses.length !== 1) return undefined;
     return gpuProcesses[0];
   }
 
-  /**
-   * @constructor
-   */
+  function findTelemetrySurfaceFlingerProcess(model) {
+    const surfaceFlingerProcesses = model.getAllProcesses(
+        process => (process.name === 'SurfaceFlinger'));
+    if (surfaceFlingerProcesses.length !== 1) return undefined;
+    return surfaceFlingerProcesses[0];
+  }
+
   function ChromeModelHelper(model) {
     this.model_ = model;
 
     // Find browserHelpers.
-    var browserProcesses = findChromeBrowserProcesses(model);
+    const browserProcesses = findChromeBrowserProcesses(model);
     this.browserHelpers_ = browserProcesses.map(
         p => new tr.model.helpers.ChromeBrowserHelper(this, p));
 
     // Find gpuHelper.
-    var gpuProcess = findChromeGpuProcess(model);
+    const gpuProcess = findChromeGpuProcess(model);
     if (gpuProcess) {
       this.gpuHelper_ = new tr.model.helpers.ChromeGpuHelper(
           this, gpuProcess);
@@ -57,23 +61,27 @@ tr.exportTo('tr.model.helpers', function() {
     }
 
     // Find rendererHelpers.
-    var rendererProcesses_ = findChromeRenderProcesses(model);
+    const rendererProcesses_ = findChromeRenderProcesses(model);
 
     this.rendererHelpers_ = {};
     rendererProcesses_.forEach(function(renderProcess) {
-      var rendererHelper = new tr.model.helpers.ChromeRendererHelper(
+      const rendererHelper = new tr.model.helpers.ChromeRendererHelper(
           this, renderProcess);
       this.rendererHelpers_[rendererHelper.pid] = rendererHelper;
     }, this);
+
+    this.surfaceFlingerProcess_ = findTelemetrySurfaceFlingerProcess(model);
+
+    this.chromeBounds_ = undefined;
+
+    this.telemetryHelper_ = new tr.model.helpers.TelemetryHelper(this);
   }
 
   ChromeModelHelper.guid = tr.b.GUID.allocateSimple();
 
   ChromeModelHelper.supportsModel = function(model) {
-    if (findChromeBrowserProcesses(model).length)
-      return true;
-    if (findChromeRenderProcesses(model).length)
-      return true;
+    if (findChromeBrowserProcesses(model).length) return true;
+    if (findChromeRenderProcesses(model).length) return true;
     return false;
   };
 
@@ -93,8 +101,7 @@ tr.exportTo('tr.model.helpers', function() {
     // TODO: Make all users of ChromeModelHelper support multiple browsers and
     // remove this getter (see #2119).
     get browserProcess() {
-      if (this.browserHelper === undefined)
-        return undefined;
+      if (this.browserHelper === undefined) return undefined;
       return this.browserHelper.process;
     },
 
@@ -116,37 +123,46 @@ tr.exportTo('tr.model.helpers', function() {
       return this.rendererHelpers_;
     },
 
+    get surfaceFlingerProcess() {
+      return this.surfaceFlingerProcess_;
+    },
 
     /**
-     * Returns renderer with largest pid that is not chrome tracing ui.
-     *
-     * This is a very hacky approach to find the "target" renderer in metrics
-     * calculation. Often in telemetry tests we are only interested in
-     * calculating metrics for the page opened by the automated testing system,
-     * but currently in tbmv2 there is no way to reliably single out this
-     * renderer. One useful heuristic is that the page telemetry opens is opened
-     * after all the other renderers in chrome were opened, and therefore has
-     * the largest pid.
-     *
-     * TODO(dproy): Remove this when loading_metric supports all renderers.
-     * https://github.com/catapult-project/catapult/issues/2820
+     * Returns the minimal bounds that includes all Chrome-related slices, or
+     * undefined if no such minimal bounds could be established. This relies on
+     * the assumption that all Chrome-relevant traces are bounded by the browser
+     * process.
      */
-    get rendererWithLargestPid() {
-      var largestPid = -1;
-      for (var pid in this.rendererHelpers) {
-        var rendererHelper = this.rendererHelpers[pid];
-        if (rendererHelper.isChromeTracingUI) continue;
-        if (pid > largestPid) largestPid = pid;
+    get chromeBounds() {
+      if (!this.chromeBounds_) {
+        this.chromeBounds_ = new tr.b.math.Range();
+        for (const browserHelper of Object.values(this.browserHelpers)) {
+          this.chromeBounds_.addRange(browserHelper.process.bounds);
+        }
+
+        for (const rendererHelper of Object.values(this.rendererHelpers)) {
+          this.chromeBounds_.addRange(rendererHelper.process.bounds);
+        }
+
+        if (this.gpuHelper) {
+          this.chromeBounds_.addRange(this.gpuHelper.process.bounds);
+        }
       }
 
-      if (largestPid === -1) return undefined;
+      if (this.chromeBounds_.isEmpty) {
+        return undefined;
+      }
 
-      return this.rendererHelpers[largestPid];
+      return this.chromeBounds_;
+    },
+
+    get telemetryHelper() {
+      return this.telemetryHelper_;
     }
   };
 
   return {
-    ChromeModelHelper: ChromeModelHelper
+    ChromeModelHelper,
   };
 });
 </script>

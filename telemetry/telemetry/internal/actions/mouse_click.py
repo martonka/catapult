@@ -2,23 +2,22 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry.internal.actions import page_action
 from telemetry.internal.actions import utils
 
-class MouseClickAction(page_action.PageAction):
-  def __init__(self, selector=None):
-    super(MouseClickAction, self).__init__()
-    self._selector = selector
+
+class MouseClickAction(page_action.ElementPageAction):
 
   def WillRunAction(self, tab):
     """Load the mouse click JS code prior to running the action."""
     super(MouseClickAction, self).WillRunAction(tab)
     utils.InjectJavaScript(tab, 'mouse_click.js')
-    done_callback = 'function() { window.__mouseClickActionDone = true; }'
     tab.ExecuteJavaScript("""
         window.__mouseClickActionDone = false;
-        window.__mouseClickAction = new __MouseClickAction(%s);"""
-        % (done_callback))
+        window.__mouseClickAction = new __MouseClickAction(function() {
+          window.__mouseClickActionDone = true;
+        });""")
 
   def RunAction(self, tab):
     code = '''
@@ -30,6 +29,6 @@ class MouseClickAction(page_action.PageAction):
             element: element
           });
         }'''
-    page_action.EvaluateCallbackWithElement(
-        tab, code, selector=self._selector)
-    tab.WaitForJavaScriptExpression('window.__mouseClickActionDone', 60)
+    self.EvaluateCallback(tab, code)
+    tab.WaitForJavaScriptCondition(
+        'window.__mouseClickActionDone', timeout=self.timeout)

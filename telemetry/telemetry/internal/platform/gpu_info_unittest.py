@@ -1,6 +1,7 @@
 # Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
 import unittest
 
 from telemetry.internal.platform import gpu_device
@@ -20,7 +21,6 @@ class TestGPUInfo(unittest.TestCase):
         'aux_attributes': {
             'optimus': False,
             'amd_switchable': False,
-            'lenovo_dcute': False,
             'driver_vendor': 'c',
             'driver_version': 'd',
             'driver_date': 'e',
@@ -44,7 +44,6 @@ class TestGPUInfo(unittest.TestCase):
     self.assertEquals(info.devices[1].device_string, 'l')
     self.assertEquals(info.aux_attributes['optimus'], False)
     self.assertEquals(info.aux_attributes['amd_switchable'], False)
-    self.assertEquals(info.aux_attributes['lenovo_dcute'], False)
     self.assertEquals(info.aux_attributes['driver_vendor'], 'c')
     self.assertEquals(info.aux_attributes['driver_version'], 'd')
     self.assertEquals(info.aux_attributes['driver_date'], 'e')
@@ -80,5 +79,5 @@ class TestGPUInfo(unittest.TestCase):
       self.fail('Should raise exception if devices array is empty')
     except AssertionError:
       raise
-    except Exception:
+    except Exception: # pylint: disable=broad-except
       pass

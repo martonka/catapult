@@ -31,8 +31,8 @@ var TabSwitcherView = (function() {
 
     this.tabIdToView_ = {};
     this.tabIdToLink_ = {};
-    // Ordered list of views.
-    this.viewList_ = [];
+    // Map from tab id to the views link visiblity.
+    this.tabIdsLinkVisibility_ = new Map();
     this.activeTabId_ = null;
 
     this.onTabSwitched_ = opt_onTabSwitched;
@@ -48,32 +48,6 @@ var TabSwitcherView = (function() {
   TabSwitcherView.prototype = {
     // Inherit the superclass's methods.
     __proto__: superClass.prototype,
-
-    // ---------------------------------------------
-    // Override methods in View
-    // ---------------------------------------------
-
-    setGeometry: function(left, top, width, height) {
-      superClass.prototype.setGeometry.call(this, left, top, width, height);
-
-      var tabListNode = $(TAB_LIST_ID);
-
-      // Set position of the tab list.  Can't use DivView because DivView sets
-      // a fixed width at creation time, and need to set the width of the tab
-      // list only after its been populated.
-      var tabListWidth = this.tabListWidth_;
-      if (tabListWidth > width)
-        tabListWidth = width;
-      tabListNode.style.position = 'absolute';
-      setNodePosition(tabListNode, left, top, tabListWidth, height);
-
-      // Position each of the tab's content areas.
-      for (var tabId in this.tabIdToView_) {
-        var view = this.tabIdToView_[tabId];
-        view.setGeometry(left + tabListWidth, top, width - tabListWidth,
-                         height);
-      }
-    },
 
     show: function(isVisible) {
       superClass.prototype.show.call(this, isVisible);
@@ -98,7 +72,7 @@ var TabSwitcherView = (function() {
       }
 
       this.tabIdToView_[tabId] = view;
-      this.viewList_.push(view);
+      this.tabIdsLinkVisibility_.set(tabId, true);
 
       var node = addNodeWithText($(TAB_LIST_ID), 'a', name);
       node.href = hash;
@@ -115,13 +89,16 @@ var TabSwitcherView = (function() {
       var wasActive = this.activeTabId_ == tabId;
 
       setNodeDisplay(this.tabIdToLink_[tabId], isVisible);
+      this.tabIdsLinkVisibility_.set(tabId, isVisible);
 
       if (wasActive && !isVisible) {
         // If the link for active tab is being hidden, then switch to the first
         // tab which is still visible.
-        for (var view in this.viewList_) {
-          if (view.isVisible())
-            this.switchToTab(option.value);
+        for (var [localTabId, enabled] of this.tabIdsLinkVisibility_) {
+          if (enabled) {
+            this.switchToTab(localTabId);
+            break;
+          }
         }
       }
     },

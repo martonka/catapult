@@ -1,16 +1,22 @@
 # Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Functions that deal with local and device ports."""
 
 import contextlib
 import fcntl
-import httplib
 import logging
 import os
 import socket
 import traceback
+
+import six
+
+# pylint: disable=wrong-import-order
+if six.PY2:
+  from httplib import (HTTPConnection, HTTPException)
+else:
+  from http.client import (HTTPConnection, HTTPException)
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +69,7 @@ def AllocateTestServerPort():
       while not IsHostPortAvailable(port):
         port += 1
         ports_tried.append(port)
-      if (port > _TEST_SERVER_PORT_LAST or
-          port < _TEST_SERVER_PORT_FIRST):
+      if port > _TEST_SERVER_PORT_LAST or port < _TEST_SERVER_PORT_FIRST:
         port = 0
       else:
         fp.seek(0, os.SEEK_SET)
@@ -78,8 +83,9 @@ def AllocateTestServerPort():
   if port:
     logger.info('Allocate port %d for test server.', port)
   else:
-    logger.error('Could not allocate port for test server. '
-                 'List of ports tried: %s', str(ports_tried))
+    logger.error(
+        'Could not allocate port for test server. '
+        'List of ports tried: %s', str(ports_tried))
   return port
 
 
@@ -115,8 +121,9 @@ def IsDevicePortUsed(device, device_port, state=''):
     True if the port on device is already used, otherwise returns False.
   """
   base_urls = ('127.0.0.1:%d' % device_port, 'localhost:%d' % device_port)
-  netstat_results = device.RunShellCommand(
-      ['netstat', '-a'], check_return=True, large_output=True)
+  netstat_results = device.RunShellCommand(['netstat', '-an'],
+                                           check_return=True,
+                                           large_output=True)
   for single_connect in netstat_results:
     # Column 3 is the local address which we want to check with.
     connect_results = single_connect.split()
@@ -131,8 +138,13 @@ def IsDevicePortUsed(device, device_port, state=''):
   return False
 
 
-def IsHttpServerConnectable(host, port, tries=3, command='GET', path='/',
-                            expected_read='', timeout=2):
+def IsHttpServerConnectable(host,
+                            port,
+                            tries=3,
+                            command='GET',
+                            path='/',
+                            expected_read='',
+                            timeout=2):
   """Checks whether the specified http server is ready to serve request or not.
 
   Args:
@@ -154,11 +166,11 @@ def IsHttpServerConnectable(host, port, tries=3, command='GET', path='/',
     message the server returns when connect status is false.
   """
   assert tries >= 1
-  for i in xrange(0, tries):
+  for i in range(0, tries):
     client_error = None
     try:
-      with contextlib.closing(httplib.HTTPConnection(
-          host, port, timeout=timeout)) as http:
+      with contextlib.closing(HTTPConnection(host, port,
+                                             timeout=timeout)) as http:
         # Output some debug information when we have tried more than 2 times.
         http.set_debuglevel(i >= 2)
         http.request(command, path)
@@ -167,9 +179,9 @@ def IsHttpServerConnectable(host, port, tries=3, command='GET', path='/',
         if r.status == 200 and r.reason == 'OK' and content == expected_read:
           return (True, '')
         client_error = ('Bad response: %s %s version %s\n  ' %
-                        (r.status, r.reason, r.version) +
-                        '\n  '.join([': '.join(h) for h in r.getheaders()]))
-    except (httplib.HTTPException, socket.error) as e:
+                        (r.status, r.reason, r.version) + '\n  '.join(
+                            [': '.join(h) for h in r.getheaders()]))
+    except (HTTPException, socket.error) as e:
       # Probably too quick connecting: try again.
       exception_error_msgs = traceback.format_exception_only(type(e), e)
       if exception_error_msgs:

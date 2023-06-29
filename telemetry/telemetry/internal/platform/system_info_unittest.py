@@ -1,6 +1,7 @@
 # Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
 import unittest
 
 from telemetry.internal.platform import gpu_device
@@ -46,7 +47,7 @@ class TestSystemInfo(unittest.TestCase):
       self.assertEquals(info.model_name, '')
     except AssertionError:
       raise
-    except Exception:
+    except Exception: # pylint: disable=broad-except
       self.fail('Should not raise exception for empty model_name string')
 
   def testMissingAttrsFromDict(self):
@@ -66,3 +67,17 @@ class TestSystemInfo(unittest.TestCase):
         raise
       except KeyError:
         pass
+
+  def testModelNameAndVersion(self):
+    data = {
+        'model_name': 'MacBookPro',
+        'model_version': '10.1',
+        'gpu': {
+            'devices': [
+                {'vendor_id': 1000, 'device_id': 2000,
+                 'vendor_string': 'a', 'device_string': 'b'},
+            ]
+        }
+    }
+    info = system_info.SystemInfo.FromDict(data)
+    self.assertEquals(info.model_name, 'MacBookPro 10.1')

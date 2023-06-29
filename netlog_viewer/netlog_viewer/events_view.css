@@ -1,7 +1,29 @@
 /* Copyright (c) 2012 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
+ * found in the LICENSE file. */
+
+/*
+ * The resizable box on the left of the events view, which lists the clickable
+ * sources. The initial size of this box is fixed, however it can be
+ * dynamically changed by dragging the bar to its right.
  */
+#events-view-left-pane {
+  min-width: 0;
+  width: 300px;  /* Initial width */
+}
+
+/* The used to resize the left panel. */
+.vertical-splitter {
+  border-left: 1px solid #afafaf;
+  cursor: ew-resize;
+  user-select: none;
+  width: 10px;
+}
+
+/* Needs to be wider on touch devices. */
+.touch .vertical-splitter {
+  width: 5mm;
+}
 
 #events-view-filter-box {
   background: #efefef;
@@ -20,11 +42,6 @@
   border-top: 1px solid gray;
   overflow: hidden;
   white-space: nowrap;
-}
-
-#events-view-source-list {
-  overflow-x: hidden;
-  overflow-y: auto
 }
 
 #events-view-source-list-table {
@@ -83,20 +100,12 @@
   color: rgb(128, 48, 48);
 }
 
-#events-view-source-list-tbody .source-proxy-script-decider {
+#events-view-source-list-tbody .source-pac-file-decider {
   color: green;
 }
 
 #events-view-source-list-tbody .source-download {
   color: rgb(112, 112, 0);
-}
-
-#events-view-source-list-tbody .source-filestream {
-  color: rgb(112, 0, 112);
-}
-
-#events-view-source-list-tbody .source-ipv6-probe-job {
-  color: rgb(235, 0, 0);
 }
 
 #events-view-source-list-tbody .source-none {

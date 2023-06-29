@@ -3,11 +3,10 @@
 # found in the LICENSE file.
 
 import unittest
-import tempfile
 import shutil
+import tempfile
 
 from tracing_build import generate_about_tracing_contents
-
 
 class GenerateAboutTracingContentsUnittTest(unittest.TestCase):
 

@@ -8,9 +8,12 @@ found in the LICENSE file.
 <link rel="import" href="/tracing/core/test_utils.html">
 <link rel="import" href="/tracing/model/event_set.html">
 <link rel="import" href="/tracing/model/model.html">
-<link rel="import" href="/tracing/ui/extras/side_panel/time_summary_side_panel.html">
+<link rel="import" href="/tracing/ui/base/deep_utils.html">
 <link rel="import" href="/tracing/ui/side_panel/side_panel.html">
 <link rel="import" href="/tracing/ui/side_panel/side_panel_container.html">
+
+<dom-module id="tr-ui-sp-disabled-side-panel"></dom-module>
+<dom-module id="tr-ui-sp-enabled-side-panel"></dom-module>
 
 <script>
 'use strict';
@@ -26,17 +29,17 @@ tr.b.unittest.testSuite(function() {
   }
 
   FakeBrushingStateController.prototype = {
-    addEventListener: function(name, cb) {
+    addEventListener(name, cb) {
     }
   };
 
   function createModel() {
-    var m = tr.c.TestUtils.newModelWithEvents([], {
+    const m = tr.c.TestUtils.newModelWithEvents([], {
       shiftWorldToZero: false,
       pruneContainers: false,
-      customizeModelCallback: function(m) {
-        var browserProcess = m.getOrCreateProcess(1);
-        var browserMain = browserProcess.getOrCreateThread(2);
+      customizeModelCallback(m) {
+        const browserProcess = m.getOrCreateProcess(1);
+        const browserMain = browserProcess.getOrCreateThread(2);
         browserMain.sliceGroup.beginSlice('cat', 'Task', 0);
         browserMain.sliceGroup.endSlice(10);
         browserMain.sliceGroup.beginSlice('cat', 'Task', 20);
@@ -46,13 +49,50 @@ tr.b.unittest.testSuite(function() {
     return m;
   }
 
+  Polymer({
+    is: 'tr-ui-sp-disabled-test-panel',
+    behaviors: [tr.ui.behaviors.SidePanel],
+    supportsModel(m) {
+      return {supported: false};
+    },
+    get textLabel() {
+      return 'Disabled';
+    }
+  });
+
+  tr.ui.side_panel.SidePanelRegistry.register(function disabled() {
+    return document.createElement('tr-ui-sp-disabled-test-panel');
+  });
+
+  Polymer({
+    is: 'tr-ui-sp-enabled-test-panel',
+    behaviors: [tr.ui.behaviors.SidePanel],
+    supportsModel(m) {
+      return {supported: true};
+    },
+    get textLabel() {
+      return 'Enabled';
+    },
+  });
+
+  tr.ui.side_panel.SidePanelRegistry.register(function enabled() {
+    return document.createElement('tr-ui-sp-enabled-test-panel');
+  });
+
   test('instantiateCollapsed', function() {
-    var brushingStateController = new FakeBrushingStateController();
+    const brushingStateController = new FakeBrushingStateController();
     brushingStateController.model = createModel();
 
-    var container = document.createElement('tr-ui-side-panel-container');
+    const container = document.createElement('tr-ui-side-panel-container');
     container.brushingStateController = brushingStateController;
     this.addHTMLOutput(container);
+
+    // The Enabled tab should appear first in the tab strip even though the
+    // disabled side panel was registered first.
+    // There may be other side panels.
+    const labels = tr.ui.b.findDeepElementsMatching(container,
+        'TAB-STRIP-LABEL').map(e => e.textContent);
+    assert.isBelow(labels.indexOf('Enabled'), labels.indexOf('Disabled'));
   });
 });
 </script>

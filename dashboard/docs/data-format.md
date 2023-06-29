@@ -1,8 +1,28 @@
-# Chrome Performance Dashboard Data Format
+# Chrome Performance Dashboard Data Formats
 
-## Recommended Format: Dashboard JSON v1
+Currently, the performance dashboard supports two formats for data upload:
+- Histograms, via the `add_histograms` endpoint.
+- Chart JSON, via the `add_point` endpoint.
 
-The endpoint that accepts new points
+While both formats remain supported, histograms are preferred if your tool can
+produce them as an output format.
+
+**Note:** [Telemetry](/telemetry/README.md), in particular, is due to deprecate
+Chart JSON output in favor of Histograms.
+
+## Histograms
+
+The endpoint for new histograms
+(`https://chromeperf.appspot.com/add_histograms`) accepts HTTP POST
+requests. The body of the request should be a JSON encoded and gzip compressed
+list of histogram dicts. See
+[HistogramSet JSON Format](/docs/histogram-set-json-format.md) for details on
+the format.
+
+
+## Chart JSON v1
+
+The endpoint for new points
 (`https://chromeperf.appspot.com/add_point`) accepts HTTP POST
 requests. With the POST request, there should be one parameter given,
 called "data", the value of which is JSON which contains all of the data
@@ -35,10 +55,20 @@ Fields:
  * path after master/bot. Can contain slashes.
  * `format_version` (string): Allows dashboard to know how to process
  the structure.
- * `revisions` (dict): Maps repo name to revision.
+ * `versions` (dict): Maps repo name to revision. Ping dashboard admins to
+   get a new revision type added; here are some available ones:
+   * `chrome_version`: Version number of Chrome, like 54.0.2840.71
+   * `chromium_git`: Chromium git hash
+   * `chromium_commit_pos`: Chromium commit position
+   * `v8_git`: v8 git hash
  * `supplemental` (dict): Unstructured key-value pairs which may be
  displayed on the dashboard. Used to describe bot hardware, OS,
  Chrome feature status, etc.
+   * `default_rev`: This is used to specify which version type to show as the
+      default in tooltips and x-axis. It maps to one of the keys in the
+      `versions` dict, with an `r_` prepended. For example, if you want to
+      set the default version to chrome_version, you'd specify
+      `default-rev`: `r_chrome_version`.
  * `chart_data` (dict): The chart JSON as output by Telemetry.
 
 ### Chart data:
@@ -59,12 +89,28 @@ the test.
       "http://www.yahoo.com/": {
         "type": "list_of_scalar_values",
         "values": [4, 5, 4, 4],
+        "std": 0.5,
       },
       "summary": {
         "type": "list_of_scalar_values",
         "values": [13, 14, 12, 13],
         "file": "gs://..."
       },
+    },
+    "html_size": {
+      "http://www.google.com/": {
+        "type": "scalar",
+        "value": 13579,
+        "units": "bytes"
+      }
+    },
+    "load_times": {
+      "http://www.google.com/": {
+        "type": "list_of_scalar_values",
+        "value": [4.2],
+        "std": 1.25,
+        "units": "sec"
+      }
     }
   }
 }
@@ -79,7 +125,11 @@ Fields:
  to their trace dicts.
  * `type`: [string] `"scalar"`, `"list_of_scalar_values"` or `"histogram"`,
  which tells the dashboard how to interpret the rest of the fields.
- * `improvement_direction` (string): Either `"bigger_is_better"`, or
+   * `scalar` points require the field `"value"` [number].
+   * `list_of_scalar_values` points require the field `"values"` [list of
+   numbers]. The field `"std"` [number] can optionally specify the sample
+   standard deviation of the values, otherwise the dashboard will compute it.
+ * `improvement_direction`: [string] Either `"bigger_is_better"`, or
  `"smaller_is_better"`.
  * `summary`: A special trace name which denotes the trace in a chart which does
  not correspond to a specific page.
@@ -191,7 +241,8 @@ Implementations of code that sends data to the dashboard:
 
 Once you're ready to start sending data to the real perf dashboard, there
 are a few more things you might want to do. Firstly, in order for the
-dashboard to accept the data, the IP of the sender must be whitelisted.
+dashboard to accept the data, the IP of the sender must be added to the
+IP allowlist.
 
 If your data is not internal-only data, you can request that it be marked
 as such, again by filing an issue.

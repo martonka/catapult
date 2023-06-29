@@ -1,14 +1,26 @@
 # Copyright 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
 import optparse
 import os
 import unittest
 
 from telemetry.internal.browser import browser_options
 
+import mock
+
 
 class BrowserOptionsTest(unittest.TestCase):
+  def testBrowserMultipleValues_UseLast(self):
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    parser.parse_args(['--browser=stable', '--browser=reference'])
+    self.assertEqual(
+        options.browser_type, 'reference',
+        'Note that this test is needed for run_performance_tests.py.'
+        'See crbug.com/928928.')
+
   def testDefaults(self):
     options = browser_options.BrowserFinderOptions()
     parser = options.CreateParser()
@@ -82,7 +94,23 @@ class BrowserOptionsTest(unittest.TestCase):
     parser.parse_args(['--extra-browser-args=--foo --bar'])
 
     self.assertEquals(options.browser_options.extra_browser_args,
-                      set(['--foo', '--bar']))
+                      {'--foo', '--bar'})
+
+  def testEnableSystrace(self):
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    parser.parse_args(['--enable-systrace'])
+
+    self.assertTrue(options.enable_systrace)
+
+  def testIncompatibleIntervalProfilingPeriods(self):
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+
+    with self.assertRaises(SystemExit) as context:
+      parser.parse_args(['--interval-profiling-period=story_run',
+                         '--interval-profiling-period=navigation'])
+    self.assertEqual(context.exception.code, 1)
 
   def testMergeDefaultValues(self):
     options = browser_options.BrowserFinderOptions()
@@ -109,3 +137,114 @@ class BrowserOptionsTest(unittest.TestCase):
     self.assertFalse(options.default_false)
     self.assertFalse(options.override_to_true)
     self.assertTrue(options.override_to_false)
+
+  @mock.patch('socket.getservbyname')
+  def testGetServByNameOnlyCalledForRemoteCros(self, serv_mock):
+    serv_mock.return_value = 22
+
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    parser.parse_args(['--browser=cros-chrome'])
+    serv_mock.assert_not_called()
+
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    parser.parse_args(['--browser=release', '--remote=localhost'])
+    serv_mock.assert_not_called()
+
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    parser.parse_args(['--browser=cros-chrome', '--remote=localhost'])
+    serv_mock.assert_called()
+    self.assertEquals(options.cros_remote_ssh_port, 22)
+
+  @mock.patch('socket.getservbyname')
+  def testGetServByNameNotCalledWithPortSpecified(self, serv_mock):
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    parser.parse_args(
+        ['--browser=cros-chrome', '--remote=localhost', '--remote-ssh-port=22'])
+    serv_mock.assert_not_called()
+
+  @mock.patch('socket.getservbyname')
+  def testSshNotAvailableHardFailsCrosRemoteTest(self, serv_mock):
+    serv_mock.side_effect = OSError('No SSH here')
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    with self.assertRaises(RuntimeError):
+      parser.parse_args(['--browser=cros-chrome', '--remote=localhost'])
+
+  @mock.patch('socket.getservbyname')
+  def testOriginalSshErrorIncludedInFailure(self, serv_mock):
+    serv_mock.side_effect = OSError('Some unique message')
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    try:
+      parser.parse_args(['--browser=cros-chrome', '--remote=localhost'])
+      # Shouldn't be hit, but no assertNotReached or similar in unittest.
+      self.assertTrue(False)  # pylint: disable=redundant-unittest-assert
+    except RuntimeError as e:
+      self.assertIn('Some unique message', str(e))
+
+  # Regression test for crbug.com/1056281.
+  def testPathsDontDropSlashes(self):
+    log_file = '--log-file=%s' % os.path.join('some', 'test', 'path.txt')
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    parser.parse_args([
+        '--interval-profiler-options=%s' % log_file,
+        '--extra-browser-args=%s' % log_file,
+        '--extra-wpr-args=%s' % log_file,
+    ])
+
+    self.assertEquals(options.interval_profiler_options, [log_file])
+    self.assertEquals(
+        options.browser_options.extra_browser_args, {log_file})
+    self.assertEquals(options.browser_options.extra_wpr_args, [log_file])
+
+
+class ParseAndroidEmulatorOptionsTest(unittest.TestCase):
+  class EarlyExitException(Exception):
+    pass
+
+  def setUp(self):
+    self._old_emulator_environment =\
+        browser_options.BrowserFinderOptions.emulator_environment
+    browser_options.BrowserFinderOptions.emulator_environment = None
+    patcher = mock.patch.object(browser_options.BrowserFinderOptions,
+                                '_NoOpFunctionForTesting')
+    self.addCleanup(patcher.stop)
+    self.breakpoint_mock = patcher.start()
+    self.breakpoint_mock.side_effect =\
+        ParseAndroidEmulatorOptionsTest.EarlyExitException
+
+  def tearDown(self):
+    browser_options.BrowserFinderOptions.emulator_environment =\
+        self._old_emulator_environment
+
+  def testNoConfig(self):
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    parser.parse_args([])
+
+  def testExistingEnvironment(self):
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    browser_options.BrowserFinderOptions.emulator_environment = True
+    parser.parse_args(['--avd-config=foo'])
+
+  @mock.patch('os.path.exists')
+  def testNoBuildAndroidDir(self, exists_mock):
+    exists_mock.return_value = False
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    with self.assertRaises(RuntimeError):
+      parser.parse_args(['--avd-config=foo'])
+
+  @mock.patch('os.path.exists')
+  def testAllPrerequisites(self, exists_mock):
+    exists_mock.return_value = True
+    options = browser_options.BrowserFinderOptions()
+    parser = options.CreateParser()
+    with self.assertRaises(ParseAndroidEmulatorOptionsTest.EarlyExitException):
+      parser.parse_args(['--avd-config=foo'])

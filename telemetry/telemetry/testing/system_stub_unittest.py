@@ -2,12 +2,19 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import os
+import sys
+import io
 import unittest
 
-PERF_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from telemetry.testing import system_stub
 from telemetry.internal.testing import system_stub_test_module
+
+if sys.version_info.major == 3:
+  OPEN_FILE_TYPE = io.TextIOWrapper
+else:
+  OPEN_FILE_TYPE = file
 
 class CloudStorageTest(unittest.TestCase):
   SUCCESS_FILE_HASH = 'success'.zfill(40)
@@ -24,12 +31,12 @@ class CloudStorageTest(unittest.TestCase):
                          'preset_partner_file.wpr',
                          'preset_internal_file.wpr']
     self.remote_paths = {
-      self.cloud_storage.PUBLIC_BUCKET:
-        {'preset_public_file.wpr':CloudStorageTest.PUBLIC_FILE_HASH},
-      self.cloud_storage.PARTNER_BUCKET:
-        {'preset_partner_file.wpr':CloudStorageTest.PARTNER_FILE_HASH},
-      self.cloud_storage.INTERNAL_BUCKET:
-        {'preset_internal_file.wpr':CloudStorageTest.INTERNAL_FILE_HASH}}
+        self.cloud_storage.PUBLIC_BUCKET:
+            {'preset_public_file.wpr':CloudStorageTest.PUBLIC_FILE_HASH},
+        self.cloud_storage.PARTNER_BUCKET:
+            {'preset_partner_file.wpr':CloudStorageTest.PARTNER_FILE_HASH},
+        self.cloud_storage.INTERNAL_BUCKET:
+            {'preset_internal_file.wpr':CloudStorageTest.INTERNAL_FILE_HASH}}
 
     # Local data files and hashes.
     self.data_files = [
@@ -248,4 +255,4 @@ class CloudStorageTest(unittest.TestCase):
     stubs.Restore()
     # This will throw an error if the open stub wasn't restored correctly.
     f = system_stub_test_module.SystemStubTest.TestOpen(file_path)
-    self.assertEqual(type(f), file)
+    self.assertEqual(type(f), OPEN_FILE_TYPE)

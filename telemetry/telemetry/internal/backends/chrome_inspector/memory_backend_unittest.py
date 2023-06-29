@@ -2,14 +2,14 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import mock
+from __future__ import absolute_import
 import unittest
 
+import mock
 
 from telemetry.internal.backends.chrome_inspector import inspector_websocket
 from telemetry.internal.backends.chrome_inspector import memory_backend
 from telemetry.testing import fakes
-from telemetry.testing import simple_mock
 from telemetry.testing import tab_test_case
 
 
@@ -61,13 +61,14 @@ class MemoryBackendTest(tab_test_case.TabTestCase):
 
 
 class MemoryBackendUnitTest(unittest.TestCase):
+  # pylint: disable=unsubscriptable-object
 
   def setUp(self):
-    self._mock_timer = simple_mock.MockTimer()
-    self._inspector_socket = fakes.FakeInspectorWebsocket(self._mock_timer)
+    self._fake_timer = fakes.FakeTimer()
+    self._inspector_socket = fakes.FakeInspectorWebsocket(self._fake_timer)
 
   def tearDown(self):
-    self._mock_timer.Restore()
+    self._fake_timer.Restore()
 
   def testSetMemoryPressureNotificationsSuppressedSuccess(self):
     response_handler = mock.Mock(return_value={'result': {}})
@@ -91,20 +92,20 @@ class MemoryBackendUnitTest(unittest.TestCase):
 
     # If the DevTools method is missing, the backend should fail silently.
     response_handler.return_value = {
-      'result': {},
-      'error': {
-        'code': -32601  # Method does not exist.
-      }
+        'result': {},
+        'error': {
+            'code': -32601  # Method does not exist.
+        }
     }
     backend.SetMemoryPressureNotificationsSuppressed(True)
     self.assertEqual(1, response_handler.call_count)
 
     # All other errors should raise an exception.
     response_handler.return_value = {
-      'result': {},
-      'error': {
-        'code': -32602  # Invalid method params.
-      }
+        'result': {},
+        'error': {
+            'code': -32602  # Invalid method params.
+        }
     }
     self.assertRaises(memory_backend.MemoryUnexpectedResponseException,
                       backend.SetMemoryPressureNotificationsSuppressed, True)
@@ -133,20 +134,20 @@ class MemoryBackendUnitTest(unittest.TestCase):
 
     # If the DevTools method is missing, the backend should fail silently.
     response_handler.return_value = {
-      'result': {},
-      'error': {
-        'code': -32601  # Method does not exist.
-      }
+        'result': {},
+        'error': {
+            'code': -32601  # Method does not exist.
+        }
     }
     backend.SimulateMemoryPressureNotification('critical')
     self.assertEqual(1, response_handler.call_count)
 
     # All other errors should raise an exception.
     response_handler.return_value = {
-      'result': {},
-      'error': {
-        'code': -32602  # Invalid method params.
-      }
+        'result': {},
+        'error': {
+            'code': -32602  # Invalid method params.
+        }
     }
     self.assertRaises(memory_backend.MemoryUnexpectedResponseException,
                       backend.SimulateMemoryPressureNotification, 'critical')

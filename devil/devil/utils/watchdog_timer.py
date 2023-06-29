@@ -1,7 +1,6 @@
 # Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """WatchdogTimer timeout objects."""
 
 import time
@@ -36,6 +35,10 @@ class WatchdogTimer(object):
       return self._timeout - self.GetElapsed()
     else:
       return None
+
+  def GetTimeout(self):
+    """Returns the timout of the watchdog."""
+    return self._timeout
 
   def IsTimedOut(self):
     """Whether the watchdog has timed out.

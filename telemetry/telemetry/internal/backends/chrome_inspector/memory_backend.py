@@ -2,9 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import json
 import logging
-import socket
 import traceback
 
 from telemetry.internal.backends.chrome_inspector import inspector_websocket
@@ -65,31 +65,32 @@ class MemoryBackend(object):
 
   def _SendMemoryRequest(self, command, params, timeout):
     method = 'Memory.%s' % command
-    request = {
-      'method': method,
-      'params': params
-    }
+    request = {'method': method, 'params': params}
     try:
       response = self._inspector_websocket.SyncRequest(request, timeout)
-    except websocket.WebSocketTimeoutException:
-      raise MemoryTimeoutException(
-          'Exception raised while sending a %s request:\n%s' %
-              (method, traceback.format_exc()))
-    except (socket.error, websocket.WebSocketException,
-            inspector_websocket.WebSocketDisconnected):
+    except inspector_websocket.WebSocketException as err:
+      if issubclass(
+          err.websocket_error_type, websocket.WebSocketTimeoutException):
+        raise MemoryTimeoutException(
+            'Exception raised while sending a %s request:\n%s' %
+            (method, traceback.format_exc()))
+      else:
+        raise MemoryUnrecoverableException(
+            'Exception raised while sending a %s request:\n%s' %
+            (method, traceback.format_exc()))
       raise MemoryUnrecoverableException(
           'Exception raised while sending a %s request:\n%s' %
-              (method, traceback.format_exc()))
+          (method, traceback.format_exc()))
 
     if 'error' in response:
       code = response['error']['code']
       if code == inspector_websocket.InspectorWebsocket.METHOD_NOT_FOUND_CODE:
         logging.warning(
-            '%s DevTools method not supported by the browser' % method)
+            '%s DevTools method not supported by the browser', method)
       else:
         raise MemoryUnexpectedResponseException(
             'Inspector returned unexpected response for %s:\n%s' %
-                (method, json.dumps(response, indent=2)))
+            (method, json.dumps(response, indent=2)))
 
   def Close(self):
     self._inspector_websocket = None

@@ -2,10 +2,20 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import os
 
 from telemetry.core import util
+from telemetry.core import memory_cache_http_server
 from telemetry.testing import tab_test_case
+
+
+class RequestHandler(
+    memory_cache_http_server.MemoryCacheDynamicHTTPRequestHandler):
+
+  def ResponseFromHandler(self, path):
+    content = "Hello from handler"
+    return self.MakeResponse(content, "text/html", False)
 
 
 class MemoryCacheHTTPServerTest(tab_test_case.TabTestCase):
@@ -13,8 +23,8 @@ class MemoryCacheHTTPServerTest(tab_test_case.TabTestCase):
   def setUp(self):
     super(MemoryCacheHTTPServerTest, self).setUp()
     self._test_filename = 'bear.webm'
-    _test_file = os.path.join(util.GetUnittestDataDir(), 'bear.webm')
-    self._test_file_size = os.stat(_test_file).st_size
+    test_file = os.path.join(util.GetUnittestDataDir(), 'bear.webm')
+    self._test_file_size = os.stat(test_file).st_size
 
   def testBasicHostingAndRangeRequests(self):
     self.Navigate('blank.html')
@@ -44,18 +54,21 @@ class MemoryCacheHTTPServerTest(tab_test_case.TabTestCase):
 
   def CheckContentHeaders(self, content_range_request, content_range_response,
                           content_length_response):
-    self._tab.ExecuteJavaScript("""
+    self._tab.ExecuteJavaScript(
+        """
         var loaded = false;
         var xmlhttp = new XMLHttpRequest();
         xmlhttp.onload = function(e) {
           loaded = true;
         };
         // Avoid cached content by appending unique URL param.
-        xmlhttp.open('GET', "%s?t=" + Date.now(), true);
-        xmlhttp.setRequestHeader('Range', 'bytes=%s');
+        xmlhttp.open('GET', {{ url }} + "?t=" + Date.now(), true);
+        xmlhttp.setRequestHeader('Range', {{ range }});
         xmlhttp.send();
-    """ % (self.UrlOfUnittestFile(self._test_filename), content_range_request))
-    self._tab.WaitForJavaScriptExpression('loaded', 5)
+        """,
+        url=self.UrlOfUnittestFile(self._test_filename),
+        range='bytes=%s' % content_range_request)
+    self._tab.WaitForJavaScriptCondition('loaded', timeout=5)
     content_range = self._tab.EvaluateJavaScript(
         'xmlhttp.getResponseHeader("Content-Range");')
     content_range_response = 'bytes %s/%d' % (content_range_response,
@@ -67,12 +80,17 @@ class MemoryCacheHTTPServerTest(tab_test_case.TabTestCase):
 
   def testAbsoluteAndRelativePathsYieldSameURL(self):
     test_file_rel_path = 'green_rect.html'
-    test_file_abs_path = os.path.abspath(os.path.join(util.GetUnittestDataDir(),
-                                                      test_file_rel_path))
+    test_file_abs_path = os.path.abspath(
+        os.path.join(util.GetUnittestDataDir(), test_file_rel_path))
     # It's necessary to bypass self.UrlOfUnittestFile since that
     # concatenates the unittest directory on to the incoming path,
     # causing the same code path to be taken in both cases.
     self._platform.SetHTTPServerDirectories(util.GetUnittestDataDir())
     self.assertEquals(
-      self._platform.http_server.UrlOf(test_file_rel_path),
-      self._platform.http_server.UrlOf(test_file_abs_path))
+        self._platform.http_server.UrlOf(test_file_rel_path),
+        self._platform.http_server.UrlOf(test_file_abs_path))
+
+  def testDynamicHTTPServer(self):
+    self.Navigate('test.html', handler_class=RequestHandler)
+    x = self._tab.EvaluateJavaScript('document.body.innerHTML')
+    self.assertEquals(x, 'Hello from handler')

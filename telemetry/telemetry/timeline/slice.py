@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import telemetry.timeline.event as timeline_event
 
 
@@ -31,7 +32,7 @@ class Slice(timeline_event.TimelineEvent):
   def IterEventsInThisContainerRecrusively(self, stack=None):
     # This looks awkward, but it lets us create only a single iterator instead
     # of having to create one iterator for every subslice found.
-    if stack == None:
+    if stack is None:
       stack = []
     else:
       assert len(stack) == 0
@@ -45,7 +46,7 @@ class Slice(timeline_event.TimelineEvent):
   def self_time(self):
     """Time spent in this function less any time spent in child events."""
     child_total = sum(
-      [e.duration for e in self.sub_slices])
+        [e.duration for e in self.sub_slices])
     return self.duration - child_total
 
   @property
@@ -59,7 +60,7 @@ class Slice(timeline_event.TimelineEvent):
 
     child_total = 0
     for e in self.sub_slices:
-      if e.thread_duration == None:
+      if e.thread_duration is None:
         return None
       child_total += e.thread_duration
 

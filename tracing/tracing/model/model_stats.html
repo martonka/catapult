@@ -11,7 +11,6 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.model', function() {
-
   /**
    * @constructor
    */
@@ -23,20 +22,22 @@ tr.exportTo('tr.model', function() {
     this.allTraceEventStatsInTimeIntervals_ = [];
 
     this.hasEventSizesinBytes_ = false;
+
+    this.traceImportDurationMs_ = undefined;
   }
 
   ModelStats.prototype = {
     TIME_INTERVAL_SIZE_IN_MS: 100,
 
-    willProcessBasicTraceEvent: function(phase, category, title, ts,
-                                         opt_eventSizeinBytes) {
-      var key = phase + '/' + category + '/' + title;
-      var eventStats = this.traceEventCountsByKey_.get(key);
+    willProcessBasicTraceEvent(phase, category, title, ts,
+        opt_eventSizeinBytes) {
+      const key = phase + '/' + category + '/' + title;
+      let eventStats = this.traceEventCountsByKey_.get(key);
       if (eventStats === undefined) {
         eventStats = {
-          phase: phase,
-          category: category,
-          title: title,
+          phase,
+          category,
+          title,
           numEvents: 0,
           totalEventSizeinBytes: 0
         };
@@ -45,9 +46,9 @@ tr.exportTo('tr.model', function() {
       }
       eventStats.numEvents++;
 
-      var timeIntervalKey = Math.floor(
+      const timeIntervalKey = Math.floor(
           tr.b.Unit.timestampFromUs(ts) / this.TIME_INTERVAL_SIZE_IN_MS);
-      var eventStatsByTimeInverval =
+      let eventStatsByTimeInverval =
           this.traceEventStatsInTimeIntervals_.get(timeIntervalKey);
       if (eventStatsByTimeInverval === undefined) {
         eventStatsByTimeInverval = {
@@ -56,7 +57,7 @@ tr.exportTo('tr.model', function() {
           totalEventSizeinBytes: 0
         };
         this.traceEventStatsInTimeIntervals_.set(timeIntervalKey,
-                                                eventStatsByTimeInverval);
+            eventStatsByTimeInverval);
         this.allTraceEventStatsInTimeIntervals_.push(eventStatsByTimeInverval);
       }
       eventStatsByTimeInverval.numEvents++;
@@ -78,11 +79,19 @@ tr.exportTo('tr.model', function() {
 
     get hasEventSizesinBytes() {
       return this.hasEventSizesinBytes_;
+    },
+
+    get traceImportDurationMs() {
+      return this.traceImportDurationMs_;
+    },
+
+    set traceImportDurationMs(traceImportDurationMs) {
+      this.traceImportDurationMs_ = traceImportDurationMs;
     }
   };
 
   return {
-    ModelStats: ModelStats
+    ModelStats,
   };
 });
 </script>

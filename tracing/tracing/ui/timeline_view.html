@@ -5,6 +5,7 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
+<link rel="import" href="/tracing/base/category_util.html">
 <link rel="import" href="/tracing/base/settings.html">
 <link rel="import" href="/tracing/base/utils.html">
 <link rel="import" href="/tracing/core/scripting_controller.html">
@@ -63,6 +64,8 @@ found in the LICENSE file.
       padding-left: 8px;
       padding-right: 8px;
       flex: 1 1 auto;
+      overflow: hidden;
+      white-space: nowrap;
     }
 
     #control > #bar > #left_controls,
@@ -70,6 +73,7 @@ found in the LICENSE file.
       display: flex;
       flex-direction: row;
       align-items: stretch;
+      flex-shrink: 0;
     }
 
     #control > #bar > #left_controls > * { margin-right: 2px; }
@@ -96,18 +100,40 @@ found in the LICENSE file.
     middle-container > x-timeline-view-side-panel-container { flex: 0 0 auto; }
     tr-ui-b-drag-handle { flex: 0 0 auto; }
     tr-ui-a-analysis-view { flex: 0 0 auto; }
+
+    tr-ui-b-dropdown {
+      --dropdown-button: {
+        -webkit-appearance: none;
+        align-items: normal;
+        background-color: rgb(248, 248, 248);
+        border: 1px solid rgba(0, 0, 0, 0.5);
+        box-sizing: content-box;
+        color: rgba(0, 0, 0, 0.8);
+        font-family: sans-serif;
+        font-size: 12px;
+        padding: 2px 5px;
+      }
+    }
     </style>
 
     <tv-ui-b-hotkey-controller id="hkc"></tv-ui-b-hotkey-controller>
     <div id="control">
       <div id="bar">
         <div id="left_controls"></div>
-        <div id="title">^_^</div>
+        <div id="title">
+          ^_^
+          <div style="padding-left: 3em">
+            Try the new <a href="https://ui.perfetto.dev">Perfetto UI</a>!
+            <a href="https://chromium.googlesource.com/catapult/+/refs/heads/main/tracing/docs/perfetto.md">Learn more</a>
+          </div>
+        </div>
         <div id="right_controls">
+          <tr-ui-b-dropdown id="flow_event_filter_dropdown" label="Flow events"></tr-ui-b-dropdown>
+          <tr-ui-b-dropdown id="process_filter_dropdown" label="Processes"></tr-ui-b-dropdown>
           <tr-ui-b-toolbar-button id="view_metadata_button">
             M
           </tr-ui-b-toolbar-button>
-          <tr-ui-b-dropdown id="view_options_dropdown"></tr-ui-b-dropdown>
+          <tr-ui-b-dropdown id="view_options_dropdown" label="View Options"></tr-ui-b-dropdown>
           <tr-ui-find-control id="view_find_control"></tr-ui-find-control>
           <tr-ui-b-toolbar-button id="view_console_button">
             &#187;
@@ -122,7 +148,7 @@ found in the LICENSE file.
       </tr-ui-b-info-bar-group>
     </div>
     <middle-container>
-      <content></content>
+      <slot></slot>
 
       <tr-ui-side-panel-container id="side_panel_container">
       </tr-ui-side-panel-container>
@@ -137,20 +163,37 @@ found in the LICENSE file.
 <script>
 'use strict';
 
+const POLYFILL_WARNING_MESSAGE =
+    'Trace Viewer is running with WebComponentsV0 polyfill, and some ' +
+    'features may be broken. See crbug.com/1036492.';
+
 Polymer({
   is: 'tr-ui-timeline-view',
 
-  attached: function() {
+  created() {
+    this.trackViewContainer_ = undefined;
+
+    this.queuedModel_ = undefined;
+
+    this.builtPromise_ = undefined;
+    this.doneBuilding_ = undefined;
+  },
+
+  attached() {
     this.async(function() {
       this.trackViewContainer_ = Polymer.dom(this).querySelector(
           '#track_view_container');
-      if (!this.trackViewContainer_)
-        console.error('missing trackviewContainer');
+      if (!this.trackViewContainer_) {
+        throw new Error('missing trackviewContainer');
+      }
+
+      if (this.queuedModel_) this.updateContents_();
     });
   },
 
-  ready: function() {
+  ready() {
     this.tabIndex = 0; // Let the timeline able to receive key events.
+    this.polyfillWarnedOnce_ = false;
 
     this.titleEl_ = this.$.title;
     this.leftControlsEl_ = this.$.left_controls;
@@ -180,14 +223,12 @@ Polymer({
       this.railScoreSpan_ = undefined;
     }
 
-    this.optionsDropdown_ = this.$.view_options_dropdown;
-    Polymer.dom(this.optionsDropdown_.iconElement).textContent = 'View Options';
+    this.flowEventFilter_ = this.$.flow_event_filter_dropdown;
+    this.processFilter_ = this.$.process_filter_dropdown;
 
-    this.showFlowEvents_ = false;
-    Polymer.dom(this.optionsDropdown_).appendChild(tr.ui.b.createCheckBox(
-        this, 'showFlowEvents',
-        'tr.ui.TimelineView.showFlowEvents', false,
-        'Flow events'));
+    this.optionsDropdown_ = this.$.view_options_dropdown;
+
+    this.selectedFlowEvents_ = new Set();
     this.highlightVSync_ = false;
     this.highlightVSyncCheckbox_ = tr.ui.b.createCheckBox(
         this, 'highlightVSync',
@@ -210,7 +251,7 @@ Polymer({
     this.addEventListener(
         'requestSelectionChange',
         function(e) {
-          var sc = this.brushingStateController_;
+          const sc = this.brushingStateController_;
           sc.changeSelectionFromRequestSelectionChangeEvent(e.selection);
         }.bind(this));
 
@@ -235,19 +276,27 @@ Polymer({
     return this.$.hkc;
   },
 
-  updateDocumentFavicon: function() {
-    var hue;
-    if (!this.model)
-      hue = 'blue';
-    else
-      hue = this.model.faviconHue;
+  warnPolyfill() {
+    if (this.polyfillWarnedOnce_) return;
+    console.warn(POLYFILL_WARNING_MESSAGE); // eslint-disable-line no-console
+    this.polyfillWarnedOnce_ = true;
+  },
 
-    var faviconData = tr.ui.b.FaviconsByHue[hue];
-    if (faviconData === undefined)
-      faviconData = tr.ui.b.FaviconsByHue['blue'];
+  updateDocumentFavicon() {
+    let hue;
+    if (!this.model) {
+      hue = 'blue';
+    } else {
+      hue = this.model.faviconHue;
+    }
+
+    let faviconData = tr.ui.b.FaviconsByHue[hue];
+    if (faviconData === undefined) {
+      faviconData = tr.ui.b.FaviconsByHue.blue;
+    }
 
     // Find link if its there
-    var link = Polymer.dom(document.head).querySelector(
+    let link = Polymer.dom(document.head).querySelector(
         'link[rel="shortcut icon"]');
     if (!link) {
       link = document.createElement('link');
@@ -257,15 +306,13 @@ Polymer({
     link.href = faviconData;
   },
 
-  get showFlowEvents() {
-    return this.showFlowEvents_;
+
+  get selectedFlowEvents() {
+    return this.selectedFlowEvents_;
   },
 
-  set showFlowEvents(showFlowEvents) {
-    this.showFlowEvents_ = showFlowEvents;
-    if (!this.trackView_)
-      return;
-    this.trackView_.viewport.showFlowEvents = showFlowEvents;
+  set selectedFlowEvents(selectedFlowEvents) {
+    this.selectedFlowEvents_ = selectedFlowEvents;
   },
 
   get highlightVSync() {
@@ -274,15 +321,15 @@ Polymer({
 
   set highlightVSync(highlightVSync) {
     this.highlightVSync_ = highlightVSync;
-    if (!this.trackView_)
-      return;
+    if (!this.trackView_) return;
+
     this.trackView_.viewport.highlightVSync = highlightVSync;
   },
 
-  initHelpButton_: function() {
-    var helpButtonEl = this.$.view_help_button;
+  initHelpButton_() {
+    const helpButtonEl = this.$.view_help_button;
 
-    var dlg = new tr.ui.b.Overlay();
+    const dlg = new tr.ui.b.Overlay();
     dlg.title = 'Chrome Tracing Help';
     dlg.visible = false;
     dlg.appendChild(
@@ -297,8 +344,8 @@ Polymer({
     helpButtonEl.addEventListener('click', onClick.bind(this));
   },
 
-  initConsoleButton_: function() {
-    var toggleEl = this.$.view_console_button;
+  initConsoleButton_() {
+    const toggleEl = this.$.view_console_button;
 
     function onClick(e) {
       this.scriptingCtl_.toggleVisibility();
@@ -308,14 +355,14 @@ Polymer({
     toggleEl.addEventListener('click', onClick.bind(this));
   },
 
-  initMetadataButton_: function() {
-    var showEl = this.$.view_metadata_button;
+  initMetadataButton_() {
+    const showEl = this.$.view_metadata_button;
 
     function onClick(e) {
-      var dlg = new tr.ui.b.Overlay();
+      const dlg = new tr.ui.b.Overlay();
       dlg.title = 'Metadata for trace';
 
-      var metadataOverlay = document.createElement(
+      const metadataOverlay = document.createElement(
           'tr-ui-timeline-view-metadata-overlay');
       metadataOverlay.metadata = this.model.metadata;
 
@@ -330,10 +377,88 @@ Polymer({
     this.updateMetadataButtonVisibility_();
   },
 
-  updateMetadataButtonVisibility_: function() {
-    var showEl = this.$.view_metadata_button;
+  updateMetadataButtonVisibility_() {
+    const showEl = this.$.view_metadata_button;
     showEl.style.display =
         (this.model && this.model.metadata.length) ? '' : 'none';
+  },
+
+  updateFlowEventList_() {
+    const dropdown = Polymer.dom(this.flowEventFilter_);
+    while (dropdown.firstChild) {
+      dropdown.removeChild(dropdown.firstChild);
+    }
+    if (!this.model) return;
+
+    const cboxes = [];
+    const updateAll = (checked) => {
+      for (const cbox of cboxes) {
+        cbox.checked = checked;
+      }
+    };
+
+    dropdown.appendChild(tr.ui.b.createButton('All', () => updateAll(true)));
+    dropdown.appendChild(tr.ui.b.createButton('None', () => updateAll(false)));
+
+    const categories = new Set();
+    for (const event of this.model.flowEvents) {
+      for (const category of tr.b.getCategoryParts(event.category)) {
+        categories.add(category);
+      }
+    }
+
+    const sortedCategories = [...categories].sort(
+        (a, b) => a.localeCompare(b, 'en', {sensitivity: 'base'}));
+    for (const category of sortedCategories) {
+      const cbox = tr.ui.b.createCheckBox(undefined, undefined,
+          'tr.ui.TimelineView.selectedFlowEvents.' + category, false, category,
+          () => {
+            if (cbox.checked) {
+              this.selectedFlowEvents.add(category);
+            } else {
+              this.selectedFlowEvents.delete(category);
+            }
+            if (this.trackView_) {
+              this.trackView_.viewport.dispatchChangeEvent();
+            }
+          });
+      if (cbox.checked) {
+        this.selectedFlowEvents.add(category);
+      }
+      cboxes.push(cbox);
+      dropdown.appendChild(cbox);
+    }
+  },
+
+  updateProcessList_() {
+    const dropdown = Polymer.dom(this.processFilter_);
+    while (dropdown.firstChild) {
+      dropdown.removeChild(dropdown.firstChild);
+    }
+    if (!this.model) return;
+
+    const trackView =
+        this.trackViewContainer_.querySelector('tr-ui-timeline-track-view');
+    const processViews = trackView.processViews;
+    const cboxes = [];
+    const updateAll = (checked) => {
+      for (const cbox of cboxes) {
+        cbox.checked = checked;
+      }
+    };
+
+    dropdown.appendChild(tr.ui.b.createButton('All', () => updateAll(true)));
+    dropdown.appendChild(tr.ui.b.createButton('None', () => updateAll(false)));
+
+    for (const view of processViews) {
+      const cbox = tr.ui.b.createCheckBox(undefined, undefined, undefined,
+          true, view.processBase.userFriendlyName,
+          () => view.visible = cbox.checked);
+      cbox.checked = view.visible;
+      cboxes.push(cbox);
+      view.addEventListener('visibility', () => cbox.checked = view.visible);
+      dropdown.appendChild(cbox);
+    }
   },
 
   get leftControls() {
@@ -364,23 +489,49 @@ Polymer({
   },
 
   get model() {
-    if (this.trackView_)
+    if (this.trackView_) {
       return this.trackView_.model;
+    }
     return undefined;
   },
 
   set model(model) {
-    var modelInstanceChanged = model != this.model;
-    var modelValid = model && !model.bounds.isEmpty;
+    this.build(model);
+  },
 
-    var importWarningsEl = Polymer.dom(this.root).querySelector(
+  async build(model) {
+    this.queuedModel_ = model;
+    this.builtPromise_ = new Promise((resolve, reject) => {
+      this.doneBuilding_ = resolve;
+    });
+    if (this.trackViewContainer_) await this.updateContents_();
+  },
+
+  get builtPromise() {
+    return this.builtPromise_;
+  },
+
+  async updateContents_() {
+    if (this.trackViewContainer_ === undefined) {
+      throw new Error(
+          'timeline-view.updateContents_ requires trackViewContainer_');
+    }
+
+    const model = this.queuedModel_;
+    this.queuedModel_ = undefined;
+
+    const modelInstanceChanged = model !== this.model;
+    const modelValid = model && !model.bounds.isEmpty;
+
+    const importWarningsEl = Polymer.dom(this.root).querySelector(
         '#import-warnings');
     Polymer.dom(importWarningsEl).textContent = '';
 
     // Remove old trackView if the model has completely changed.
     if (modelInstanceChanged) {
-      if (this.railScoreSpan_)
+      if (this.railScoreSpan_) {
         this.railScoreSpan_.model = undefined;
+      }
       Polymer.dom(this.trackViewContainer_).textContent = '';
       if (this.trackView_) {
         this.trackView_.viewport.removeEventListener(
@@ -407,29 +558,41 @@ Polymer({
     // Set the model.
     if (modelValid) {
       this.trackView_.model = model;
-      this.trackView_.viewport.showFlowEvents = this.showFlowEvents;
+      this.trackView_.viewport.selectedFlowEvents = this.selectedFlowEvents;
       this.trackView_.viewport.highlightVSync = this.highlightVSync;
-      if (this.railScoreSpan_)
+      if (this.railScoreSpan_) {
         this.railScoreSpan_.model = model;
+      }
 
       this.$.display_unit.preferredTimeDisplayMode = model.intrinsicTimeUnit;
     }
 
+    if (window.CustomElements && !window.CustomElements.hasNative) {
+      this.warnPolyfill();
+    }
+
     if (model) {
-      model.importWarningsThatShouldBeShownToUser.forEach(
-          function(importWarning) {
-            importWarningsEl.addMessage(
-                'Import Warning: ' + importWarning.type + ': ' +
-                importWarning.message);
-          }, this);
+      for (const warning of model.importWarningsThatShouldBeShownToUser) {
+        importWarningsEl.addMessage(
+            `Import Warning: ${warning.type}: ${warning.message}`, [{
+              buttonText: 'Dismiss',
+              onClick(event, infobar) {
+                infobar.visible = false;
+              }
+            }]);
+      }
     }
 
     // Do things that are selection specific
     if (modelInstanceChanged) {
+      this.updateFlowEventList_();
+      this.updateProcessList_();
       this.updateMetadataButtonVisibility_();
       this.brushingStateController_.modelDidChange();
       this.onViewportChanged_();
     }
+
+    this.doneBuilding_();
   },
 
   get brushingStateController() {
@@ -441,8 +604,9 @@ Polymer({
   },
 
   get settings() {
-    if (!this.settings_)
+    if (!this.settings_) {
       this.settings_ = new tr.b.Settings();
+    }
     return this.settings_;
   },
 
@@ -454,8 +618,8 @@ Polymer({
     throw new Error('This is deprecated. Please set globalMode to true.');
   },
 
-  bindKeyListeners_: function() {
-    var hkc = this.hotkeyController;
+  bindKeyListeners_() {
+    const hkc = this.hotkeyController;
 
     // Shortcuts that *can* steal focus from the console and the filter text
     // box.
@@ -464,10 +628,11 @@ Polymer({
       keyCode: '`'.charCodeAt(0),
       useCapture: true,
       thisArg: this,
-      callback: function(e) {
+      callback(e) {
         this.scriptingCtl_.toggleVisibility();
-        if (!this.scriptingCtl_.hasFocus)
+        if (!this.scriptingCtl_.hasFocus) {
           this.focus();
+        }
         e.stopPropagation();
       }
     }));
@@ -478,13 +643,14 @@ Polymer({
       keyCode: '/'.charCodeAt(0),
       useCapture: true,
       thisArg: this,
-      callback: function(e) {
-        if (this.scriptingCtl_.hasFocus)
-          return;
-        if (this.findCtl_.hasFocus)
+      callback(e) {
+        if (this.scriptingCtl_.hasFocus) return;
+
+        if (this.findCtl_.hasFocus) {
           this.focus();
-        else
+        } else {
           this.findCtl_.focus();
+        }
         e.preventDefault();
         e.stopPropagation();
       }
@@ -496,7 +662,7 @@ Polymer({
       keyCode: '?'.charCodeAt(0),
       useCapture: false,
       thisArg: this,
-      callback: function(e) {
+      callback(e) {
         this.$.view_help_button.click();
         e.stopPropagation();
       }
@@ -507,34 +673,36 @@ Polymer({
       keyCode: 'v'.charCodeAt(0),
       useCapture: false,
       thisArg: this,
-      callback: function(e) {
+      callback(e) {
         this.toggleHighlightVSync_();
         e.stopPropagation();
       }
     }));
   },
 
-  onViewportChanged_: function(e) {
-    var spc = this.sidePanelContainer_;
+  onViewportChanged_(e) {
+    const spc = this.sidePanelContainer_;
     if (!this.trackView_) {
       spc.rangeOfInterest.reset();
       return;
     }
 
-    var vr = this.trackView_.viewport.interestRange.asRangeObject();
-    if (!spc.rangeOfInterest.equals(vr))
+    const vr = this.trackView_.viewport.interestRange.asRangeObject();
+    if (!spc.rangeOfInterest.equals(vr)) {
       spc.rangeOfInterest = vr;
+    }
 
-    if (this.railScoreSpan_ && this.model)
+    if (this.railScoreSpan_ && this.model) {
       this.railScoreSpan_.model = this.model;
+    }
   },
 
-  toggleHighlightVSync_: function() {
+  toggleHighlightVSync_() {
     this.highlightVSyncCheckbox_.checked =
         !this.highlightVSyncCheckbox_.checked;
   },
 
-  setFindCtlText: function(string) {
+  setFindCtlText(string) {
     this.findCtl_.setText(string);
   }
 });

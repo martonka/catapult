@@ -1,13 +1,15 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Provides the web interface for adding and removing bug labels."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
 import json
 
-from dashboard import request_handler
-from dashboard import xsrf
+from dashboard.common import request_handler
+from dashboard.common import xsrf
 from dashboard.models import bug_label_patterns
 
 
@@ -17,10 +19,13 @@ class EditBugLabelsHandler(request_handler.RequestHandler):
   def get(self):
     """Renders the UI with all of the forms."""
     patterns_dict = bug_label_patterns.GetBugLabelPatterns()
-    self.RenderHtml('edit_bug_labels.html', {
-        'bug_labels': sorted(patterns_dict),
-        'bug_labels_json': json.dumps(patterns_dict, indent=2, sort_keys=True)
-    })
+    self.RenderHtml(
+        'edit_bug_labels.html', {
+            'bug_labels':
+                sorted(patterns_dict),
+            'bug_labels_json':
+                json.dumps(patterns_dict, indent=2, sort_keys=True)
+        })
 
   @xsrf.TokenRequired
   def post(self):
@@ -46,10 +51,14 @@ class EditBugLabelsHandler(request_handler.RequestHandler):
     label = self.request.get('buglabel_to_add')
     pattern = self.request.get('pattern')
     bug_label_patterns.AddBugLabelPattern(label, pattern)
-    self.RenderHtml('result.html', {
-        'headline': 'Added label %s' % label,
-        'results': [{'name': 'Pattern', 'value': pattern}]
-    })
+    self.RenderHtml(
+        'result.html', {
+            'headline': 'Added label %s' % label,
+            'results': [{
+                'name': 'Pattern',
+                'value': pattern
+            }]
+        })
 
   def _RemoveBuglabelPattern(self):
     """Removes a BugLabelPattern so that the label no longer applies.
@@ -60,6 +69,4 @@ class EditBugLabelsHandler(request_handler.RequestHandler):
     """
     label = self.request.get('buglabel_to_remove')
     bug_label_patterns.RemoveBugLabel(label)
-    self.RenderHtml('result.html', {
-        'headline': 'Deleted label %s' % label
-    })
+    self.RenderHtml('result.html', {'headline': 'Deleted label %s' % label})

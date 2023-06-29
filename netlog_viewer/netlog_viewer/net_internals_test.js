@@ -17,14 +17,6 @@
 
 var NetInternalsTest = (function() {
   /**
-   * A shorter poll interval is used for tests, since a few tests wait for
-   * polled values to change.
-   * @type {number}
-   * @const
-   */
-  var TESTING_POLL_INTERVAL_MS = 50;
-
-  /**
    * Private pointer to the currently active test framework.  Needed so static
    * functions can access some of the inner workings of the test framework.
    * @type {NetInternalsTest}
@@ -58,49 +50,24 @@ var NetInternalsTest = (function() {
       // If it was actual text it'd be too low-contrast, but a square is fine.
       this.accessibilityAuditConfig.ignoreSelectors(
           'lowContrastElements', '#timeline-view-selection-ul label');
-      // Suppress this error; the black-on-gray button is readable.
-      this.accessibilityAuditConfig.ignoreSelectors(
-          'lowContrastElements', '#export-view-save-log-file');
-      // False positive because the background color highlights and then
-      // fades out with a transition when there's an error.
-      this.accessibilityAuditConfig.ignoreSelectors(
-          'lowContrastElements', '#hsts-view-query-output span');
       // False positives for unknown reason.
       this.accessibilityAuditConfig.ignoreSelectors(
           'focusableElementNotVisibleAndNotAriaHidden',
-          '#hsts-view-tab-content *');
+          '#domain-security-policy-view-tab-content *');
 
       // TODO(aboxhall): enable when this bug is fixed:
       // https://github.com/GoogleChrome/accessibility-developer-tools/issues/69
       this.accessibilityAuditConfig.auditRulesToIgnore.push(
           'focusableElementNotVisibleAndNotAriaHidden');
 
-      var controlsWithoutLabelSelectors = [
-        '#export-view-user-comments',
-        '#hsts-view-add-input',
-        '#hsts-view-delete-input',
-        '#hsts-view-query-input',
-      ];
-
-      // Enable when failure is resolved.
-      // AX_TEXT_01: http://crbug.com/559203
-      this.accessibilityAuditConfig.ignoreSelectors(
-          'controlsWithoutLabel',
-          controlsWithoutLabelSelectors);
-
       // Enable when warning is resolved.
       // AX_HTML_01: http://crbug.com/559204
-      this.accessibilityAuditConfig.ignoreSelectors(
-          'humanLangMissing',
-          'html');
+      this.accessibilityAuditConfig.ignoreSelectors('humanLangMissing', 'html');
 
       // Wrap g_browser.receive around a test function so that assert and expect
       // functions can be called from observers.
-      g_browser.receive =
-          this.continueTest(WhenTestDone.EXPECT,
-                            BrowserBridge.prototype.receive.bind(g_browser));
-
-      g_browser.setPollInterval(TESTING_POLL_INTERVAL_MS);
+      g_browser.receive = this.continueTest(
+          WhenTestDone.EXPECT, BrowserBridge.prototype.receive.bind(g_browser));
 
       var runTest = this.deferRunTest(WhenTestDone.EXPECT);
 
@@ -208,9 +175,9 @@ var NetInternalsTest = (function() {
    * @param {number} expectedRows Expected number of rows in the table.
    */
   NetInternalsTest.checkTbodyRows = function(ancestorId, expectedRows) {
-    chai.assert.strictEqual(expectedRows,
-                 NetInternalsTest.getTbodyNumRows(ancestorId),
-                 'Incorrect number of rows in ' + ancestorId);
+    chai.assert.strictEqual(
+        expectedRows, NetInternalsTest.getTbodyNumRows(ancestorId),
+        'Incorrect number of rows in ' + ancestorId);
   };
 
   /**
@@ -306,19 +273,18 @@ var NetInternalsTest = (function() {
       http2: SpdyView.TAB_ID,
       'alt-svc': AltSvcView.TAB_ID,
       quic: QuicView.TAB_ID,
-      sdch: SdchView.TAB_ID,
+      reporting: ReportingView.TAB_ID,
       httpCache: HttpCacheView.TAB_ID,
       modules: ModulesView.TAB_ID,
       prerender: PrerenderView.TAB_ID,
-      bandwidth: BandwidthView.TAB_ID,
-      chromeos: CrosView.TAB_ID
     };
 
-    chai.assert.strictEqual(typeof hashToTabIdMap[hash], 'string',
-                 'Invalid tab anchor: ' + hash);
+    chai.assert.strictEqual(
+        typeof hashToTabIdMap[hash], 'string', 'Invalid tab anchor: ' + hash);
     var tabId = hashToTabIdMap[hash];
-    chai.assert.strictEqual('object', typeof NetInternalsTest.getTab(tabId),
-                 'Invalid tab: ' + tabId);
+    chai.assert.strictEqual(
+        'object', typeof NetInternalsTest.getTab(tabId),
+        'Invalid tab: ' + tabId);
     return tabId;
   };
 
@@ -330,14 +296,16 @@ var NetInternalsTest = (function() {
     var tabId = NetInternalsTest.getTabId(hash);
 
     // Make sure the tab link is visible, as we only simulate normal usage.
-    chai.assert.isTrue(NetInternalsTest.tabLinkIsVisible(tabId),
-               tabId + ' does not have a visible tab link.');
+    chai.assert.isTrue(
+        NetInternalsTest.tabLinkIsVisible(tabId),
+        tabId + ' does not have a visible tab link.');
     var tabLinkNode = NetInternalsTest.getTab(tabId).tabLink;
 
     // Simulate a left click on the link.
     var mouseEvent = document.createEvent('MouseEvents');
-    mouseEvent.initMouseEvent('click', true, true, window, 1, 0, 0, 0, 0, false,
-                              false, false, false, 0, null);
+    mouseEvent.initMouseEvent(
+        'click', true, true, window, 1, 0, 0, 0, 0, false, false, false, false,
+        0, null);
     tabLinkNode.dispatchEvent(mouseEvent);
 
     // Make sure the hash changed.
@@ -351,9 +319,9 @@ var NetInternalsTest = (function() {
     var tabSwitcher = MainView.getInstance().tabSwitcher();
     var tabIdToView = tabSwitcher.getAllTabViews();
     for (var curTabId in tabIdToView) {
-      chai.assert.strictEqual(curTabId == tabId,
-                   tabSwitcher.getTabView(curTabId).isVisible(),
-                   curTabId + ': Unexpected visibility state.');
+      chai.assert.strictEqual(
+          curTabId == tabId, tabSwitcher.getTabView(curTabId).isVisible(),
+          curTabId + ': Unexpected visibility state.');
     }
   };
 
@@ -365,21 +333,22 @@ var NetInternalsTest = (function() {
    * @param {bool+}: tourTabs True if tabs expected to be visible should should
    *     each be navigated to as well.
    */
-  NetInternalsTest.checkTabLinkVisibility = function(tabVisibilityState,
-                                                     tourTabs) {
+  NetInternalsTest.checkTabLinkVisibility = function(
+      tabVisibilityState, tourTabs) {
     // The currently active tab should have a link that is visible.
-    chai.assert.isTrue(NetInternalsTest.tabLinkIsVisible(
-                   NetInternalsTest.getActiveTabId()));
+    chai.assert.isTrue(
+        NetInternalsTest.tabLinkIsVisible(NetInternalsTest.getActiveTabId()));
 
     // Check visibility state of all tabs.
     var tabCount = 0;
     for (var hash in tabVisibilityState) {
       var tabId = NetInternalsTest.getTabId(hash);
-      chai.assert.strictEqual('object', typeof NetInternalsTest.getTab(tabId),
-                   'Invalid tab: ' + tabId);
-      chai.assert.strictEqual(tabVisibilityState[hash],
-                   NetInternalsTest.tabLinkIsVisible(tabId),
-                   tabId + ' visibility state is unexpected.');
+      chai.assert.strictEqual(
+          'object', typeof NetInternalsTest.getTab(tabId),
+          'Invalid tab: ' + tabId);
+      chai.assert.strictEqual(
+          tabVisibilityState[hash], NetInternalsTest.tabLinkIsVisible(tabId),
+          tabId + ' visibility state is unexpected.');
       tabCount++;
     }
 
@@ -519,15 +488,13 @@ var NetInternalsTest = (function() {
 
       // Function to run the next task in the queue.
       var runNextTask = this.taskQueue_.runNextTask_.bind(
-                            this.taskQueue_,
-                            Array.prototype.slice.call(arguments));
+          this.taskQueue_, Array.prototype.slice.call(arguments));
 
       // If we need to start the next task asynchronously, we need to wrap
       // it with the test framework code.
       if (this.completeAsync_) {
-        window.setTimeout(activeTest_.continueTest(WhenTestDone.EXPECT,
-                                                   runNextTask),
-                          0);
+        window.setTimeout(
+            activeTest_.continueTest(WhenTestDone.EXPECT, runNextTask), 0);
         return;
       }
 
@@ -559,94 +526,6 @@ var NetInternalsTest = (function() {
       this.taskFunction_.apply(null, Array.prototype.slice.call(arguments));
       this.onTaskDone();
     }
-  };
-
-  /**
-   * A Task that converts the given path into a URL served by the TestServer.
-   * The resulting URL will be passed to the next task.  Will also start the
-   * TestServer, if needed.
-   * @param {string} path Path to convert to a URL.
-   * @extends {NetInternalsTest.Task}
-   * @constructor
-   */
-  NetInternalsTest.GetTestServerURLTask = function(path) {
-    NetInternalsTest.Task.call(this);
-    chai.assert.strictEqual('string', typeof path);
-    this.path_ = path;
-  };
-
-  NetInternalsTest.GetTestServerURLTask.prototype = {
-    __proto__: NetInternalsTest.Task.prototype,
-
-    /**
-     * Sets |NetInternals.callback|, and sends the path to the browser process.
-     */
-    start: function() {
-      NetInternalsTest.setCallback(this.onURLReceived_.bind(this));
-      chrome.send('getTestServerURL', [this.path_]);
-    },
-
-    /**
-     * Completes the Task, passing the url on to the next Task.
-     * @param {string} url TestServer URL of the input path.
-     */
-    onURLReceived_: function(url) {
-      chai.assert.strictEqual('string', typeof url);
-      this.onTaskDone(url);
-    }
-  };
-
-  /**
-   * A Task that creates an incognito window and only completes once it has
-   * navigated to about:blank.  The waiting is required to avoid reentrancy
-   * issues, since the function to create the incognito browser also waits
-   * for the navigation to complete.  May not be called if there's already an
-   * incognito browser in existence.
-   * @extends {NetInternalsTest.Task}
-   * @constructor
-   */
-  NetInternalsTest.CreateIncognitoBrowserTask = function() {
-    NetInternalsTest.Task.call(this);
-  };
-
-  NetInternalsTest.CreateIncognitoBrowserTask.prototype = {
-    __proto__: NetInternalsTest.Task.prototype,
-
-    /**
-     * Tells the browser process to create an incognito browser, and sets
-     * up a callback to be called on completion.
-     */
-    start: function() {
-      // Reuse the BrowserBridge's callback mechanism, since it's already
-      // wrapped in our test harness.
-      chai.assert.strictEqual('undefined',
-                   typeof g_browser.onIncognitoBrowserCreatedForTest);
-      g_browser.onIncognitoBrowserCreatedForTest =
-          this.onIncognitoBrowserCreatedForTest.bind(this);
-
-      chrome.send('createIncognitoBrowser');
-    },
-
-    /**
-     * Deletes the callback function, and completes the task.
-     */
-    onIncognitoBrowserCreatedForTest: function() {
-      delete g_browser.onIncognitoBrowserCreatedForTest;
-      this.onTaskDone();
-    }
-  };
-
-  /**
-   * Returns a task that closes an incognito window created with the task
-   * above.  May only be called if there's an incognito window created by
-   * the above function that has yet to be closed.  Returns immediately.
-   * @return {Task} Task that closes incognito browser window.
-   */
-  NetInternalsTest.getCloseIncognitoBrowserTask = function() {
-    return new NetInternalsTest.CallFunctionTask(
-        function() {
-          chrome.send('closeIncognitoBrowser');
-        });
   };
 
   /**
@@ -700,8 +579,8 @@ var NetInternalsTest = (function() {
    * @see Event
    */
   NetInternalsTest.createBeginEvent = function(source, type, time, params) {
-    return new NetInternalsTest.Event(source, type, time,
-                                      EventPhase.PHASE_BEGIN, params);
+    return new NetInternalsTest.Event(
+        source, type, time, EventPhase.PHASE_BEGIN, params);
   };
 
   /**
@@ -710,8 +589,8 @@ var NetInternalsTest = (function() {
    * @see Event
    */
   NetInternalsTest.createEndEvent = function(source, type, time, params) {
-    return new NetInternalsTest.Event(source, type, time,
-                                      EventPhase.PHASE_END, params);
+    return new NetInternalsTest.Event(
+        source, type, time, EventPhase.PHASE_END, params);
   };
 
   /**
@@ -724,7 +603,7 @@ var NetInternalsTest = (function() {
    */
   NetInternalsTest.createMatchingEndEvent = function(beginEvent, time, params) {
     return NetInternalsTest.createEndEvent(
-               beginEvent.source, beginEvent.type, time, params);
+        beginEvent.source, beginEvent.type, time, params);
   };
 
   /**
@@ -733,8 +612,7 @@ var NetInternalsTest = (function() {
    */
   NetInternalsTest.expectStatusViewNodeVisible = function(nodeId) {
     var allIds = [
-      CaptureStatusView.MAIN_BOX_ID,
-      LoadedStatusView.MAIN_BOX_ID,
+      CaptureStatusView.MAIN_BOX_ID, LoadedStatusView.MAIN_BOX_ID,
       HaltedStatusView.MAIN_BOX_ID
     ];
 

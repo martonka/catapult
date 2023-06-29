@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import errno
 import json
 import logging
@@ -14,6 +15,20 @@ from telemetry.internal.backends.chrome_inspector import websocket
 class WebSocketDisconnected(exceptions.Error):
   """An attempt was made to use a web socket after it had been disconnected."""
   pass
+
+
+class WebSocketException(exceptions.Error):
+  """Wrapper around websocket.WebSocketException to make the error handleable.
+  """
+  def __init__(self, websocket_error):
+    msg = 'WebSocketException of type %s. Error message: %s' % (
+        type(websocket_error), repr(websocket_error))
+    super(WebSocketException, self).__init__(msg)
+    self._websocket_error_type = type(websocket_error)
+
+  @property
+  def websocket_error_type(self):
+    return self._websocket_error_type
 
 
 class InspectorWebsocket(object):
@@ -57,11 +72,17 @@ class InspectorWebsocket(object):
     """Connects the websocket.
 
     Raises:
-      websocket.WebSocketException
+      inspector_websocket.WebSocketException
       socket.error
     """
     assert not self._socket
-    self._socket = websocket.create_connection(url, timeout=timeout)
+
+    # websocket-client uses a custom UTF8 validation implementation which is
+    # immensely slow. Profiling shows validation of 15MB of tracing data takes
+    # ~3min. https://crbug.com/753591.
+    self._socket = websocket.CreateConnection(
+        url, timeout=timeout,
+        skip_utf8_validation=True)
     self._cur_socket_timeout = 0
     self._next_request_id = 0
 
@@ -69,7 +90,7 @@ class InspectorWebsocket(object):
     """Disconnects the inspector websocket.
 
     Raises:
-      websocket.WebSocketException
+      inspector_websocket.WebSocketException
       socket.error
     """
     if self._socket:
@@ -80,8 +101,7 @@ class InspectorWebsocket(object):
     """Sends a request without waiting for a response.
 
     Raises:
-      websocket.WebSocketException: Error from websocket library.
-      socket.error: Error from websocket library.
+      inspector_websocket.WebSocketException: Error from websocket library.
       exceptions.WebSocketDisconnected: The socket was disconnected.
     """
     self._SendRequest(req)
@@ -89,18 +109,21 @@ class InspectorWebsocket(object):
   def _SendRequest(self, req):
     if not self._socket:
       raise WebSocketDisconnected()
-    req['id'] = self._next_request_id
-    self._next_request_id += 1
-    data = json.dumps(req)
-    self._socket.send(data)
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-      logging.debug('sent [%s]', json.dumps(req, indent=2, sort_keys=True))
+    try:
+      req['id'] = self._next_request_id
+      self._next_request_id += 1
+      data = json.dumps(req)
+      self._socket.send(data.encode('utf-8'))
+      if logging.getLogger().isEnabledFor(logging.DEBUG):
+        logging.debug('sent [%s]', json.dumps(req, indent=2, sort_keys=True))
+    except websocket.WebSocketException as err:
+      raise WebSocketException(err)
 
   def SyncRequest(self, req, timeout):
     """Sends a request and waits for a response.
 
     Raises:
-      websocket.WebSocketException: Error from websocket library.
+      inspector_websocket.WebSocketException: Error from websocket library.
       socket.error: Error from websocket library.
       exceptions.WebSocketDisconnected: The socket was disconnected.
     """
@@ -127,7 +150,7 @@ class InspectorWebsocket(object):
     """Waits for responses from the websocket, dispatching them as necessary.
 
     Raises:
-      websocket.WebSocketException: Error from websocket library.
+      inspector_websocket.WebSocketException: Error from websocket library.
       socket.error: Error from websocket library.
       exceptions.WebSocketDisconnected: The socket was disconnected.
     """
@@ -147,7 +170,7 @@ class InspectorWebsocket(object):
     while True:
       try:
         data = self._socket.recv()
-      except socket.error, e:
+      except socket.error as e:
         if e.errno == errno.EAGAIN:
           # Resource is temporarily unavailable. Try again.
           # See https://code.google.com/p/chromium/issues/detail?id=545853#c3
@@ -155,6 +178,8 @@ class InspectorWebsocket(object):
           time.sleep(0.1)
         else:
           raise
+      except websocket.WebSocketException as err:
+        raise WebSocketException(err)
       else:
         break
 
@@ -173,7 +198,7 @@ class InspectorWebsocket(object):
     dot_pos = mname.find('.')
     domain_name = mname[:dot_pos]
     if not domain_name in self._domain_handlers:
-      logging.warn('Unhandled inspector message: %s', result)
+      logging.debug('Unhandled inspector message: %s', result)
       return
 
     self._domain_handlers[domain_name](result)

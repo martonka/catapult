@@ -1,32 +1,51 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Functions for fetching and updating a list of top-level tests."""
+from __future__ import print_function
+from __future__ import division
+from __future__ import absolute_import
 
+import collections
 import logging
 
 from google.appengine.api import datastore_errors
+from google.appengine.ext import ndb
 
-from dashboard import datastore_hooks
-from dashboard import request_handler
-from dashboard import stored_object
+from dashboard.common import datastore_hooks
+from dashboard.common import descriptor
+from dashboard.common import request_handler
+from dashboard.common import stored_object
+from dashboard.common import namespaced_stored_object
+from dashboard.common import utils
 from dashboard.models import graph_data
 
 # TestMetadata suite cache key.
 _LIST_SUITES_CACHE_KEY = 'list_tests_get_test_suites'
 
+TEST_SUITES_2_CACHE_KEY = 'test_suites_2'
+
+
+@ndb.synctasklet
+def FetchCachedTestSuites2():
+  result = yield FetchCachedTestSuites2Async()
+  raise ndb.Return(result)
+
+
+@ndb.tasklet
+def FetchCachedTestSuites2Async():
+  results = yield namespaced_stored_object.GetAsync(TEST_SUITES_2_CACHE_KEY)
+  raise ndb.Return(results)
+
 
 def FetchCachedTestSuites():
   """Fetches cached test suite data."""
-  cache_key = _NamespaceKey(_LIST_SUITES_CACHE_KEY)
-  cached = stored_object.Get(cache_key)
+  cached = namespaced_stored_object.Get(_LIST_SUITES_CACHE_KEY)
   if cached is None:
     # If the cache test suite list is not set, update it before fetching.
     # This is for convenience when testing sending of data to a local instance.
-    namespace = datastore_hooks.GetNamespace()
-    UpdateTestSuites(namespace)
-    cached = stored_object.Get(cache_key)
+    UpdateTestSuites(datastore_hooks.GetNamespace())
+    cached = namespaced_stored_object.Get(_LIST_SUITES_CACHE_KEY)
   return cached
 
 
@@ -54,14 +73,45 @@ def UpdateTestSuites(permissions_namespace):
   """Updates test suite data for either internal or external users."""
   logging.info('Updating test suite data for: %s', permissions_namespace)
   suite_dict = _CreateTestSuiteDict()
-  key = _NamespaceKey(_LIST_SUITES_CACHE_KEY, namespace=permissions_namespace)
+  key = namespaced_stored_object.NamespaceKey(_LIST_SUITES_CACHE_KEY,
+                                              permissions_namespace)
   stored_object.Set(key, suite_dict)
 
+  stored_object.Set(
+      namespaced_stored_object.NamespaceKey(TEST_SUITES_2_CACHE_KEY,
+                                            permissions_namespace),
+      _ListTestSuites())
 
-def _NamespaceKey(key, namespace=None):
-  if not namespace:
-    namespace = datastore_hooks.GetNamespace()
-  return '%s__%s' % (namespace, key)
+
+@ndb.tasklet
+def _ListTestSuitesAsync(test_suites, partial_tests, parent_test=None):
+  # Some test suites are composed of multiple test path components. See
+  # Descriptor. When a TestMetadata key doesn't contain enough test path
+  # components to compose a full test suite, add its key to partial_tests so
+  # that the caller can run another query with parent_test.
+  query = graph_data.TestMetadata.query()
+  query = query.filter(graph_data.TestMetadata.parent_test == parent_test)
+  query = query.filter(graph_data.TestMetadata.deprecated == False)
+  keys = yield query.fetch_async(keys_only=True)
+  for key in keys:
+    test_path = utils.TestPath(key)
+    desc = yield descriptor.Descriptor.FromTestPathAsync(test_path)
+    if desc.test_suite:
+      test_suites.add(desc.test_suite)
+    elif partial_tests is not None:
+      partial_tests.add(key)
+    else:
+      logging.error('Unable to parse "%s"', test_path)
+
+
+@ndb.synctasklet
+def _ListTestSuites():
+  test_suites = set()
+  partial_tests = set()
+  yield _ListTestSuitesAsync(test_suites, partial_tests)
+  yield [_ListTestSuitesAsync(test_suites, None, key) for key in partial_tests]
+  test_suites = sorted(test_suites)
+  raise ndb.Return(test_suites)
 
 
 def _CreateTestSuiteDict():
@@ -79,31 +129,32 @@ def _CreateTestSuiteDict():
       {
           'my_test_suite': {
               'mas': {'ChromiumPerf': {'mac': False, 'linux': False}},
-              'mon': ['average_commit_time/www.yahoo.com'],
               'dep': True,
               'des': 'A description.'
           },
           ...
       }
 
-    Where 'mas', 'mon', 'dep', and 'des' are abbreviations for 'masters',
-    'monitored', 'deprecated', and 'description', respectively.
+    Where 'mas', 'dep', and 'des' are abbreviations for 'masters',
+    'deprecated', and 'description', respectively.
   """
-  suites = _FetchSuites()
-  suite_to_masters = _CreateSuiteMastersDict(suites)
-  suite_to_description = _CreateSuiteDescriptionDict(suites)
-  suite_to_monitored = _CreateSuiteMonitoredDict()
-  nondeprecated_suites = _CreateSuiteNondeprecatedSet(suites)
+  result = collections.defaultdict(lambda: {'mas': {}, 'dep': True})
 
-  result = {}
-  for name in suite_to_masters:
-    result[name] = {'mas': suite_to_masters[name]}
-    if name in suite_to_monitored:
-      result[name]['mon'] = suite_to_monitored[name]
-    if name in suite_to_description:
-      result[name]['des'] = suite_to_description[name]
-    if name not in nondeprecated_suites:
-      result[name]['dep'] = True
+  for s in _FetchSuites():
+    v = result[s.test_name]
+
+    if 'des' not in v and s.description:
+      v['des'] = s.description
+
+    # Only depreccate when all tests are deprecated
+    v['dep'] &= s.deprecated
+
+    if s.master_name not in v['mas']:
+      v['mas'][s.master_name] = {}
+    if s.bot_name not in v['mas'][s.master_name]:
+      v['mas'][s.master_name][s.bot_name] = s.deprecated
+
+  result.default_factory = None
   return result
 
 
@@ -111,101 +162,21 @@ def _FetchSuites():
   """Fetches Tests with deprecated and description projections."""
   suite_query = graph_data.TestMetadata.query(
       graph_data.TestMetadata.parent_test == None)
-  suites = []
   cursor = None
   more = True
   try:
     while more:
       some_suites, cursor, more = suite_query.fetch_page(
-          2000, start_cursor=cursor,
-          projection=['deprecated', 'description'])
-      suites.extend(some_suites)
+          2000,
+          start_cursor=cursor,
+          projection=['deprecated', 'description'],
+          use_cache=False,
+          use_memcache=False)
+      for s in some_suites:
+        yield s
   except datastore_errors.Timeout:
-    logging.error('Timeout after fetching %d test suites.', len(suites))
-  return suites
-
-
-def _CreateSuiteMastersDict(suites):
-  """Returns an initial suite dict with names mapped to masters.
-
-  Args:
-    suites: A list of entities for top-level TestMetadata entities.
-
-  Returns:
-    A dictionary mapping the test-suite names to dicts which just have
-    the key "masters", the value of which is a list of dicts mapping
-    master names to dict of bots.
-  """
-  name_to_suites = {}
-  for suite in suites:
-    name = suite.test_name
-    if name not in name_to_suites:
-      name_to_suites[name] = []
-    name_to_suites[name].append(suite)
-
-  result = {}
-  for name, this_suites in name_to_suites.iteritems():
-    result[name] = _MasterToBotsToDeprecatedDict(this_suites)
-  return result
-
-
-def _MasterToBotsToDeprecatedDict(suites):
-  """Makes a dictionary listing masters, bots and deprecated for tests.
-
-  Args:
-    suites: A collection of test suite TestMetadata entities. All of the keys in
-        this set should have the same test suite name.
-
-  Returns:
-    A dictionary mapping master names to bot names to deprecated.
-  """
-  result = {}
-  for master in {s.master_name for s in suites}:
-    bot = {}
-    for suite in suites:
-      if suite.master_name == master:
-        bot[suite.bot_name] = suite.deprecated
-    result[master] = bot
-  return result
-
-
-def _CreateSuiteMonitoredDict():
-  """Makes a dict of test suite names to lists of monitored sub-tests."""
-  suites = _FetchSuitesWithMonitoredProperty()
-  result = {}
-  for suite in suites:
-    name = suite.test_name
-    if name not in result:
-      result[name] = set()
-    result[name].update(map(_GetTestSubPath, suite.monitored))
-  return {name: sorted(monitored) for name, monitored in result.items()}
-
-
-def _FetchSuitesWithMonitoredProperty():
-  """Fetches Tests with a projection query for the "monitored" property.
-
-  Empty repeated properties are not indexed, so we have to make this
-  query separate.
-  """
-  suite_query = graph_data.TestMetadata.query(
-      graph_data.TestMetadata.parent_test == None)
-  # Request only a certain number of entities at a time. This is meant to
-  # decrease the time taken per datastore operation, to prevent timeouts,
-  # but it would not decrease the total time taken.
-  suites = []
-  cursor = None
-  more = True
-  try:
-    while more:
-      # By experiment, it seems that fetching 2000 takes less than 2 seconds,
-      # and the time-out happens after at least 10 seconds.
-      some_suites, cursor, more = suite_query.fetch_page(
-          2000, start_cursor=cursor, projection=['monitored'])
-      suites.extend(some_suites)
-  except datastore_errors.Timeout:
-    logging.error('Timeout after fetching %d monitored test suites.',
-                  len(suites))
-  return suites
+    logging.error('Timeout fetching test suites.')
+  return
 
 
 def _GetTestSubPath(key):
@@ -221,23 +192,3 @@ def _GetTestSubPath(key):
     Slash-separated test path part after master/bot/suite.
   """
   return '/'.join(p for p in key.string_id().split('/')[3:])
-
-
-def _CreateSuiteNondeprecatedSet(suites):
-  """Makes a set of test suites where all are nondeprecated."""
-  return {s.test_name for s in suites if not s.deprecated}
-
-
-def _CreateSuiteDescriptionDict(suites):
-  """Gets a dict of test suite names to descriptions."""
-  # Because of the way that descriptions are specified, all of the test suites
-  # for different bots should have te same description. We only need to get
-  # description from one entity for each test suite name.
-  results = {}
-  for suite in suites:
-    name = suite.test_name
-    if name in results:
-      continue
-    if suite.description:
-      results[name] = suite.description
-  return results

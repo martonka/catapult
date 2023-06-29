@@ -5,7 +5,6 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 <link rel="import" href="/tracing/base/base.html">
-<link rel="import" href="/tracing/base/iteration_helpers.html">
 <link rel="import" href="/tracing/base/utils.html">
 <link rel="import" href="/tracing/base/xhr.html">
 <link rel="import" href="/tracing/extras/full_config.html">
@@ -17,15 +16,14 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.mre', function() {
-
-  var Failure = tr.mre.Failure;
+  const Failure = tr.mre.Failure;
 
   function runAndConvertErrorsToFailures(result, job,
-                                         traceHandle, cb, opt_this) {
+      traceHandle, cb, opt_this) {
     try {
       cb.call(opt_this);
     } catch (e) {
-      var err = tr.b.normalizeException(e);
+      const err = tr.b.normalizeException(e);
       // TODO(eakuefner): Set job once reduction is implemented.
       result.addFailure(new Failure(
           job, job.mapFunctionHandle.asUserFriendlyString(),
@@ -35,8 +33,8 @@ tr.exportTo('tr.mre', function() {
 
   function mapSingleTrace(result, model, options, mapFunction) {
     // Map the function.
-    var numPairsBeforeMapping = tr.b.dictionaryLength(result.pairs);
-    var numFailuresBeforeMapping = result.failures.length;
+    const numPairsBeforeMapping = Object.keys(result.pairs).length;
+    const numFailuresBeforeMapping = result.failures.length;
     try {
       mapFunction(result, model, options);
     } catch (ex) {
@@ -44,19 +42,19 @@ tr.exportTo('tr.mre', function() {
       throw ex;
     }
 
-    var addedPairs = (tr.b.dictionaryLength(result.pairs) >
+    const addedPairs = (Object.keys(result.pairs).length >
         numPairsBeforeMapping);
-    var addedFailures = result.failures.length > numFailuresBeforeMapping;
+    const addedFailures = result.failures.length > numFailuresBeforeMapping;
     if (!(addedPairs || addedFailures)) {
-      var err = new Error('Mapper did not add any results!');
+      const err = new Error('Mapper did not add any results!');
       err.name = 'NoResultsAddedError';
       throw err;
     }
   }
 
   return {
-    mapSingleTrace: mapSingleTrace,
-    runAndConvertErrorsToFailures: runAndConvertErrorsToFailures
+    mapSingleTrace,
+    runAndConvertErrorsToFailures
   };
 });
 </script>

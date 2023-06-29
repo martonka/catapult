@@ -13,84 +13,80 @@ found in the LICENSE file.
 'use strict';
 
 tr.b.unittest.testSuite(function() {
-  var Cpu = tr.model.Cpu;
-  var CpuTrack = tr.ui.tracks.CpuTrack;
-  var ThreadSlice = tr.model.ThreadSlice;
-  var StackFrame = tr.model.StackFrame;
-  var Sample = tr.model.Sample;
-  var Thread = tr.model.Thread;
-  var Viewport = tr.ui.TimelineViewport;
+  const Cpu = tr.model.Cpu;
+  const CpuTrack = tr.ui.tracks.CpuTrack;
+  const ThreadSlice = tr.model.ThreadSlice;
+  const StackFrame = tr.model.StackFrame;
+  const Sample = tr.model.Sample;
+  const Thread = tr.model.Thread;
+  const Viewport = tr.ui.TimelineViewport;
 
   test('basicCpu', function() {
-    var cpu = new Cpu({}, 7);
+    const cpu = new Cpu({}, 7);
     cpu.slices = [
       new ThreadSlice('', 'a', 0, 1, {}, 1),
       new ThreadSlice('', 'b', 1, 2.1, {}, 4.8)
     ];
     cpu.updateBounds();
 
-    var testEl = document.createElement('div');
-    var viewport = new Viewport(testEl);
+    const testEl = document.createElement('div');
+    const viewport = new Viewport(testEl);
 
-    var drawingContainer = new tr.ui.tracks.DrawingContainer(viewport);
+    const drawingContainer = new tr.ui.tracks.DrawingContainer(viewport);
 
-    var track = new CpuTrack(viewport);
+    const track = new CpuTrack(viewport);
     Polymer.dom(drawingContainer).appendChild(track);
 
     track.heading = 'CPU ' + cpu.cpuNumber;
     track.cpu = cpu;
-    var dt = new tr.ui.TimelineDisplayTransform();
+    const dt = new tr.ui.TimelineDisplayTransform();
     dt.xSetWorldBounds(0, 11.1, track.clientWidth);
     track.viewport.setDisplayTransformImmediately(dt);
   });
 
 
   test('withSamples', function() {
-    var thread;
-    var cpu;
-    var model = tr.c.TestUtils.newModelWithEvents([], {
+    let thread;
+    let cpu;
+    const model = tr.c.TestUtils.newModelWithEvents([], {
       shiftWorldToZero: false,
       pruneContainers: false,
-      customizeModelCallback: function(model) {
+      customizeModelCallback(model) {
         cpu = model.kernel.getOrCreateCpu(1);
         thread = model.getOrCreateProcess(1).getOrCreateThread(2);
 
-        var fA = model.addStackFrame(new StackFrame(
-            undefined, 1, 'cat', 'a', 7));
-        var fAB = model.addStackFrame(new StackFrame(
-            fA, 2, 'cat', 'b', 7));
-        var fABC = model.addStackFrame(new StackFrame(
-            fAB, 3, 'cat', 'c', 7));
-        var fAD = model.addStackFrame(new StackFrame(
-            fA, 4, 'cat', 'd', 7));
+        const nodeA = tr.c.TestUtils.newProfileNode(model, 'a');
+        const nodeB = tr.c.TestUtils.newProfileNode(model, 'b', nodeA);
+        const nodeC = tr.c.TestUtils.newProfileNode(model, 'c', nodeB);
+        const nodeD = tr.c.TestUtils.newProfileNode(model, 'd', nodeA);
 
-        model.samples.push(new Sample(undefined, thread, 'instructions_retired',
-                                      10, fABC, 10));
-        model.samples.push(new Sample(undefined, thread, 'instructions_retired',
-                                      20, fAB, 10));
-        model.samples.push(new Sample(undefined, thread, 'instructions_retired',
-                                      30, fAB, 10));
-        model.samples.push(new Sample(undefined, thread, 'instructions_retired',
-                                      40, fAD, 10));
+        model.samples.push(new Sample(10, 'instructions_retired', nodeC, thread,
+            undefined, 10));
+        model.samples.push(new Sample(20, 'instructions_retired', nodeB, thread,
+            undefined, 10));
+        model.samples.push(new Sample(30, 'instructions_retired', nodeB, thread,
+            undefined, 10));
+        model.samples.push(new Sample(40, 'instructions_retired', nodeD, thread,
+            undefined, 10));
 
-        model.samples.push(new Sample(undefined, thread, 'page_fault',
-                                      25, fAB, 10));
-        model.samples.push(new Sample(undefined, thread, 'page_fault',
-                                      35, fAD, 10));
+        model.samples.push(new Sample(25, 'page_fault', nodeB, thread,
+            undefined, 10));
+        model.samples.push(new Sample(35, 'page_fault', nodeD, thread,
+            undefined, 10));
       }
     });
 
-    var testEl = document.createElement('div');
-    var viewport = new Viewport(testEl);
+    const testEl = document.createElement('div');
+    const viewport = new Viewport(testEl);
 
-    var drawingContainer = new tr.ui.tracks.DrawingContainer(viewport);
+    const drawingContainer = new tr.ui.tracks.DrawingContainer(viewport);
 
-    var track = new CpuTrack(viewport);
+    const track = new CpuTrack(viewport);
     Polymer.dom(drawingContainer).appendChild(track);
 
     track.heading = 'CPU ' + cpu.cpuNumber;
     track.cpu = cpu;
-    var dt = new tr.ui.TimelineDisplayTransform();
+    const dt = new tr.ui.TimelineDisplayTransform();
     dt.xSetWorldBounds(0, 11.1, track.clientWidth);
     track.viewport.setDisplayTransformImmediately(dt);
   });

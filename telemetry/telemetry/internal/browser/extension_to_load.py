@@ -1,6 +1,7 @@
 # Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
 import os
 
 from telemetry.internal.backends.chrome import crx_id
@@ -13,22 +14,18 @@ class MissingPublicKeyException(Exception):
   pass
 
 class ExtensionToLoad(object):
-  def __init__(self, path, browser_type, is_component=False):
+  def __init__(self, path, browser_type):
     if not os.path.isdir(path):
       raise ExtensionPathNonExistentException(
           'Extension path not a directory %s' % path)
     self._path = path
     self._local_path = path
-    self._is_component = is_component
-    if is_component and not crx_id.HasPublicKey(path):
-      raise MissingPublicKeyException(
-         'Component extension %s must have a public key' % path)
-
     # It is possible that we are running telemetry on Windows targeting
     # a remote CrOS or Android device. In this case, we need the
     # browser_type argument to determine how we should encode
     # the extension path.
-    self._is_win = (os.name == 'nt'
+    self._is_win = (
+        os.name == 'nt'
         and not (browser_type.startswith('android')
                  or browser_type.startswith('cros')))
 
@@ -60,7 +57,3 @@ class ExtensionToLoad(object):
   def local_path(self, local_path):
     self._local_path = local_path
 
-  @property
-  def is_component(self):
-    """Whether this extension should be loaded as a component extension."""
-    return self._is_component

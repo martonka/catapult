@@ -2,12 +2,13 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
+import six
+
 from py_trace_event import trace_event
 
 
-class AppBackend(object):
-
-  __metaclass__ = trace_event.TracedMetaClass
+class AppBackend(six.with_metaclass(trace_event.TracedMetaClass, object)):
 
   def __init__(self, app_type, platform_backend):
     super(AppBackend, self).__init__()
@@ -15,10 +16,8 @@ class AppBackend(object):
     self._app_type = app_type
     self._platform_backend = platform_backend
 
-  def __del__(self):
-    self.Close()
-
   def SetApp(self, app):
+    assert app is not None
     self._app = app
 
   @property
@@ -30,15 +29,8 @@ class AppBackend(object):
     return self._app_type
 
   @property
-  def pid(self):
-    raise NotImplementedError
-
-  @property
   def platform_backend(self):
     return self._platform_backend
-
-  def Start(self):
-    raise NotImplementedError
 
   def Foreground(self):
     # TODO(catapult:#2194): Remove the unnecessary pass below when the method
@@ -46,17 +38,11 @@ class AppBackend(object):
     pass  # pylint: disable=unnecessary-pass
     raise NotImplementedError
 
+  def Background(self):
+    raise NotImplementedError
+
   def Close(self):
     raise NotImplementedError
 
   def IsAppRunning(self):
-    raise NotImplementedError
-
-  def GetStandardOutput(self):
-    raise NotImplementedError
-
-  def GetStackTrace(self):
-    raise NotImplementedError
-
-  def GetMostRecentMinidumpPath(self):
     raise NotImplementedError

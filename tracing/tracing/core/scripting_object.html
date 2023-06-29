@@ -15,12 +15,12 @@ tr.exportTo('tr.c', function() {
   }
 
   ScriptingObject.prototype = {
-    onModelChanged: function(model) {
+    onModelChanged(model) {
     }
   };
 
   return {
-    ScriptingObject: ScriptingObject
+    ScriptingObject,
   };
 });
 </script>

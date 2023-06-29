@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import unittest
 
 from telemetry.timeline import chrome_trace_category_filter
@@ -14,19 +15,13 @@ class ChromeTraceConfigTests(unittest.TestCase):
 
     # Trace config for startup tracing.
     self.assertEquals({
-        'record_mode': 'record-as-much-as-possible'
+        'record_mode': 'record-continuously'
     }, config.GetChromeTraceConfigForStartupTracing())
 
     # Trace config for DevTools (modern API).
     self.assertEquals({
-        'recordMode': 'recordAsMuchAsPossible'
+        'recordMode': 'recordContinuously'
     }, config.GetChromeTraceConfigForDevTools())
-
-    # Trace categories and options for DevTools (legacy API).
-    self.assertFalse(config.requires_modern_devtools_tracing_start_api)
-    self.assertEquals(
-        ('', 'record-as-much-as-possible'),
-        config.GetChromeTraceCategoriesAndOptionsForDevTools())
 
   def testBasic(self):
     category_filter = chrome_trace_category_filter.ChromeTraceCategoryFilter(
@@ -38,7 +33,7 @@ class ChromeTraceConfigTests(unittest.TestCase):
     # Trace config for startup tracing.
     self.assertEquals({
         'excluded_categories': ['y'],
-        'included_categories': ['x', 'disabled-by-default-z'],
+        'included_categories': sorted(['x', 'disabled-by-default-z']),
         'record_mode': 'record-until-full',
         'synthetic_delays': ['DELAY(7;foo)']
     }, config.GetChromeTraceConfigForStartupTracing())
@@ -46,17 +41,31 @@ class ChromeTraceConfigTests(unittest.TestCase):
     # Trace config for DevTools (modern API).
     self.assertEquals({
         'excludedCategories': ['y'],
-        'includedCategories': ['x', 'disabled-by-default-z'],
+        'includedCategories': sorted(['x', 'disabled-by-default-z']),
         'recordMode': 'recordUntilFull',
         'syntheticDelays': ['DELAY(7;foo)']
     }, config.GetChromeTraceConfigForDevTools())
 
-    # Trace categories and options for DevTools (legacy API).
-    self.assertFalse(config.requires_modern_devtools_tracing_start_api)
-    self.assertEquals(
-        ('x,disabled-by-default-z,-y,DELAY(7;foo)',
-         'record-until-full'),
-        config.GetChromeTraceCategoriesAndOptionsForDevTools())
+    # Test correct modification of config after enabling systrace.
+    config.SetEnableSystrace()
+    # Test enable systrace with trace config for startup tracing.
+    self.assertEquals({
+        'excluded_categories': ['y'],
+        'included_categories': sorted(['x', 'disabled-by-default-z']),
+        'record_mode': 'record-until-full',
+        'synthetic_delays': ['DELAY(7;foo)'],
+        'enable_systrace': True
+    }, config.GetChromeTraceConfigForStartupTracing())
+
+    # And test again with modern API.
+    self.assertEquals({
+        'excludedCategories': ['y'],
+        'includedCategories': sorted(['x', 'disabled-by-default-z']),
+        'recordMode': 'recordUntilFull',
+        'syntheticDelays': ['DELAY(7;foo)'],
+        'enableSystrace': True
+    }, config.GetChromeTraceConfigForDevTools())
+
 
   def testMemoryDumpConfigFormat(self):
     config = chrome_trace_config.ChromeTraceConfig()
@@ -75,11 +84,6 @@ class ChromeTraceConfigTests(unittest.TestCase):
         'memoryDumpConfig': {'triggers': []},
         'recordMode': 'traceToConsole'
     }, config.GetChromeTraceConfigForDevTools())
-
-    # Trace categories and options for DevTools (legacy API).
-    self.assertTrue(config.requires_modern_devtools_tracing_start_api)
-    with self.assertRaises(AssertionError):
-      config.GetChromeTraceCategoriesAndOptionsForDevTools()
 
     dump_config.AddTrigger('light', 250)
     dump_config.AddTrigger('detailed', 2000)
@@ -106,7 +110,33 @@ class ChromeTraceConfigTests(unittest.TestCase):
         'recordMode': 'traceToConsole'
     }, config.GetChromeTraceConfigForDevTools())
 
-    # Trace categories and options for DevTools (legacy API).
-    self.assertTrue(config.requires_modern_devtools_tracing_start_api)
-    with self.assertRaises(AssertionError):
-      config.GetChromeTraceCategoriesAndOptionsForDevTools()
+  def testUMAHistograms(self):
+    config = chrome_trace_config.ChromeTraceConfig()
+    config.EnableUMAHistograms('Event.Latency.ScrollUpdate.Touch.Metric1')
+    self.assertEquals({
+        'histogramNames': ['Event.Latency.ScrollUpdate.Touch.Metric1'],
+        'recordMode': 'recordContinuously'
+    }, config.GetChromeTraceConfigForDevTools())
+
+    config.EnableUMAHistograms('Event.Latency.ScrollUpdate.Touch.Metric2')
+    self.assertEquals({
+        'histogramNames': ['Event.Latency.ScrollUpdate.Touch.Metric1',
+                           'Event.Latency.ScrollUpdate.Touch.Metric2'],
+        'recordMode': 'recordContinuously'
+    }, config.GetChromeTraceConfigForDevTools())
+
+    config.EnableUMAHistograms('AnotherMetric', 'LastMetric')
+    self.assertEquals({
+        'histogramNames': ['Event.Latency.ScrollUpdate.Touch.Metric1',
+                           'Event.Latency.ScrollUpdate.Touch.Metric2',
+                           'AnotherMetric', 'LastMetric'],
+        'recordMode': 'recordContinuously'
+    }, config.GetChromeTraceConfigForDevTools())
+
+  def testTraceBufferSize(self):
+    config = chrome_trace_config.ChromeTraceConfig()
+    config.SetTraceBufferSizeInKb(42)
+    self.assertEquals({
+        'recordMode': 'recordContinuously',
+        'traceBufferSizeInKb': 42
+    }, config.GetChromeTraceConfigForDevTools())

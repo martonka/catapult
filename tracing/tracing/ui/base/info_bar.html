@@ -20,12 +20,12 @@ found in the LICENSE file.
       border-right: 1px solid #A3A3A3;
       border-top: 1px solid white;
       display: flex;
-      height: 26px;
+      min-height: 26px;
       padding: 0 3px 0 3px;
     }
 
-    :host(.info-bar-hidden) {
-      display: none;
+    :host([hidden]) {
+      display: none !important;
     }
 
     #message { flex: 1 1 auto; }
@@ -41,12 +41,11 @@ found in the LICENSE file.
 Polymer({
   is: 'tr-ui-b-info-bar',
 
-  ready: function() {
+  ready() {
     this.messageEl_ = this.$.message;
     this.buttonsEl_ = this.$.buttons;
 
     this.message = '';
-    this.visible = false;
   },
 
   get message() {
@@ -58,24 +57,21 @@ Polymer({
   },
 
   get visible() {
-    return !Polymer.dom(this).classList.contains('info-bar-hidden');
+    return !this.hidden;
   },
 
   set visible(visible) {
-    if (visible)
-      Polymer.dom(this).classList.remove('info-bar-hidden');
-    else
-      Polymer.dom(this).classList.add('info-bar-hidden');
+    this.hidden = !visible;
   },
 
-  removeAllButtons: function() {
+  removeAllButtons() {
     Polymer.dom(this.buttonsEl_).textContent = '';
   },
 
-  addButton: function(text, clickCallback) {
-    var button = document.createElement('button');
+  addButton(text, clickCallback) {
+    const button = document.createElement('button');
     Polymer.dom(button).textContent = text;
-    button.addEventListener('click', clickCallback);
+    button.addEventListener('click', event => clickCallback(event, this));
     Polymer.dom(this.buttonsEl_).appendChild(button);
     return button;
   }

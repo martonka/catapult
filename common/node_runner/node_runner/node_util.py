@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import os
 import subprocess
 import sys
@@ -24,9 +25,7 @@ class _NodeManager(object):
     self.arch_name = dependency_util.GetArchForCurrentDesktopPlatform(
         self.os_name)
     self.node_path = self.bm.FetchPath('node', self.os_name, self.arch_name)
-    self.npm_path = os.path.abspath(os.path.join(
-        os.path.dirname(self.node_path), '..', 'lib', 'node_modules', 'npm',
-        'bin', 'npm-cli.js'))
+    self.npm_path = self.bm.FetchPath('npm', self.os_name, self.arch_name)
 
     self.node_initialized = False
 
@@ -60,21 +59,3 @@ def GetNodeModulesPath():
     # Escape path on Windows because it's very long and must be passed to NTFS.
     path = u'\\\\?\\' + path
   return path
-
-
-def RunEslint(filenames=None):
-  cmd = [
-      GetNodePath(),
-      os.path.join(GetNodeModulesPath(), 'eslint', 'bin', 'eslint.js'),
-      '--color',
-      '--config',
-      os.path.join(py_utils.GetCatapultDir(), 'common', 'eslint', '.eslintrc'),
-      '--rulesdir',
-      os.path.join(py_utils.GetCatapultDir(), 'common', 'eslint', 'rules')
-  ]
-  if filenames:
-    cmd += filenames
-  try:
-    return subprocess.check_output(cmd, stderr=subprocess.STDOUT)
-  except subprocess.CalledProcessError as e:
-    return e.output

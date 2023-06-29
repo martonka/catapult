@@ -27,15 +27,33 @@ tr.exportTo('tr.v.d', function() {
     constructor(opt_events) {
       super();
       this.eventsByStableId_ = new Map();
+      // TODO(#2431) Plumb canonicalUrl from event.model.
+      this.canonicalUrl_ = undefined;
+
       if (opt_events) {
         if (opt_events instanceof tr.model.EventSet ||
             opt_events instanceof Array) {
-          for (var event of opt_events)
+          for (const event of opt_events) {
             this.add(event);
+          }
         } else {
           this.add(opt_events);
         }
       }
+    }
+
+    clone() {
+      const clone = new tr.v.d.CollectedRelatedEventSet();
+      clone.addDiagnostic(this);
+      return clone;
+    }
+
+    equals(other) {
+      if (this.length !== other.length) return false;
+      for (const event of this) {
+        if (!other.has(event)) return false;
+      }
+      return true;
     }
 
     /**
@@ -57,9 +75,14 @@ tr.exportTo('tr.v.d', function() {
       return this.eventsByStableId_.size;
     }
 
-    *[Symbol.iterator]() {
-      for (var [stableId, event] of this.eventsByStableId_)
+    * [Symbol.iterator]() {
+      for (const event of this.eventsByStableId_.values()) {
         yield event;
+      }
+    }
+
+    get canonicalUrl() {
+      return this.canonicalUrl_;
     }
 
     /**
@@ -73,28 +96,46 @@ tr.exportTo('tr.v.d', function() {
      * @param {boolean=} opt_required
      */
     resolve(model, opt_required) {
-      for (var [stableId, event] of this.eventsByStableId_) {
-        if (!(event instanceof tr.v.d.EventRef))
-          continue;
+      for (const [stableId, value] of this.eventsByStableId_) {
+        if (!(value instanceof tr.v.d.EventRef)) continue;
 
-        event = model.getEventByStableId(stableId);
-        if (event instanceof tr.model.Event)
+        const event = model.getEventByStableId(stableId);
+        if (event instanceof tr.model.Event) {
           this.eventsByStableId_.set(stableId, event);
-        else if (opt_required)
+        } else if (opt_required) {
           throw new Error('Unable to find Event ' + stableId);
+        }
       }
+    }
+
+    serialize(serializer) {
+      return [...this].map(event => [
+        event.stableId,
+        serializer.getOrAllocateId(event.title),
+        event.start,
+        event.duration,
+      ]);
     }
 
     asDictInto_(d) {
       d.events = [];
-      for (var event of this) {
+      for (const event of this) {
         d.events.push({
           stableId: event.stableId,
           title: event.title,
-          start: event.start,
-          duration: event.duration
+          start: tr.b.Unit.byName.timeStampInMs.truncate(event.start),
+          duration: tr.b.Unit.byName.timeDurationInMs.truncate(event.duration),
         });
       }
+    }
+
+    static deserialize(data, deserializer) {
+      return new RelatedEventSet(data.map(event => new tr.v.d.EventRef({
+        stableId: event[0],
+        title: deserializer.getObject(event[1]),
+        start: event[2],
+        duration: event[3],
+      })));
     }
 
     static fromDict(d) {
@@ -108,7 +149,7 @@ tr.exportTo('tr.v.d', function() {
   });
 
   return {
-    RelatedEventSet: RelatedEventSet
+    RelatedEventSet,
   };
 });
 </script>

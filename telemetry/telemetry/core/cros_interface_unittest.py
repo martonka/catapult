@@ -6,14 +6,17 @@
 # actually talking to the device. This would improve our coverage quite
 # a bit.
 
+from __future__ import absolute_import
+import os
+import shutil
 import socket
 import tempfile
 import unittest
 import mock
 
+from devil.utils import cmd_helper
 from telemetry.core import cros_interface
 from telemetry import decorators
-from telemetry.internal import forwarders
 from telemetry.internal.forwarders import cros_forwarder
 from telemetry.testing import options_for_unittests
 
@@ -51,6 +54,159 @@ class CrOSInterfaceTest(unittest.TestCase):
       self.assertTrue('CHROMEOS' in hosts)
 
   @decorators.Enabled('chromeos')
+  def testPullDumps(self):
+    """Test that minidumps can be pulled off the device and their mtimes set."""
+    tempdir = tempfile.mkdtemp()
+    try:
+      with self._GetCRI() as cri:
+        time_offset = cri.GetDeviceHostClockOffset()
+        # Make sure we don't end up getting a negative timestamp when we pull
+        # the dump.
+        ts = abs(time_offset) + 1
+        remote_path = '/tmp/dumps/'
+        cri.CROS_MINIDUMP_DIR = remote_path
+        cri.RunCmdOnDevice(['mkdir', '-p', remote_path])
+        # Set the mtime to one second after the epoch
+        cri.RunCmdOnDevice(
+            ['touch', '-d', '@%d' % ts, remote_path + 'test_dump'])
+        try:
+          cri.PullDumps(tempdir)
+        finally:
+          cri.RmRF(remote_path)
+        local_path = os.path.join(tempdir, 'test_dump')
+        self.assertTrue(os.path.exists(local_path))
+        self.assertEqual(os.path.getmtime(local_path), ts - time_offset)
+    finally:
+      shutil.rmtree(tempdir)
+
+  @decorators.Enabled('chromeos')
+  def testPullDumpsOnlyNew(self):
+    """Tests that a minidump is not pulled to the host if it already exists."""
+    tempdir = tempfile.mkdtemp()
+    with open(os.path.join(tempdir, 'old_dump'), 'w'):
+      pass
+    try:
+      with self._GetCRI() as cri:
+        time_offset = cri.GetDeviceHostClockOffset()
+        # Make sure we don't end up getting a negative timestamp when we pull
+        # the dump.
+        ts = abs(time_offset) + 1
+        remote_path = '/tmp/dumps/'
+        cri.CROS_MINIDUMP_DIR = remote_path
+        cri.RunCmdOnDevice(['mkdir', '-p', remote_path])
+        # Set the mtime to one second after the epoch
+        cri.RunCmdOnDevice(
+            ['touch', '-d', '@%d' % ts, remote_path + 'old_dump'])
+        cri.RunCmdOnDevice(
+            ['touch', '-d', '@%d' % ts, remote_path + 'new_dump'])
+        cri.PullDumps(tempdir)
+        cri.RmRF(remote_path)
+        # Only the file that didn't already exist locally should have been
+        # pulled.
+        local_path = os.path.join(tempdir, 'old_dump')
+        self.assertTrue(os.path.exists(local_path))
+        self.assertNotEqual(os.path.getmtime(local_path), ts - time_offset)
+        local_path = os.path.join(tempdir, 'new_dump')
+        self.assertTrue(os.path.exists(local_path))
+        self.assertEqual(os.path.getmtime(local_path), ts - time_offset)
+    finally:
+      shutil.rmtree(tempdir)
+
+  @decorators.Enabled('chromeos')
+  def testPullDumpsDirectoriesIgnored(self):
+    """Tests that directories are ignored when pulling minidumps."""
+    tempdir = tempfile.mkdtemp()
+    try:
+      with self._GetCRI() as cri:
+        remote_path = '/tmp/dumps/'
+        cri.CROS_MINIDUMP_DIR = remote_path
+        cri.RunCmdOnDevice(['mkdir', '-p', remote_path + 'test_dir'])
+        # Set the mtime to one second after the epoch
+        cri.RunCmdOnDevice(['touch', remote_path + 'test_dump'])
+        try:
+          cri.PullDumps(tempdir)
+        finally:
+          cri.RmRF(remote_path)
+        # We should have pulled the dump, but not the directory.
+        self.assertEqual(os.listdir(tempdir), ['test_dump'])
+    finally:
+      shutil.rmtree(tempdir)
+
+  @decorators.Enabled('chromeos')
+  def testPullDumpsIgnoresLockedFiles(self):
+    """Tests that files with associated .lock files are not pulled."""
+    tempdir = tempfile.mkdtemp()
+    try:
+      with self._GetCRI() as cri:
+        remote_path = '/tmp/dumps/'
+        cri.CROS_MINIDUMP_DIR = remote_path
+        cri.RunCmdOnDevice(['mkdir', '-p', remote_path])
+        cri.RunCmdOnDevice(
+            ['touch', remote_path + 'test_dump'])
+        cri.RunCmdOnDevice(
+            ['touch', remote_path + 'locked_dump'])
+        cri.RunCmdOnDevice(
+            ['touch', remote_path + 'locked_dump.lock'])
+        try:
+          cri.PullDumps(tempdir)
+        finally:
+          cri.RmRF(remote_path)
+        local_path = os.path.join(tempdir, 'test_dump')
+        self.assertTrue(os.path.exists(local_path))
+        local_path = os.path.join(tempdir, 'locked_dump')
+        self.assertFalse(os.path.exists(local_path))
+    finally:
+      shutil.rmtree(tempdir)
+
+  @decorators.Enabled('chromeos')
+  def testPullDumpsIgnoredFiletype(self):
+    """Tests that ignored filetypes are not pulled when pulling minidumps."""
+    tempdir = tempfile.mkdtemp()
+    try:
+      with self._GetCRI() as cri:
+        remote_path = '/tmp/dumps/'
+        cri.CROS_MINIDUMP_DIR = remote_path
+        cri.RunCmdOnDevice(['mkdir', '-p', remote_path])
+        cri.RunCmdOnDevice(
+            ['touch', remote_path + 'test_dump'])
+        for ignored_type in cros_interface._IGNORE_FILETYPES_FOR_MINIDUMP_PULLS:
+          cri.RunCmdOnDevice(
+              ['touch', remote_path + 'test_file' + ignored_type])
+        try:
+          cri.PullDumps(tempdir)
+        finally:
+          cri.RmRF(remote_path)
+        local_path = os.path.join(tempdir, 'test_dump')
+        self.assertTrue(os.path.exists(local_path))
+        for ignored_type in cros_interface._IGNORE_FILETYPES_FOR_MINIDUMP_PULLS:
+          local_path = os.path.join(tempdir, 'test_file' + ignored_type)
+          self.assertFalse(os.path.exists(local_path))
+    finally:
+      shutil.rmtree(tempdir)
+
+  @decorators.Enabled('chromeos')
+  @mock.patch.object(cros_interface.CrOSInterface, 'GetFile')
+  def testPullDumpsHandlesFailedFilePulls(self, get_file_mock):
+    """Tests that pulling minidumps does not explode if a file pull fails."""
+    get_file_mock.side_effect = IOError('File go bye bye.')
+    tempdir = tempfile.mkdtemp()
+    try:
+      with self._GetCRI() as cri:
+        remote_path = '/tmp/dumps/'
+        cri.CROS_MINIDUMP_DIR = remote_path
+        cri.RunCmdOnDevice(['mkdir', '-p', remote_path])
+        cri.RunCmdOnDevice(
+            ['touch', remote_path + 'test_dump'])
+        try:
+          cri.PullDumps(tempdir)
+        finally:
+          cri.RmRF(remote_path)
+        get_file_mock.assert_called_once_with(
+            remote_path + 'test_dump', mock.ANY)
+    finally:
+      shutil.rmtree(tempdir)
+
+  @decorators.Enabled('chromeos')
   def testGetFile(self):  # pylint: disable=no-self-use
     with self._GetCRI() as cri:
       f = tempfile.NamedTemporaryFile()
@@ -60,19 +216,28 @@ class CrOSInterfaceTest(unittest.TestCase):
         self.assertTrue('CHROMEOS' in res)
 
   @decorators.Enabled('chromeos')
-  def testGetFileNonExistent(self):
+  def testGetFileQuotes(self):  # pylint: disable=no-self-use
     with self._GetCRI() as cri:
       f = tempfile.NamedTemporaryFile()
-      cri.PushContents('testGetFileNonExistent', f.name)
-      cri.RmRF(f.name)
-      self.assertRaises(OSError, lambda: cri.GetFile(f.name))
+      cri.GetFile(cmd_helper.SingleQuote('/etc/lsb-release'), f.name)
+      with open(f.name, 'r') as f2:
+        res = f2.read()
+        self.assertTrue('CHROMEOS' in res)
+
+  @decorators.Enabled('chromeos')
+  def testGetFileNonExistent(self):
+    with self._GetCRI() as cri:
+      f = '/tmp/testGetFile'  # A path that can be created on the device.
+      cri.PushContents('testGetFileNonExistent', f)
+      cri.RmRF(f)
+      self.assertRaises(OSError, lambda: cri.GetFile(f))
 
   @decorators.Enabled('chromeos')
   def testIsServiceRunning(self):
     with self._GetCRI() as cri:
       self.assertTrue(cri.IsServiceRunning('openssh-server'))
 
-  # TODO(achuith): Fix this test. crbug.com/619767.
+  # TODO(crbug.com/799484): Fix this test.
   @decorators.Disabled('all')
   def testGetRemotePortAndIsHTTPServerRunningOnPort(self):
     with self._GetCRI() as cri:
@@ -88,9 +253,7 @@ class CrOSInterfaceTest(unittest.TestCase):
 
       # Forward local server's port to remote device's remote_port.
       forwarder = cros_forwarder.CrOsForwarderFactory(cri).Create(
-          forwarders.PortPairs(http=forwarders.PortPair(port, remote_port),
-                               https=None,
-                               dns=None))
+          local_port=port, remote_port=remote_port)
 
       # At this point, remote device should be able to connect to local server.
       self.assertTrue(cri.IsHTTPServerRunningOnPort(remote_port))
@@ -117,17 +280,23 @@ class CrOSInterfaceTest(unittest.TestCase):
 
       self.assertTrue(remote_port_1 != remote_port_2)
 
-  # TODO(achuith): Doesn't work in VMs.
-  @decorators.Disabled('all')
+  @decorators.Enabled('chromeos')
   def testTakeScreenshotWithPrefix(self):
     with self._GetCRI() as cri:
       def _Cleanup():
+        cri.RmRF('/tmp/telemetry/screenshots/test-prefix*')
         cri.RmRF('/var/log/screenshots/test-prefix*')
 
       _Cleanup()
       self.assertTrue(cri.TakeScreenshotWithPrefix('test-prefix'))
-      self.assertTrue(cri.FileExistsOnDevice(
-          '/var/log/screenshots/test-prefix-0.png'))
+      screenshot_file = '/tmp/telemetry/screenshots/test-prefix-0.png'
+      self.assertTrue(
+          cri.FileExistsOnDevice('/var/log/screenshots/test-prefix-0.png'))
+      # Ensure we've pulled the screenshot to the host if we're running in
+      # remote mode or copied to the correct location in local mode.
+      self.assertTrue(os.path.exists(screenshot_file))
+      # Ensure we actually have some amount of data.
+      self.assertTrue(os.path.getsize(screenshot_file) > 0)
       _Cleanup()
 
   @decorators.Enabled('chromeos')
@@ -137,6 +306,11 @@ class CrOSInterfaceTest(unittest.TestCase):
       self.assertTrue(build_num.isdigit())
       device_type = cri.GetDeviceTypeName()
       self.assertTrue(device_type.isalpha())
+
+  @decorators.Enabled('chromeos')
+  def testGetBoard(self):
+    # All devices, including VMs, should have board names.
+    self.assertIsNotNone(self._GetCRI().GetBoard())
 
   @decorators.Enabled('chromeos')
   def testEscapeCmdArguments(self):
@@ -163,13 +337,28 @@ class CrOSInterfaceTest(unittest.TestCase):
       assert stdout.strip() == "--arg=$HOME;;$PATH"
 
   @decorators.Enabled('chromeos')
+  def testStartCmdOnDevice(self):
+    options = options_for_unittests.GetCopy()
+    with cros_interface.CrOSInterface(options.cros_remote,
+                                      options.cros_remote_ssh_port,
+                                      options.cros_ssh_identity) as cri:
+      p = cri.StartCmdOnDevice(['true'])
+      p.wait()
+      self.assertEqual(p.returncode, 0)
+
+      p = cri.StartCmdOnDevice(['false'])
+      p.wait()
+      self.assertEqual(p.returncode, 1)
+
+  @decorators.Enabled('chromeos')
   @mock.patch.object(cros_interface.CrOSInterface, 'RunCmdOnDevice')
   def testTryLoginSuccess(self, mock_run_cmd):
     mock_run_cmd.return_value = ('root\n', '')
     cri = cros_interface.CrOSInterface(
         "testhostname", 22, options_for_unittests.GetCopy().cros_ssh_identity)
     cri.TryLogin()
-    mock_run_cmd.assert_called_once_with(['echo', '$USER'], quiet=True)
+    mock_run_cmd.assert_called_once_with(
+        ['echo', '$USER'], quiet=True, connect_timeout=60)
 
   @decorators.Enabled('chromeos')
   @mock.patch.object(cros_interface.CrOSInterface, 'RunCmdOnDevice')
@@ -214,3 +403,48 @@ class CrOSInterfaceTest(unittest.TestCase):
     self.assertRaisesRegexp(cros_interface.LoginException,
                             r'Logged into .*, expected \$USER=root, but got .*',
                             cri.TryLogin)
+
+  @decorators.Enabled('chromeos')
+  @mock.patch.object(cros_interface.CrOSInterface, 'RunCmdOnDevice')
+  def testIsCryptohomeMounted(self, mock_run_cmd):
+    # The device's mount state is checked by the command
+    #   /bin/df --someoption `cryptohome-path user $username`.
+    # The following mock replaces RunCmdOnDevice() to return mocked mount states
+    # from the command execution.
+    def mockRunCmdOnDevice(args): # pylint: disable=invalid-name
+      if args[0] == 'cryptohome-path':
+        return ('/home/user/%s' % args[2], '')
+      elif args[0] == 'nsenter':
+        # 'nsenter' is used to find Guest sessions. Ignore it in unit tests.
+        # 'nsenter' takes one argument so skip first two args.
+        return mockRunCmdOnDevice(args[2:])
+      elif args[0] == '/bin/df':
+        if 'unmount' in args[2]:
+          # For the user unmount@gmail.com, returns the unmounted state.
+          source, target = '/dev/sda1', '/home'
+        elif 'ephemeral_mount' in args[2]:
+          # For ephemeral mount, returns no mount.
+          # TODO(poromov): Add test for ephemeral mount.
+          return ('df %s: No such file or directory\n' % (args[2]), '')
+        elif 'mount' in args[2]:
+          # For the user mount@gmail.com, returns the mounted state.
+          source, target = '/dev/sda1', args[2]
+        elif 'guest' in args[2]:
+          # For the user $guest, returns the guest-mounted state.
+          source, target = 'guestfs', args[2]
+        return ('Filesystem Mounted on\n%s %s\n' % (source, target), '')
+    mock_run_cmd.side_effect = mockRunCmdOnDevice
+
+    cri = cros_interface.CrOSInterface(
+        "testhostname", 22, options_for_unittests.GetCopy().cros_ssh_identity)
+    # Returns False if the user's cryptohome is not mounted.
+    self.assertFalse(cri.IsCryptohomeMounted('unmount@gmail.com', False))
+    # Returns True if the user's cryptohome is mounted.
+    self.assertTrue(cri.IsCryptohomeMounted('mount@gmail.com', False))
+    # Returns True if the guest cryptohome is mounted.
+    self.assertTrue(cri.IsCryptohomeMounted('$guest', True))
+    # Sanity check. Returns False if the |is_guest| parameter does not match
+    # with whether or not the user is really a guest.
+    self.assertFalse(cri.IsCryptohomeMounted('unmount@gmail.com', True))
+    self.assertFalse(cri.IsCryptohomeMounted('mount@gmail.com', True))
+    self.assertFalse(cri.IsCryptohomeMounted('$guest', False))

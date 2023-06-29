@@ -5,8 +5,8 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="import" href="/tracing/model/location.html">
 <link rel="import" href="/tracing/model/annotation.html">
+<link rel="import" href="/tracing/model/location.html">
 <link rel="import" href="/tracing/model/rect_annotation.html">
 <link rel="import" href="/tracing/ui/annotations/comment_box_annotation_view.html">
 
@@ -14,7 +14,6 @@ found in the LICENSE file.
 'use strict';
 
 tr.exportTo('tr.model', function() {
-
   function CommentBoxAnnotation(location, text) {
     tr.model.Annotation.apply(this, arguments);
 
@@ -23,8 +22,8 @@ tr.exportTo('tr.model', function() {
   }
 
   CommentBoxAnnotation.fromDict = function(dict) {
-    var args = dict.args;
-    var location =
+    const args = dict.args;
+    const location =
         new tr.model.Location(args.location.xWorld, args.location.yComponents);
     return new tr.model.CommentBoxAnnotation(location, args.text);
   };
@@ -32,11 +31,11 @@ tr.exportTo('tr.model', function() {
   CommentBoxAnnotation.prototype = {
     __proto__: tr.model.Annotation.prototype,
 
-    onRemove: function() {
+    onRemove() {
       this.view_.removeTextArea();
     },
 
-    toDict: function() {
+    toDict() {
       return {
         typeName: 'comment_box',
         args: {
@@ -46,7 +45,7 @@ tr.exportTo('tr.model', function() {
       };
     },
 
-    createView_: function(viewport) {
+    createView_(viewport) {
       return new tr.ui.annotations.CommentBoxAnnotationView(viewport, this);
     }
   };
@@ -55,7 +54,7 @@ tr.exportTo('tr.model', function() {
       CommentBoxAnnotation, {typeName: 'comment_box'});
 
   return {
-    CommentBoxAnnotation: CommentBoxAnnotation
+    CommentBoxAnnotation,
   };
 });
 </script>

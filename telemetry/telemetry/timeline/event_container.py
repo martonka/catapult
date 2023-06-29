@@ -2,6 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
+import six
+
 from telemetry.timeline import async_slice as async_slice_module
 from telemetry.timeline import flow_event as flow_event_module
 from telemetry.timeline import slice as slice_module
@@ -18,6 +21,10 @@ class TimelineEventContainer(object):
   @staticmethod
   def IsAsyncSlice(t):
     return t == async_slice_module.AsyncSlice
+
+  @staticmethod
+  def IsSliceOrAsyncSlice(t):
+    return t in (slice_module.Slice, async_slice_module.AsyncSlice)
 
   # Basic functions that subclasses of TimelineEventContainer should implement
   # in order to expose their events. New methods should be added to this part of
@@ -86,51 +93,65 @@ class TimelineEventContainer(object):
 
   # Helper functions for finding common kinds of events. Must always take an
   # optinal recurisve parameter and be implemented in terms fo IterAllEvents.
+  def IterTimelineMarkers(self, names, recursive=True):
+    if isinstance(names, six.string_types):
+      names = {names}
+    else:
+      names = set(names)
+
+    def IsEventNeeded(event):
+      return event.parent_slice is None and event.name in names
+
+    return self.IterAllEvents(
+        recursive=recursive,
+        event_type_predicate=self.IsSliceOrAsyncSlice,
+        event_predicate=IsEventNeeded)
+
   def IterAllEventsOfName(self, name, recursive=True):
     return self.IterAllEvents(
-      recursive=recursive,
-      event_type_predicate=lambda t: True,
-      event_predicate=lambda e: e.name == name)
+        recursive=recursive,
+        event_type_predicate=lambda t: True,
+        event_predicate=lambda e: e.name == name)
 
   def IterAllSlices(self, recursive=True):
     return self.IterAllEvents(
-      recursive=recursive,
-      event_type_predicate=lambda t: t == slice_module.Slice)
+        recursive=recursive,
+        event_type_predicate=lambda t: t == slice_module.Slice)
 
   def IterAllSlicesInRange(self, start, end, recursive=True):
     return self.IterAllEvents(
-      recursive=recursive,
-      event_type_predicate=lambda t: t == slice_module.Slice,
-      event_predicate=lambda s: s.start >= start and s.end <= end)
+        recursive=recursive,
+        event_type_predicate=lambda t: t == slice_module.Slice,
+        event_predicate=lambda s: s.start >= start and s.end <= end)
 
   def IterAllSlicesOfName(self, name, recursive=True):
     return self.IterAllEvents(
-      recursive=recursive,
-      event_type_predicate=lambda t: t == slice_module.Slice,
-      event_predicate=lambda e: e.name == name)
+        recursive=recursive,
+        event_type_predicate=lambda t: t == slice_module.Slice,
+        event_predicate=lambda e: e.name == name)
 
   def IterAllToplevelSlicesOfName(self, name, recursive=True):
     return self.IterAllEvents(
-      recursive=recursive,
-      event_type_predicate=lambda t: t == slice_module.Slice,
-      event_predicate=lambda e: e.name == name and e.parent_slice == None)
+        recursive=recursive,
+        event_type_predicate=lambda t: t == slice_module.Slice,
+        event_predicate=lambda e: e.name == name and e.parent_slice is None)
 
   def IterAllAsyncSlicesOfName(self, name, recursive=True):
     return self.IterAllEvents(
-      recursive=recursive,
-      event_type_predicate=self.IsAsyncSlice,
-      event_predicate=lambda e: e.name == name)
+        recursive=recursive,
+        event_type_predicate=self.IsAsyncSlice,
+        event_predicate=lambda e: e.name == name)
 
   def IterAllAsyncSlicesStartsWithName(self, name, recursive=True):
     return self.IterAllEvents(
-      recursive=recursive,
-      event_type_predicate=self.IsAsyncSlice,
-      event_predicate=lambda e: e.name.startswith(name))
+        recursive=recursive,
+        event_type_predicate=self.IsAsyncSlice,
+        event_predicate=lambda e: e.name.startswith(name))
 
   def IterAllFlowEvents(self, recursive=True):
     return self.IterAllEvents(
-      recursive=recursive,
-      event_type_predicate=lambda t: t == flow_event_module.FlowEvent)
+        recursive=recursive,
+        event_type_predicate=lambda t: t == flow_event_module.FlowEvent)
 
   # List versions. These should always be simple expressions that list() on
   # an underlying iter method.

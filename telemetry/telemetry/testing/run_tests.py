@@ -2,6 +2,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+from __future__ import absolute_import
 import logging
 import os
 import sys
@@ -28,7 +30,15 @@ import typ
 class RunTestsCommand(command_line.OptparseCommand):
   """Run unit tests"""
 
-  usage = '[test_name ...] [<options>]'
+  usage = (
+      '\n\n  ./run_tests [test_name_1 test_name_2 ...] [<options>]\n\n'
+      'You can get a list of potential test names by running\n\n'
+      '  ./run_tests --list-only\n\n'
+      'For a test that looks like \n'
+      '"telemetry.web_perf.timeline_based_measurement_unittest.LegacyTim'
+      'elineBasedMetricsTests.testDuplicateRepeatableInteractions",\n'
+      'You can use any substring of it, i.e.\n\n'
+      '  ./run_tests testDuplicateRepeatableInteractions\n')
   xvfb_process = None
 
   def __init__(self):
@@ -39,7 +49,7 @@ class RunTestsCommand(command_line.OptparseCommand):
   def CreateParser(cls):
     options = browser_options.BrowserFinderOptions()
     options.browser_type = 'any'
-    parser = options.CreateParser('%%prog %s' % cls.usage)
+    parser = options.CreateParser(cls.usage)
     return parser
 
   @classmethod
@@ -49,26 +59,22 @@ class RunTestsCommand(command_line.OptparseCommand):
     parser.add_option('--disable-cloud-storage-io', action='store_true',
                       default=False, help=('Disable cloud storage IO when '
                                            'tests are run in parallel.'))
-    parser.add_option('--repeat-count', type='int', default=1,
-                      help='Repeats each a provided number of times.')
     parser.add_option('--no-browser', action='store_true', default=False,
                       help='Don\'t require an actual browser to run the tests.')
     parser.add_option('-d', '--also-run-disabled-tests',
                       dest='run_disabled_tests',
                       action='store_true', default=False,
                       help='Ignore @Disabled and @Enabled restrictions.')
-    parser.add_option('--exact-test-filter', action='store_true', default=False,
-                      help='Treat test filter as exact matches (default is '
-                           'substring matches).')
     parser.add_option('--client-config', dest='client_configs',
                       action='append', default=[])
     parser.add_option('--disable-logging-config', action='store_true',
                       default=False, help='Configure logging (default on)')
+    parser.add_option('-v', '--verbose', action='count', dest='verbosity',
+                      help='Increase verbosity level (repeat as needed)')
 
     typ.ArgumentParser.add_option_group(parser,
                                         "Options for running the tests",
                                         running=True,
-                                        discovery=True,
                                         skip=['-d', '-v', '--verbose'])
     typ.ArgumentParser.add_option_group(parser,
                                         "Options for reporting the results",
@@ -76,19 +82,35 @@ class RunTestsCommand(command_line.OptparseCommand):
 
   @classmethod
   def ProcessCommandLineArgs(cls, parser, args, _):
+    if args.verbosity >= 2:
+      logging.getLogger().setLevel(logging.DEBUG)
+    elif args.verbosity:
+      logging.getLogger().setLevel(logging.INFO)
+    else:
+      logging.getLogger().setLevel(logging.WARNING)
+
     # We retry failures by default unless we're running a list of tests
     # explicitly.
     if not args.retry_limit and not args.positional_args:
       args.retry_limit = 3
+
+    if args.test_filter and args.positional_args:
+      parser.error(
+          'Cannot specify test names in positional args and use'
+          '--test-filter flag at the same time.')
 
     if args.no_browser:
       return
 
     if args.start_xvfb and xvfb.ShouldStartXvfb():
       cls.xvfb_process = xvfb.StartXvfb()
+      # Work around Mesa issues on Linux. See
+      # https://github.com/catapult-project/catapult/issues/3074
+      args.browser_options.AppendExtraBrowserArgs('--disable-gpu')
+
     try:
       possible_browser = browser_finder.FindBrowser(args)
-    except browser_finder_exceptions.BrowserFinderException, ex:
+    except browser_finder_exceptions.BrowserFinderException as ex:
       parser.error(ex)
 
     if not possible_browser:
@@ -122,6 +144,8 @@ class RunTestsCommand(command_line.OptparseCommand):
     runner = typ.Runner()
     if self.stream:
       runner.host.stdout = self.stream
+    if hasattr(args, 'disable_resultsink'):
+      runner.args.disable_resultsink = args.disable_resultsink
 
     if args.no_browser:
       possible_browser = None
@@ -134,7 +158,7 @@ class RunTestsCommand(command_line.OptparseCommand):
     # Fetch all binaries needed by telemetry before we run the benchmark.
     if possible_browser and possible_browser.browser_type == 'reference':
       fetch_reference_chrome_binary = True
-    binary_manager.FetchBinaryDepdencies(
+    binary_manager.FetchBinaryDependencies(
         platform, args.client_configs, fetch_reference_chrome_binary)
 
     # Telemetry seems to overload the system if we run one test per core,
@@ -151,34 +175,47 @@ class RunTestsCommand(command_line.OptparseCommand):
       runner.args.jobs = len(android_devs)
       if runner.args.jobs == 0:
         raise RuntimeError("No Android device found")
-      print 'Running tests with %d Android device(s).' % runner.args.jobs
+      print('Running tests with %d Android device(s).' % runner.args.jobs)
     elif platform.GetOSVersionName() == 'xp':
       # For an undiagnosed reason, XP falls over with more parallelism.
       # See crbug.com/388256
       runner.args.jobs = max(int(args.jobs) // 4, 1)
     else:
       runner.args.jobs = max(int(args.jobs) // 2, 1)
-
+    runner.args.expectations_files = args.expectations_files
+    runner.args.tags = args.tags
+    runner.args.skip = args.skip
     runner.args.metadata = args.metadata
     runner.args.passthrough = args.passthrough
     runner.args.path = args.path
     runner.args.retry_limit = args.retry_limit
+    runner.args.typ_max_failures = args.typ_max_failures
     runner.args.test_results_server = args.test_results_server
+    runner.args.partial_match_filter = args.positional_args
+    runner.args.test_filter = args.test_filter
     runner.args.test_type = args.test_type
-    runner.args.top_level_dir = args.top_level_dir
+    runner.args.top_level_dirs = args.top_level_dirs
     runner.args.write_full_results_to = args.write_full_results_to
     runner.args.write_trace_to = args.write_trace_to
+    runner.args.all = args.run_disabled_tests
+    runner.args.repeat = args.repeat
     runner.args.list_only = args.list_only
     runner.args.shard_index = args.shard_index
+    runner.args.test_name_prefix = args.test_name_prefix
     runner.args.total_shards = args.total_shards
-
+    runner.args.repository_absolute_path = args.repository_absolute_path
+    runner.args.retry_only_retry_on_failure_tests = (
+        args.retry_only_retry_on_failure_tests)
     runner.args.path.append(util.GetUnittestDataDir())
+    runner.args.quiet = args.quiet
 
-    # Always print out these info for the ease of debugging.
+    # Standard verbosity will only emit output on test failure. Higher verbosity
+    # levels spam the output with logging, making it very difficult to figure
+    # out what's going on when digging into test failures.
     runner.args.timing = True
-    runner.args.verbose = 3
+    runner.args.verbose = 1
 
-    runner.classifier = GetClassifier(args, possible_browser)
+    runner.classifier = GetClassifier(runner, possible_browser)
     runner.context = args
     runner.setup_fn = _SetUpProcess
     runner.teardown_fn = _TearDownProcess
@@ -186,42 +223,44 @@ class RunTestsCommand(command_line.OptparseCommand):
     try:
       ret, _, _ = runner.run()
     except KeyboardInterrupt:
-      print >> sys.stderr, "interrupted, exiting"
+      print("interrupted, exiting", file=sys.stderr)
       ret = 130
     return ret
 
 
-def GetClassifier(args, possible_browser):
+def GetClassifier(typ_runner, possible_browser):
 
   def ClassifyTestWithoutBrowser(test_set, test):
-    name = test.id()
-    if (not args.positional_args
-        or _MatchesSelectedTest(name, args.positional_args,
-                                  args.exact_test_filter)):
+    if typ_runner.matches_filter(test):
+      if typ_runner.should_skip(test):
+        test_set.add_test_to_skip(
+            test, 'skipped because matched --skip')
+        return
       # TODO(telemetry-team): Make sure that all telemetry unittest that invokes
       # actual browser are subclasses of browser_test_case.BrowserTestCase
       # (crbug.com/537428)
       if issubclass(test.__class__, browser_test_case.BrowserTestCase):
-        test_set.tests_to_skip.append(typ.TestInput(
-            name, msg='Skip the test because it requires a browser.'))
+        test_set.add_test_to_skip(
+            test, 'Skip the test because it requires a browser.')
       else:
-        test_set.parallel_tests.append(typ.TestInput(name))
+        test_set.add_test_to_run_in_parallel(test)
 
   def ClassifyTestWithBrowser(test_set, test):
-    name = test.id()
-    if (not args.positional_args
-        or _MatchesSelectedTest(name, args.positional_args,
-                                args.exact_test_filter)):
+    if typ_runner.matches_filter(test):
+      if typ_runner.should_skip(test):
+        test_set.add_test_to_skip(
+            test, 'skipped because matched --skip')
+        return
       assert hasattr(test, '_testMethodName')
       method = getattr(
           test, test._testMethodName)  # pylint: disable=protected-access
       should_skip, reason = decorators.ShouldSkip(method, possible_browser)
-      if should_skip and not args.run_disabled_tests:
-        test_set.tests_to_skip.append(typ.TestInput(name, msg=reason))
+      if should_skip and not typ_runner.args.all:
+        test_set.add_test_to_skip(test, reason)
       elif decorators.ShouldBeIsolated(method, possible_browser):
-        test_set.isolated_tests.append(typ.TestInput(name))
+        test_set.add_test_to_run_isolated(test)
       else:
-        test_set.parallel_tests.append(typ.TestInput(name))
+        test_set.add_test_to_run_in_parallel(test)
 
   if possible_browser:
     return ClassifyTestWithBrowser
@@ -229,22 +268,12 @@ def GetClassifier(args, possible_browser):
     return ClassifyTestWithoutBrowser
 
 
-def _MatchesSelectedTest(name, selected_tests, selected_tests_are_exact):
-  if not selected_tests:
-    return False
-  if selected_tests_are_exact:
-    return any(name in selected_tests)
-  else:
-    return any(test in name for test in selected_tests)
-
-
 def _SetUpProcess(child, context): # pylint: disable=unused-argument
   ps_util.EnableListingStrayProcessesUponExitHook()
   # Make sure that we don't invokes cloud storage I/Os when we run the tests in
   # parallel.
-  # TODO(nednguyen): always do this once telemetry tests in Chromium is updated
-  # to prefetch files.
-  # (https://github.com/catapult-project/catapult/issues/2192)
+  # TODO(https://github.com/catapult-project/catapult/issues/2192): always do
+  # this once telemetry tests in Chromium is updated to prefetch files.
   args = context
   if args.disable_cloud_storage_io:
     os.environ[cloud_storage.DISABLE_CLOUD_STORAGE_IO] = '1'
@@ -272,9 +301,6 @@ def _SetUpProcess(child, context): # pylint: disable=unused-argument
 
 
 def _TearDownProcess(child, context): # pylint: disable=unused-argument
-  # It's safe to call teardown_browser even if we did not start any browser
-  # in any of the tests.
-  browser_test_case.teardown_browser()
   options_for_unittests.Pop()
 
 

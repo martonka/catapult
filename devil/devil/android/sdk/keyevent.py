@@ -1,7 +1,6 @@
 # Copyright 2015 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Android KeyEvent constants.
 
 http://developer.android.com/reference/android/view/KeyEvent.html
@@ -21,6 +20,8 @@ KEYCODE_8 = 15
 KEYCODE_9 = 16
 
 KEYCODE_DPAD_RIGHT = 22
+
+KEYCODE_POWER = 26
 
 KEYCODE_A = 29
 KEYCODE_B = 30

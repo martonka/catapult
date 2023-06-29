@@ -2,11 +2,11 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry import story
 
 
 class TestSimpleTwoPageSet(story.StorySet):
   def __init__(self):
     super(TestSimpleTwoPageSet, self).__init__(
-      archive_data_file='data/archive_files/test.json',
-      credentials_path='data/credential')
+        archive_data_file='data/archive_files/test.json')

@@ -2,6 +2,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
+from systrace.tracing_agents import atrace_agent
 
 class AtraceConfig(object):
   """Stores configuration options specific to Atrace.
@@ -13,5 +15,5 @@ class AtraceConfig(object):
         Example: 'org.chromium.webview_shell'
   """
   def __init__(self):
-    self.categories = None
+    self.categories = atrace_agent.DEFAULT_CATEGORIES
     self.app_name = None

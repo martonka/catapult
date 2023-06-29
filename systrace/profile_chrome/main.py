@@ -4,6 +4,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
 import logging
 import optparse
 import os
@@ -82,6 +83,8 @@ For detailed study of ubercompositor, pass --trace-ubercompositor.
 When in doubt, just try out --trace-frame-viewer.
 """)
 
+  logging.basicConfig()
+
   if options.verbose:
     logging.getLogger().setLevel(logging.DEBUG)
 
@@ -98,6 +101,10 @@ When in doubt, just try out --trace-frame-viewer.
 
   options.device = device
   options.package_info = package_info
+
+  # Include Chrome categories by default in profile_chrome.
+  if not options.chrome_categories:
+    options.chrome_categories = chrome_tracing_agent.DEFAULT_CHROME_CATEGORIES
 
   if options.chrome_categories in ['list', 'help']:
     ui.PrintMessage('Collecting record categories list...', eol='')
@@ -120,7 +127,7 @@ When in doubt, just try out --trace-frame-viewer.
 
   if options.atrace_categories in ['list', 'help']:
     atrace_agent.list_categories(atrace_agent.get_config(options))
-    print '\n'
+    print('\n')
     return 0
 
   if (perf_tracing_agent.PerfProfilerAgent.IsSupported() and
@@ -138,6 +145,11 @@ When in doubt, just try out --trace-frame-viewer.
     logging.warning('Using the "webview" category in atrace together with '
                     'Chrome tracing results in duplicate trace events.')
 
+  # Ensure compatibility between trace_format and write_json flags.
+  # trace_format is preferred. write_json is supported for backward
+  # compatibility reasons.
+  flags.ParseFormatFlags(options)
+
   if options.output_file:
     options.output_file = os.path.expanduser(options.output_file)
   result = profiler.CaptureProfile(
@@ -146,7 +158,7 @@ When in doubt, just try out --trace-frame-viewer.
       _PROFILE_CHROME_AGENT_MODULES,
       output=options.output_file,
       compress=options.compress,
-      write_json=options.write_json)
+      trace_format=options.trace_format)
   if options.view:
     if sys.platform == 'darwin':
       os.system('/usr/bin/open %s' % os.path.abspath(result))

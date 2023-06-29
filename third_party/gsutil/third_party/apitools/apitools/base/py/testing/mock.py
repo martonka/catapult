@@ -1,3 +1,18 @@
+#
+# Copyright 2015 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """The mock module allows easy mocking of apitools clients.
 
 This module allows you to mock out the constructor of a particular apitools
@@ -8,11 +23,14 @@ as it's all done within the context of a mock.
 """
 
 import difflib
+import sys
 
-from protorpc import messages
 import six
 
-import apitools.base.py as apitools_base
+from apitools.base.protorpclite import messages
+from apitools.base.py import base_api
+from apitools.base.py import encoding
+from apitools.base.py import exceptions
 
 
 class Error(Exception):
@@ -57,9 +75,9 @@ class UnexpectedRequestException(Error):
         expected_key, expected_request = expected_call
         received_key, received_request = received_call
 
-        expected_repr = apitools_base.MessageToRepr(
+        expected_repr = encoding.MessageToRepr(
             expected_request, multiline=True)
-        received_repr = apitools_base.MessageToRepr(
+        received_repr = encoding.MessageToRepr(
             received_request, multiline=True)
 
         expected_lines = expected_repr.splitlines()
@@ -101,7 +119,7 @@ class ExpectedRequestsException(Error):
         for (key, request) in expected_calls:
             msg += '{key}({request})\n'.format(
                 key=key,
-                request=apitools_base.MessageToRepr(request, multiline=True))
+                request=encoding.MessageToRepr(request, multiline=True))
         super(ExpectedRequestsException, self).__init__(msg)
 
 
@@ -114,13 +132,13 @@ class _ExpectedRequestResponse(object):
         self.__request = request
 
         if response and exception:
-            raise apitools_base.ConfigurationValueError(
+            raise exceptions.ConfigurationValueError(
                 'Should specify at most one of response and exception')
-        if response and isinstance(response, apitools_base.Error):
-            raise apitools_base.ConfigurationValueError(
+        if response and isinstance(response, exceptions.Error):
+            raise exceptions.ConfigurationValueError(
                 'Responses should not be an instance of Error')
-        if exception and not isinstance(exception, apitools_base.Error):
-            raise apitools_base.ConfigurationValueError(
+        if exception and not isinstance(exception, exceptions.Error):
+            raise exceptions.ConfigurationValueError(
                 'Exceptions must be instances of Error')
 
         self.__response = response
@@ -163,31 +181,50 @@ class _ExpectedRequestResponse(object):
         return self.__response
 
 
-class _MockedService(apitools_base.BaseApiService):
-
-    def __init__(self, key, mocked_client, methods, real_service):
-        super(_MockedService, self).__init__(mocked_client)
-        self.__dict__.update(real_service.__dict__)
-        for method in methods:
-            real_method = None
-            if real_service:
-                real_method = getattr(real_service, method)
-            setattr(self, method,
-                    _MockedMethod(key + '.' + method,
-                                  mocked_client,
-                                  real_method))
-
-
 class _MockedMethod(object):
 
     """A mocked API service method."""
 
     def __init__(self, key, mocked_client, real_method):
+        self.__name__ = real_method.__name__
         self.__key = key
         self.__mocked_client = mocked_client
         self.__real_method = real_method
+        self.method_config = real_method.method_config
+        config = self.method_config()
+        self.__request_type = getattr(self.__mocked_client.MESSAGES_MODULE,
+                                      config.request_type_name)
+        self.__response_type = getattr(self.__mocked_client.MESSAGES_MODULE,
+                                       config.response_type_name)
 
-    def Expect(self, request, response=None, exception=None, **unused_kwargs):
+    def _TypeCheck(self, msg, is_request):
+        """Ensure the given message is of the expected type of this method.
+
+        Args:
+          msg: The message instance to check.
+          is_request: True to validate against the expected request type,
+             False to validate against the expected response type.
+
+        Raises:
+          exceptions.ConfigurationValueError: If the type of the message was
+             not correct.
+        """
+        if is_request:
+            mode = 'request'
+            real_type = self.__request_type
+        else:
+            mode = 'response'
+            real_type = self.__response_type
+
+        if not isinstance(msg, real_type):
+            raise exceptions.ConfigurationValueError(
+                'Expected {} is not of the correct type for method [{}].\n'
+                '   Required: [{}]\n'
+                '   Given:    [{}]'.format(
+                    mode, self.__key, real_type, type(msg)))
+
+    def Expect(self, request, response=None, exception=None,
+               enable_type_checking=True, **unused_kwargs):
         """Add an expectation on the mocked method.
 
         Exactly one of response and exception should be specified.
@@ -197,11 +234,20 @@ class _MockedMethod(object):
           response: The response that should be returned or None if
               exception is provided.
           exception: An exception that should be thrown, or None.
-
+          enable_type_checking: When true, the message type of the request
+              and response (if provided) will be checked against the types
+              required by this method.
         """
         # TODO(jasmuth): the unused_kwargs provides a placeholder for
         # future things that can be passed to Expect(), like special
         # params to the method call.
+
+        # Ensure that the registered request and response mocks actually
+        # match what this method accepts and returns.
+        if enable_type_checking:
+            self._TypeCheck(request, is_request=True)
+            if response:
+                self._TypeCheck(response, is_request=False)
 
         # pylint: disable=protected-access
         # Class in same module.
@@ -231,17 +277,28 @@ class _MockedMethod(object):
 
         if response is None and self.__real_method:
             response = self.__real_method(request)
-            print(apitools_base.MessageToRepr(
+            print(encoding.MessageToRepr(
                 response, multiline=True, shortstrings=True))
             return response
 
         return response
 
 
-def _MakeMockedServiceConstructor(mocked_service):
-    def Constructor(unused_self, unused_client):
-        return mocked_service
-    return Constructor
+def _MakeMockedService(api_name, collection_name,
+                       mock_client, service, real_service):
+    class MockedService(base_api.BaseApiService):
+        pass
+
+    for method in service.GetMethodsList():
+        real_method = None
+        if real_service:
+            real_method = getattr(real_service, method)
+        setattr(MockedService,
+                method,
+                _MockedMethod(api_name + '.' + collection_name + '.' + method,
+                              mock_client,
+                              real_method))
+    return MockedService
 
 
 class Client(object):
@@ -265,11 +322,13 @@ class Client(object):
         if not real_client:
             real_client = client_class(get_credentials=False)
 
+        self.__orig_class = self.__class__
         self.__client_class = client_class
         self.__real_service_classes = {}
         self.__real_client = real_client
 
         self._request_responses = []
+        self.__real_include_fields = None
 
     def __enter__(self):
         return self.Mock()
@@ -278,50 +337,66 @@ class Client(object):
         """Stub out the client class with mocked services."""
         client = self.__real_client or self.__client_class(
             get_credentials=False)
+
+        class Patched(self.__class__, self.__client_class):
+            pass
+        self.__class__ = Patched
+
         for name in dir(self.__client_class):
             service_class = getattr(self.__client_class, name)
             if not isinstance(service_class, type):
                 continue
-            if not issubclass(service_class, apitools_base.BaseApiService):
+            if not issubclass(service_class, base_api.BaseApiService):
                 continue
             self.__real_service_classes[name] = service_class
-            service = service_class(client)
             # pylint: disable=protected-access
-            # Some liberty is allowed with mocking.
             collection_name = service_class._NAME
             # pylint: enable=protected-access
             api_name = '%s_%s' % (self.__client_class._PACKAGE,
                                   self.__client_class._URL_VERSION)
-            mocked_service = _MockedService(
-                api_name + '.' + collection_name, self,
-                service._method_configs.keys(),
-                service if self.__real_client else None)
-            mocked_constructor = _MakeMockedServiceConstructor(mocked_service)
-            setattr(self.__client_class, name, mocked_constructor)
+            mocked_service_class = _MakeMockedService(
+                api_name, collection_name, self,
+                service_class,
+                service_class(client) if self.__real_client else None)
 
-            setattr(self, collection_name, mocked_service)
+            setattr(self.__client_class, name, mocked_service_class)
+
+            setattr(self, collection_name, mocked_service_class(self))
 
         self.__real_include_fields = self.__client_class.IncludeFields
         self.__client_class.IncludeFields = self.IncludeFields
 
+        # pylint: disable=attribute-defined-outside-init
+        self._url = client._url
+        self._http = client._http
+
         return self
 
     def __exit__(self, exc_type, value, traceback):
-        self.Unmock()
-        if value:
+        is_active_exception = value is not None
+        self.Unmock(suppress=is_active_exception)
+        if is_active_exception:
             six.reraise(exc_type, value, traceback)
         return True
 
-    def Unmock(self):
+    def Unmock(self, suppress=False):
+        self.__class__ = self.__orig_class
         for name, service_class in self.__real_service_classes.items():
             setattr(self.__client_class, name, service_class)
-
-        if self._request_responses:
-            raise ExpectedRequestsException(
-                [(rq_rs.key, rq_rs.request) for rq_rs
-                 in self._request_responses])
+            delattr(self, service_class._NAME)
+        self.__real_service_classes = {}
+        del self._url
+        del self._http
 
         self.__client_class.IncludeFields = self.__real_include_fields
+        self.__real_include_fields = None
+
+        requests = [(rq_rs.key, rq_rs.request)
+                    for rq_rs in self._request_responses]
+        self._request_responses = []
+
+        if requests and not suppress and sys.exc_info()[1] is None:
+            raise ExpectedRequestsException(requests)
 
     def IncludeFields(self, include_fields):
         if self.__real_client:

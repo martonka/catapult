@@ -3,8 +3,8 @@
 # Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Tests for the AdbWrapper class."""
+from __future__ import print_function
 
 import os
 import tempfile
@@ -17,7 +17,6 @@ from devil.android.sdk import adb_wrapper
 
 
 class TestAdbWrapper(device_test_case.DeviceTestCase):
-
   def setUp(self):
     super(TestAdbWrapper, self).setUp()
     self._adb = adb_wrapper.AdbWrapper(self.serial)
@@ -34,9 +33,14 @@ class TestAdbWrapper(device_test_case.DeviceTestCase):
       The absolute path to the file.
     """
     fi, path = tempfile.mkstemp()
-    with os.fdopen(fi, 'wb') as f:
+    with os.fdopen(fi, 'w') as f:
       f.write(contents)
     return path
+
+  def testDeviceUnreachable(self):
+    with self.assertRaises(device_errors.DeviceUnreachableError):
+      bad_adb = adb_wrapper.AdbWrapper('device_gone')
+      bad_adb.Shell('echo test')
 
   def testShell(self):
     output = self._adb.Shell('echo test', expect_status=0)
@@ -46,11 +50,10 @@ class TestAdbWrapper(device_test_case.DeviceTestCase):
     with self.assertRaises(device_errors.AdbCommandFailedError):
       self._adb.Shell('echo test', expect_status=1)
 
-  @unittest.skip("https://github.com/catapult-project/catapult/issues/2574")
   def testPersistentShell(self):
     # We need to access the device serial number here in order
     # to create the persistent shell.
-    serial = self._adb.GetDeviceSerial() # pylint: disable=protected-access
+    serial = self._adb.GetDeviceSerial()  # pylint: disable=protected-access
     with self._adb.PersistentShell(serial) as pshell:
       (res1, code1) = pshell.RunCommand('echo TEST')
       (res2, code2) = pshell.RunCommand('echo TEST2')
@@ -67,7 +70,7 @@ class TestAdbWrapper(device_test_case.DeviceTestCase):
     self._adb.Push(path, device_path)
     files = dict(self._adb.Ls('/data/local/tmp'))
     self.assertTrue('testfile.txt' in files)
-    self.assertEquals(3, files['testfile.txt'].st_size)
+    self.assertEqual(3, files['testfile.txt'].st_size)
     self.assertEqual(self._adb.Shell('cat %s' % device_path), 'foo')
     self._adb.Pull(device_path, local_tmpdir)
     with open(os.path.join(local_tmpdir, 'testfile.txt'), 'r') as f:
@@ -88,12 +91,12 @@ class TestAdbWrapper(device_test_case.DeviceTestCase):
 
   def testRebootWaitForDevice(self):
     self._adb.Reboot()
-    print 'waiting for device to reboot...'
+    print('waiting for device to reboot...')
     while self._adb.GetState() == 'device':
       time.sleep(1)
     self._adb.WaitForDevice()
     self.assertEqual(self._adb.GetState(), 'device')
-    print 'waiting for package manager...'
+    print('waiting for package manager...')
     while True:
       try:
         android_path = self._adb.Shell('pm path android')
@@ -109,7 +112,7 @@ class TestAdbWrapper(device_test_case.DeviceTestCase):
       try:
         self._adb.Shell('start')
         break
-      except device_errors.AdbCommandFailedError:
+      except device_errors.DeviceUnreachableError:
         time.sleep(1)
     self._adb.Remount()
 

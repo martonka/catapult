@@ -2,9 +2,9 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry.internal.actions import action_runner
 from telemetry.internal.browser import web_contents
-from telemetry.internal.image_processing import video
 
 DEFAULT_TAB_TIMEOUT = 60
 
@@ -67,16 +67,15 @@ class Tab(web_contents.WebContents):
                                              'event_listener_count']]))
     return dom_counters
 
+  def PrepareForLeakDetection(self):
+    self._inspector_backend.PrepareForLeakDetection(
+        timeout=DEFAULT_TAB_TIMEOUT)
+
   def Activate(self):
     """Brings this tab to the foreground asynchronously.
 
     Not all browsers or browser versions support this method.
     Be sure to check browser.supports_tab_control.
-
-    Please note: this is asynchronous. There is a delay between this call
-    and the page's documentVisibilityState becoming 'visible', and yet more
-    delay until the actual tab is visible to the user. None of these delays
-    are included in this call.
 
     Raises:
       devtools_http.DevToolsClientConnectionError
@@ -85,11 +84,16 @@ class Tab(web_contents.WebContents):
     """
     self._tab_list_backend.ActivateTab(self.id)
 
-  def Close(self):
+  def Close(self, keep_one=True, timeout=300):
     """Closes this tab.
 
     Not all browsers or browser versions support this method.
     Be sure to check browser.supports_tab_control.
+
+    Args:
+      keep_one: Whether to make sure to keep one tab open. On some platforms
+        closing the last tab causes the browser to be closed, to prevent this
+        the default is to open a new tab before closing the last one.
 
     Raises:
       devtools_http.DevToolsClientConnectionError
@@ -97,7 +101,9 @@ class Tab(web_contents.WebContents):
       tab_list_backend.TabUnexpectedResponseException
       exceptions.TimeoutException
     """
-    self._tab_list_backend.CloseTab(self.id)
+    if keep_one and len(self._tab_list_backend) <= 1:
+      self._tab_list_backend.New(in_new_window=False, timeout=timeout, url=None)
+    self._tab_list_backend.CloseTab(self.id, timeout)
 
   @property
   def screenshot_supported(self):
@@ -105,7 +111,7 @@ class Tab(web_contents.WebContents):
     return self._inspector_backend.screenshot_supported
 
   def Screenshot(self, timeout=DEFAULT_TAB_TIMEOUT):
-    """Capture a screenshot of the tab's contents.
+    """Capture a screenshot of the tab's visible contents.
 
     Returns:
       A telemetry.core.Bitmap.
@@ -116,106 +122,17 @@ class Tab(web_contents.WebContents):
     """
     return self._inspector_backend.Screenshot(timeout)
 
-  @property
-  def video_capture_supported(self):
-    """True if the browser instance is capable of capturing video."""
-    return self.browser.platform.CanCaptureVideo()
-
-  def Highlight(self, color):
-    """Synchronously highlights entire tab contents with the given RgbaColor.
-
-    TODO(tonyg): It is possible that the z-index hack here might not work for
-    all pages. If this happens, DevTools also provides a method for this.
-
-    Raises:
-      exceptions.EvaluateException
-      exceptions.WebSocketDisconnected
-      exceptions.TimeoutException
-      exceptions.DevtoolsTargetCrashException
-    """
-    self.ExecuteJavaScript("""
-      (function() {
-        var screen = document.createElement('div');
-        screen.style.background = 'rgba(%d, %d, %d, %d)';
-        screen.style.position = 'fixed';
-        screen.style.top = '0';
-        screen.style.left = '0';
-        screen.style.width = '100%%';
-        screen.style.height = '100%%';
-        screen.style.zIndex = '2147483638';
-        document.body.appendChild(screen);
-        requestAnimationFrame(function() {
-          requestAnimationFrame(function() {
-            window.__telemetry_screen_%d = screen;
-          });
-        });
-      })();
-    """ % (color.r, color.g, color.b, color.a, int(color)))
-    self.WaitForJavaScriptExpression(
-        '!!window.__telemetry_screen_%d' % int(color), 5)
-
-  def ClearHighlight(self, color):
-    """Clears a highlight of the given bitmap.RgbaColor.
-
-    Raises:
-      exceptions.EvaluateException
-      exceptions.WebSocketDisconnected
-      exceptions.TimeoutException
-      exceptions.DevtoolsTargetCrashException
-    """
-    self.ExecuteJavaScript("""
-      (function() {
-        document.body.removeChild(window.__telemetry_screen_%d);
-        requestAnimationFrame(function() {
-          requestAnimationFrame(function() {
-            window.__telemetry_screen_%d = null;
-            console.time('__ClearHighlight.video_capture_start');
-            console.timeEnd('__ClearHighlight.video_capture_start');
-          });
-        });
-      })();
-    """ % (int(color), int(color)))
-    self.WaitForJavaScriptExpression(
-        '!window.__telemetry_screen_%d' % int(color), 5)
-
-  def StartVideoCapture(self, min_bitrate_mbps,
-                        highlight_bitmap=video.HIGHLIGHT_ORANGE_FRAME):
-    """Starts capturing video of the tab's contents.
-
-    This works by flashing the entire tab contents to a arbitrary color and then
-    starting video recording. When the frames are processed, we can look for
-    that flash as the content bounds.
-
-    Args:
-      min_bitrate_mbps: The minimum caputre bitrate in MegaBits Per Second.
-          The platform is free to deliver a higher bitrate if it can do so
-          without increasing overhead.
-
-    Raises:
-      exceptions.EvaluateException
-      exceptions.WebSocketDisconnected
-      exceptions.TimeoutException
-      exceptions.DevtoolsTargetCrashException
-      ValueError: If the required |min_bitrate_mbps| can't be achieved.
-    """
-    self.Highlight(highlight_bitmap)
-    self.browser.platform.StartVideoCapture(min_bitrate_mbps)
-    self.ClearHighlight(highlight_bitmap)
-
-  @property
-  def is_video_capture_running(self):
-    return self.browser.platform.is_video_capture_running
-
-  def StopVideoCapture(self):
-    """Stops recording video of the tab's contents.
-
-    This looks for the initial color flash in the first frame to establish the
-    tab content boundaries and then omits all frames displaying the flash.
+  def FullScreenshot(self, timeout=DEFAULT_TAB_TIMEOUT):
+    """Capture a screenshot of the tab's full contents.
 
     Returns:
-      video: A video object which is a telemetry.core.Video
+      A telemetry.core.Bitmap.
+    Raises:
+      exceptions.WebSocketDisconnected
+      exceptions.TimeoutException
+      exceptions.DevtoolsTargetCrashException
     """
-    return self.browser.platform.StopVideoCapture()
+    return self._inspector_backend.FullScreenshot(timeout)
 
   def GetCookieByName(self, name, timeout=DEFAULT_TAB_TIMEOUT):
     """Returns the value of the cookie by the given |name|.
@@ -263,3 +180,24 @@ class Tab(web_contents.WebContents):
     """)
     if force:
       self.Navigate('about:blank')
+
+  def ClearDataForOrigin(self, url, timeout=DEFAULT_TAB_TIMEOUT):
+    """Clears storage data for the origin of url.
+
+    With assigning 'all' to params.storageTypes, Storage.clearDataForOrigin
+    clears all storage of app cache, cookies, file systems, indexed db,
+    local storage, shader cache, web sql, service workers and cache storage.
+    See StorageHandler::ClearDataForOrigin() for more details.
+
+    Raises:
+      exceptions.StoryActionError
+    """
+    return self._inspector_backend.ClearDataForOrigin(url, timeout)
+
+  def StopAllServiceWorkers(self, timeout=DEFAULT_TAB_TIMEOUT):
+    """Stops all service workers.
+
+    Raises:
+      exceptions.StoryActionError
+    """
+    return self._inspector_backend.StopAllServiceWorkers(timeout)

@@ -34,21 +34,23 @@ tr.exportTo('tr.model.source_info', function() {
       return this.scriptId_;
     },
 
-    toString: function() {
-      var str = this.isNative_ ? '[native v8] ' : '';
+    toString() {
+      const str = this.isNative_ ? '[native v8] ' : '';
       return str +
           tr.model.source_info.SourceInfo.prototype.toString.call(this);
     }
   };
 
+  const JSSourceState = {
+    COMPILED: 'compiled',
+    OPTIMIZABLE: 'optimizable',
+    OPTIMIZED: 'optimized',
+    UNKNOWN: 'unknown',
+  };
+
   return {
-    JSSourceInfo: JSSourceInfo,
-    JSSourceState: {
-      COMPILED: 'compiled',
-      OPTIMIZABLE: 'optimizable',
-      OPTIMIZED: 'optimized',
-      UNKNOWN: 'unknown'
-    }
+    JSSourceInfo,
+    JSSourceState,
   };
 });
 </script>

@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import os
 
 
@@ -26,7 +27,7 @@ class FileHandle(object):
     self._temp_file = temp_file
     self._absolute_path = absolute_path
 
-    global _next_file_id
+    global _next_file_id # pylint: disable=global-statement
     self._id = _next_file_id
     _next_file_id += 1
 

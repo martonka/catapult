@@ -4,12 +4,16 @@
 
 # pylint: disable=too-many-lines
 
+from __future__ import division
+from __future__ import absolute_import
 import unittest
 
 import telemetry.timeline.counter as tracing_counter
 import telemetry.timeline.model as timeline_model
-from telemetry.timeline import trace_data as trace_data_module
+from tracing.trace_data import trace_data as trace_data_module
 
+# 2To3-division: those lines like xxx / 1000.0 are unchanged as result is
+# expected floats.
 
 def FindEventNamed(events, name):
   for event in events:
@@ -17,25 +21,26 @@ def FindEventNamed(events, name):
       return event
   raise ValueError('No event found with name %s' % name)
 
+
 class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testBasicSingleThreadNonnestedParsing(self):
     events = [
-      {'name': 'a', 'args': {}, 'pid': 52, 'ts': 520, 'tts': 280, 'cat': 'foo',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'a', 'args': {}, 'pid': 52, 'ts': 560, 'tts': 310, 'cat': 'foo',
-       'tid': 53, 'ph': 'E'},
-      {'name': 'b', 'args': {}, 'pid': 52, 'ts': 629, 'tts': 356, 'cat': 'bar',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'b', 'args': {}, 'pid': 52, 'ts': 631, 'tts': 357, 'cat': 'bar',
-       'tid': 53, 'ph': 'E'},
-      {'name': 'c', 'args': {}, 'pid': 52, 'ts': 633, 'cat': 'baz',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'c', 'args': {}, 'pid': 52, 'ts': 637, 'cat': 'baz',
-       'tid': 53, 'ph': 'E'}
+        {'name': 'a', 'args': {}, 'pid': 52, 'ts': 520, 'tts': 280,
+         'cat': 'foo', 'tid': 53, 'ph': 'B'},
+        {'name': 'a', 'args': {}, 'pid': 52, 'ts': 560, 'tts': 310,
+         'cat': 'foo', 'tid': 53, 'ph': 'E'},
+        {'name': 'b', 'args': {}, 'pid': 52, 'ts': 629, 'tts': 356,
+         'cat': 'bar', 'tid': 53, 'ph': 'B'},
+        {'name': 'b', 'args': {}, 'pid': 52, 'ts': 631, 'tts': 357,
+         'cat': 'bar', 'tid': 53, 'ph': 'E'},
+        {'name': 'c', 'args': {}, 'pid': 52, 'ts': 633, 'cat': 'baz',
+         'tid': 53, 'ph': 'B'},
+        {'name': 'c', 'args': {}, 'pid': 52, 'ts': 637, 'cat': 'baz',
+         'tid': 53, 'ph': 'E'}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     processes = m.GetAllProcesses()
     self.assertEqual(1, len(processes))
@@ -81,13 +86,13 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testArgumentDupeCreatesNonFailingImportError(self):
     events = [
-      {'name': 'a', 'args': {'x': 1}, 'pid': 1, 'ts': 520, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'a', 'args': {'x': 2}, 'pid': 1, 'ts': 560, 'cat': 'foo',
-       'tid': 1, 'ph': 'E'}
+        {'name': 'a', 'args': {'x': 1}, 'pid': 1, 'ts': 520, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'a', 'args': {'x': 2}, 'pid': 1, 'ts': 560, 'cat': 'foo',
+         'tid': 1, 'ph': 'E'}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     processes = m.GetAllProcesses()
     t = processes[0].threads[1]
@@ -98,13 +103,13 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testCategoryBeginEndMismatchPreferslice_begin(self):
     events = [
-      {'name': 'a', 'args': {}, 'pid': 52, 'ts': 520, 'cat': 'foo',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'a', 'args': {}, 'pid': 52, 'ts': 560, 'cat': 'bar',
-       'tid': 53, 'ph': 'E'}
+        {'name': 'a', 'args': {}, 'pid': 52, 'ts': 520, 'cat': 'foo',
+         'tid': 53, 'ph': 'B'},
+        {'name': 'a', 'args': {}, 'pid': 52, 'ts': 560, 'cat': 'bar',
+         'tid': 53, 'ph': 'E'}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     processes = m.GetAllProcesses()
     self.assertEqual(1, len(processes))
@@ -121,16 +126,16 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testNestedParsing(self):
     events = [
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'tts': 2, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'b', 'args': {}, 'pid': 1, 'ts': 3, 'tts': 3, 'cat': 'bar',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'b', 'args': {}, 'pid': 1, 'ts': 5, 'tts': 4, 'cat': 'bar',
-       'tid': 1, 'ph': 'E'},
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 7, 'tts': 5, 'cat': 'foo',
-       'tid': 1, 'ph': 'E'}
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'tts': 2, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'b', 'args': {}, 'pid': 1, 'ts': 3, 'tts': 3, 'cat': 'bar',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'b', 'args': {}, 'pid': 1, 'ts': 5, 'tts': 4, 'cat': 'bar',
+         'tid': 1, 'ph': 'E'},
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 7, 'tts': 5, 'cat': 'foo',
+         'tid': 1, 'ph': 'E'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data, shift_world_to_zero=False)
     t = m.GetAllProcesses()[0].threads[1]
 
@@ -153,24 +158,24 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testAutoclosing(self):
     events = [
-      # Slices that don't finish.
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'tts': 1, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'b', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 2, 'cat': 'foo',
-       'tid': 2, 'ph': 'B'},
+        # Slices that don't finish.
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'tts': 1, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'b', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 2, 'cat': 'foo',
+         'tid': 2, 'ph': 'B'},
 
-      # Slices on thread 1 and 2 that do finish to give an 'end time' to make
-      # autoclosing work.
-      {'name': 'c', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 1.5, 'cat': 'bar',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'c', 'args': {}, 'pid': 1, 'ts': 4, 'tts': 3, 'cat': 'bar',
-       'tid': 1, 'ph': 'E'},
-      {'name': 'd', 'args': {}, 'pid': 1, 'ts': 3, 'tts': 2.5, 'cat': 'bar',
-       'tid': 2, 'ph': 'B'},
-      {'name': 'd', 'args': {}, 'pid': 1, 'ts': 7, 'tts': 5, 'cat': 'bar',
-       'tid': 2, 'ph': 'E'}
+        # Slices on thread 1 and 2 that do finish to give an 'end time' to make
+        # autoclosing work.
+        {'name': 'c', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 1.5, 'cat': 'bar',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'c', 'args': {}, 'pid': 1, 'ts': 4, 'tts': 3, 'cat': 'bar',
+         'tid': 1, 'ph': 'E'},
+        {'name': 'd', 'args': {}, 'pid': 1, 'ts': 3, 'tts': 2.5, 'cat': 'bar',
+         'tid': 2, 'ph': 'B'},
+        {'name': 'd', 'args': {}, 'pid': 1, 'ts': 7, 'tts': 5, 'cat': 'bar',
+         'tid': 2, 'ph': 'E'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     p = m.GetAllProcesses()[0]
     t1 = p.threads[1]
@@ -195,11 +200,11 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testAutoclosingLoneBegin(self):
     events = [
-      # Slice that doesn't finish.
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'tts': 1, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'}
+        # Slice that doesn't finish.
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'tts': 1, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     p = m.GetAllProcesses()[0]
     t = p.threads[1]
@@ -214,16 +219,16 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testAutoclosingWithSubTasks(self):
     events = [
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'b1', 'args': {}, 'pid': 1, 'ts': 2, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'b1', 'args': {}, 'pid': 1, 'ts': 3, 'cat': 'foo',
-       'tid': 1, 'ph': 'E'},
-      {'name': 'b2', 'args': {}, 'pid': 1, 'ts': 3, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'}
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'b1', 'args': {}, 'pid': 1, 'ts': 2, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'b1', 'args': {}, 'pid': 1, 'ts': 3, 'cat': 'foo',
+         'tid': 1, 'ph': 'E'},
+        {'name': 'b2', 'args': {}, 'pid': 1, 'ts': 3, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data, shift_world_to_zero=False)
     t = m.GetAllProcesses()[0].threads[1]
 
@@ -237,19 +242,19 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testAutoclosingWithEventsOutsideBounds(self):
     events = [
-      # Slice that begins before min and ends after max of the other threads.
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 0, 'tts': 0, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'b', 'args': {}, 'pid': 1, 'ts': 6, 'tts': 3, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
+        # Slice that begins before min and ends after max of the other threads.
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 0, 'tts': 0, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'b', 'args': {}, 'pid': 1, 'ts': 6, 'tts': 3, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
 
-      # Slice that does finish to give an 'end time' to establish a basis
-      {'name': 'c', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 1, 'cat': 'bar',
-       'tid': 2, 'ph': 'B'},
-      {'name': 'c', 'args': {}, 'pid': 1, 'ts': 4, 'tts': 2, 'cat': 'bar',
-       'tid': 2, 'ph': 'E'}
+        # Slice that does finish to give an 'end time' to establish a basis
+        {'name': 'c', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 1, 'cat': 'bar',
+         'tid': 2, 'ph': 'B'},
+        {'name': 'c', 'args': {}, 'pid': 1, 'ts': 4, 'tts': 2, 'cat': 'bar',
+         'tid': 2, 'ph': 'E'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data, shift_world_to_zero=False)
     p = m.GetAllProcesses()[0]
     t1 = p.threads[1]
@@ -285,19 +290,19 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testNestedAutoclosing(self):
     events = [
-      # Tasks that don't finish.
-      {'name': 'a1', 'args': {}, 'pid': 1, 'ts': 1, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'a2', 'args': {}, 'pid': 1, 'ts': 1.5, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
+        # Tasks that don't finish.
+        {'name': 'a1', 'args': {}, 'pid': 1, 'ts': 1, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'a2', 'args': {}, 'pid': 1, 'ts': 1.5, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
 
-      # Slice that does finish to give an 'end time' to make autoclosing work.
-      {'name': 'b', 'args': {}, 'pid': 1, 'ts': 1, 'cat': 'foo',
-       'tid': 2, 'ph': 'B'},
-      {'name': 'b', 'args': {}, 'pid': 1, 'ts': 2, 'cat': 'foo',
-       'tid': 2, 'ph': 'E'}
+        # Slice that does finish to give an 'end time' to make autoclosing work.
+        {'name': 'b', 'args': {}, 'pid': 1, 'ts': 1, 'cat': 'foo',
+         'tid': 2, 'ph': 'B'},
+        {'name': 'b', 'args': {}, 'pid': 1, 'ts': 2, 'cat': 'foo',
+         'tid': 2, 'ph': 'E'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data, shift_world_to_zero=False)
     t1 = m.GetAllProcesses()[0].threads[1]
     t2 = m.GetAllProcesses()[0].threads[2]
@@ -311,16 +316,16 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testMultipleThreadParsing(self):
     events = [
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 1, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 4, 'tts': 2, 'cat': 'foo',
-       'tid': 1, 'ph': 'E'},
-      {'name': 'b', 'args': {}, 'pid': 1, 'ts': 6, 'tts': 3, 'cat': 'bar',
-       'tid': 2, 'ph': 'B'},
-      {'name': 'b', 'args': {}, 'pid': 1, 'ts': 8, 'tts': 4, 'cat': 'bar',
-       'tid': 2, 'ph': 'E'}
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 1, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 4, 'tts': 2, 'cat': 'foo',
+         'tid': 1, 'ph': 'E'},
+        {'name': 'b', 'args': {}, 'pid': 1, 'ts': 6, 'tts': 3, 'cat': 'bar',
+         'tid': 2, 'ph': 'B'},
+        {'name': 'b', 'args': {}, 'pid': 1, 'ts': 8, 'tts': 4, 'cat': 'bar',
+         'tid': 2, 'ph': 'E'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     processes = m.GetAllProcesses()
     self.assertEqual(1, len(processes))
@@ -356,17 +361,17 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testMultiplePidParsing(self):
     events = [
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 1, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 4, 'tts': 2, 'cat': 'foo',
-       'tid': 1, 'ph': 'E'},
-      {'name': 'b', 'args': {}, 'pid': 2, 'ts': 6, 'tts': 3, 'cat': 'bar',
-       'tid': 2, 'ph': 'B'},
-      {'name': 'b', 'args': {}, 'pid': 2, 'ts': 8, 'tts': 4, 'cat': 'bar',
-       'tid': 2, 'ph': 'E'}
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 1, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 4, 'tts': 2, 'cat': 'foo',
+         'tid': 1, 'ph': 'E'},
+        {'name': 'b', 'args': {}, 'pid': 2, 'ts': 6, 'tts': 3, 'cat': 'bar',
+         'tid': 2, 'ph': 'B'},
+        {'name': 'b', 'args': {}, 'pid': 2, 'ts': 8, 'tts': 4, 'cat': 'bar',
+         'tid': 2, 'ph': 'E'}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     processes = m.GetAllProcesses()
     self.assertEqual(2, len(processes))
@@ -406,26 +411,25 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
     self.assertAlmostEqual((4 - 3) / 1000.0, slice_event.thread_duration)
 
     # Check getAllThreads.
-    self.assertEqual([processes[0].threads[1],
-                      processes[1].threads[2]],
-                      m.GetAllThreads())
+    self.assertEqual(
+        [processes[0].threads[1], processes[1].threads[2]], m.GetAllThreads())
 
   def testThreadNames(self):
     events = [
-      {'name': 'thread_name', 'args': {'name': 'Thread 1'},
-        'pid': 1, 'ts': 0, 'tid': 1, 'ph': 'M'},
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 2, 'cat': 'foo',
-       'tid': 1, 'ph': 'E'},
-      {'name': 'b', 'args': {}, 'pid': 2, 'ts': 3, 'cat': 'foo',
-       'tid': 2, 'ph': 'B'},
-      {'name': 'b', 'args': {}, 'pid': 2, 'ts': 4, 'cat': 'foo',
-       'tid': 2, 'ph': 'E'},
-      {'name': 'thread_name', 'args': {'name': 'Thread 2'},
-        'pid': 2, 'ts': 0, 'tid': 2, 'ph': 'M'}
+        {'name': 'thread_name', 'args': {'name': 'Thread 1'},
+         'pid': 1, 'ts': 0, 'tid': 1, 'ph': 'M'},
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 2, 'cat': 'foo',
+         'tid': 1, 'ph': 'E'},
+        {'name': 'b', 'args': {}, 'pid': 2, 'ts': 3, 'cat': 'foo',
+         'tid': 2, 'ph': 'B'},
+        {'name': 'b', 'args': {}, 'pid': 2, 'ts': 4, 'cat': 'foo',
+         'tid': 2, 'ph': 'E'},
+        {'name': 'thread_name', 'args': {'name': 'Thread 2'},
+         'pid': 2, 'ts': 0, 'tid': 2, 'ph': 'M'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     processes = m.GetAllProcesses()
     self.assertEqual('Thread 1', processes[0].threads[1].name)
@@ -433,14 +437,14 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testParsingWhenEndComesFirst(self):
     events = [
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'tts': 1, 'cat': 'foo',
-       'tid': 1, 'ph': 'E'},
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 4, 'tts': 4, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 5, 'tts': 5, 'cat': 'foo',
-       'tid': 1, 'ph': 'E'}
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 1, 'tts': 1, 'cat': 'foo',
+         'tid': 1, 'ph': 'E'},
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 4, 'tts': 4, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 5, 'tts': 5, 'cat': 'foo',
+         'tid': 1, 'ph': 'E'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data, shift_world_to_zero=False)
     p = m.GetAllProcesses()[0]
     t = p.threads[1]
@@ -455,18 +459,18 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testImmediateParsing(self):
     events = [
-      # Need to include immediates inside a task so the timeline
-      # recentering/zeroing doesn't clobber their timestamp.
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 1, 'cat': 'foo',
-       'tid': 1, 'ph': 'B'},
-      {'name': 'immediate', 'args': {}, 'pid': 1, 'ts': 4, 'cat': 'bar',
-       'tid': 1, 'ph': 'I'},
-      {'name': 'slower', 'args': {}, 'pid': 1, 'ts': 8, 'cat': 'baz',
-       'tid': 1, 'ph': 'i'},
-      {'name': 'a', 'args': {}, 'pid': 1, 'ts': 8, 'tts': 4, 'cat': 'foo',
-       'tid': 1, 'ph': 'E'}
+        # Need to include immediates inside a task so the timeline
+        # recentering/zeroing doesn't clobber their timestamp.
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 2, 'tts': 1, 'cat': 'foo',
+         'tid': 1, 'ph': 'B'},
+        {'name': 'immediate', 'args': {}, 'pid': 1, 'ts': 4, 'cat': 'bar',
+         'tid': 1, 'ph': 'I'},
+        {'name': 'slower', 'args': {}, 'pid': 1, 'ts': 8, 'cat': 'baz',
+         'tid': 1, 'ph': 'i'},
+        {'name': 'a', 'args': {}, 'pid': 1, 'ts': 8, 'tts': 4, 'cat': 'foo',
+         'tid': 1, 'ph': 'E'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data, shift_world_to_zero=False)
     p = m.GetAllProcesses()[0]
     t = p.threads[1]
@@ -495,14 +499,14 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testSimpleCounter(self):
     events = [
-      {'name': 'ctr', 'args': {'value': 0}, 'pid': 1, 'ts': 0, 'cat': 'foo',
-       'tid': 1, 'ph': 'C'},
-      {'name': 'ctr', 'args': {'value': 10}, 'pid': 1, 'ts': 10, 'cat': 'foo',
-       'tid': 1, 'ph': 'C'},
-      {'name': 'ctr', 'args': {'value': 0}, 'pid': 1, 'ts': 20, 'cat': 'foo',
-       'tid': 1, 'ph': 'C'}
+        {'name': 'ctr', 'args': {'value': 0}, 'pid': 1, 'ts': 0, 'cat': 'foo',
+         'tid': 1, 'ph': 'C'},
+        {'name': 'ctr', 'args': {'value': 10}, 'pid': 1, 'ts': 10, 'cat': 'foo',
+         'tid': 1, 'ph': 'C'},
+        {'name': 'ctr', 'args': {'value': 0}, 'pid': 1, 'ts': 20, 'cat': 'foo',
+         'tid': 1, 'ph': 'C'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     p = m.GetAllProcesses()[0]
     ctr = p.counters['foo.ctr']
@@ -520,26 +524,26 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testInstanceCounter(self):
     events = [
-      {'name': 'ctr', 'args': {'value': 0}, 'pid': 1, 'ts': 0, 'cat': 'foo',
-       'tid': 1,
-       'ph': 'C', 'id': 0},
-      {'name': 'ctr', 'args': {'value': 10}, 'pid': 1, 'ts': 10, 'cat': 'foo',
-       'tid': 1,
-       'ph': 'C', 'id': 0},
-      {'name': 'ctr', 'args': {'value': 10}, 'pid': 1, 'ts': 10, 'cat': 'foo',
-       'tid': 1,
-       'ph': 'C', 'id': 1},
-      {'name': 'ctr', 'args': {'value': 20}, 'pid': 1, 'ts': 15, 'cat': 'foo',
-       'tid': 1,
-       'ph': 'C', 'id': 1},
-      {'name': 'ctr', 'args': {'value': 30}, 'pid': 1, 'ts': 18, 'cat': 'foo',
-       'tid': 1,
-       'ph': 'C', 'id': 1},
-      {'name': 'ctr', 'args': {'value': 40}, 'pid': 1, 'ts': 20, 'cat': 'bar',
-       'tid': 1,
-       'ph': 'C', 'id': 2}
+        {'name': 'ctr', 'args': {'value': 0}, 'pid': 1, 'ts': 0, 'cat': 'foo',
+         'tid': 1,
+         'ph': 'C', 'id': 0},
+        {'name': 'ctr', 'args': {'value': 10}, 'pid': 1, 'ts': 10, 'cat': 'foo',
+         'tid': 1,
+         'ph': 'C', 'id': 0},
+        {'name': 'ctr', 'args': {'value': 10}, 'pid': 1, 'ts': 10, 'cat': 'foo',
+         'tid': 1,
+         'ph': 'C', 'id': 1},
+        {'name': 'ctr', 'args': {'value': 20}, 'pid': 1, 'ts': 15, 'cat': 'foo',
+         'tid': 1,
+         'ph': 'C', 'id': 1},
+        {'name': 'ctr', 'args': {'value': 30}, 'pid': 1, 'ts': 18, 'cat': 'foo',
+         'tid': 1,
+         'ph': 'C', 'id': 1},
+        {'name': 'ctr', 'args': {'value': 40}, 'pid': 1, 'ts': 20, 'cat': 'bar',
+         'tid': 1,
+         'ph': 'C', 'id': 2}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     p = m.GetAllProcesses()[0]
     ctr = p.counters['foo.ctr[0]']
@@ -567,8 +571,8 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
     self.assertEqual([40], ctr.samples)
 
   def testMultiCounterUpdateBounds(self):
-    ctr = tracing_counter.Counter(None, 'testBasicCounter',
-        'testBasicCounter')
+    ctr = tracing_counter.Counter(
+        None, 'testBasicCounter', 'testBasicCounter')
     ctr.series_names = ['value1', 'value2']
     ctr.timestamps = [0, 1, 2, 3, 4, 5, 6, 7]
     ctr.samples = [0, 0,
@@ -582,24 +586,24 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
     ctr.FinalizeImport()
     self.assertEqual(8, ctr.max_total)
     self.assertEqual([0, 0,
-                       1, 1,
-                       1, 2,
-                       2, 3.1,
-                       3, 3,
-                       1, 8,
-                       3, 3,
-                       3.1, 3.6], ctr.totals)
+                      1, 1,
+                      1, 2,
+                      2, 3.1,
+                      3, 3,
+                      1, 8,
+                      3, 3,
+                      3.1, 3.6], ctr.totals)
 
   def testMultiCounter(self):
     events = [
-      {'name': 'ctr', 'args': {'value1': 0, 'value2': 7}, 'pid': 1, 'ts': 0,
-       'cat': 'foo', 'tid': 1, 'ph': 'C'},
-      {'name': 'ctr', 'args': {'value1': 10, 'value2': 4}, 'pid': 1, 'ts': 10,
-       'cat': 'foo', 'tid': 1, 'ph': 'C'},
-      {'name': 'ctr', 'args': {'value1': 0, 'value2': 1}, 'pid': 1, 'ts': 20,
-       'cat': 'foo', 'tid': 1, 'ph': 'C'}
+        {'name': 'ctr', 'args': {'value1': 0, 'value2': 7}, 'pid': 1, 'ts': 0,
+         'cat': 'foo', 'tid': 1, 'ph': 'C'},
+        {'name': 'ctr', 'args': {'value1': 10, 'value2': 4}, 'pid': 1, 'ts': 10,
+         'cat': 'foo', 'tid': 1, 'ph': 'C'},
+        {'name': 'ctr', 'args': {'value1': 0, 'value2': 1}, 'pid': 1, 'ts': 20,
+         'cat': 'foo', 'tid': 1, 'ph': 'C'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     p = m.GetAllProcesses()[0]
     ctr = p.counters['foo.ctr']
@@ -617,18 +621,61 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
     # the order in which the series names are added.
     self.assertEqual(14, ctr.max_total)
 
+  def testNestableInstant(self):
+    events = [
+        {'name': 'a', 'args': {'arg1': 'value1'}, 'pid': 52, 'ts': 540,
+         'cat': 'foo', 'tid': 53, 'ph': 'n', 'id2': {'local': 72}},
+        {'name': 'b', 'args': {'arg2': 'value3'}, 'pid': 52, 'ts': 1554,
+         'cat': 'bar', 'tid': 54, 'ph': 'n', 'id2': {'global': 85}},
+        {'name': 'c', 'args': {'arg3': 'value4'}, 'pid': 52, 'tts': 1555,
+         'ts': 1560, 'cat': 'baz', 'tid': 54, 'ph': 'n', 'id2': {'local': 72}},
+    ]
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
+
+    m = timeline_model.TimelineModel(trace_data)
+    events = list(m.IterAllEvents())
+    self.assertEqual(3, len(events))
+
+    processes = m.GetAllProcesses()
+    t1 = processes[0].threads[53]
+    self.assertEqual(1, len(t1.async_slices))
+    e1 = t1.async_slices[0]
+    self.assertEqual('a', e1.name)
+    self.assertEqual('value1', e1.args['arg1'])
+    self.assertEqual(0, e1.start)
+    self.assertEqual(0, e1.duration)
+    self.assertEqual('foo', e1.category)
+    self.assertEqual('52.72', e1.id)
+
+    t2 = processes[0].threads[54]
+    self.assertEqual(2, len(t2.async_slices))
+    e2 = t2.async_slices[0]
+    self.assertEqual('b', e2.name)
+    self.assertEqual('value3', e2.args['arg2'])
+    self.assertEqual((1554 - 540) / 1000.0, e2.start)
+    self.assertEqual(0, e2.duration)
+    self.assertEqual('bar', e2.category)
+    self.assertEqual(85, e2.id)
+
+    e3 = t2.async_slices[1]
+    self.assertEqual('c', e3.name)
+    self.assertEqual('value4', e3.args['arg3'])
+    self.assertEqual((1560 - 540) / 1000.0, e3.start)
+    self.assertEqual(1555 / 1000.0, e3.thread_start)
+    self.assertEqual(0, e3.duration)
+    self.assertEqual('baz', e3.category)
+    self.assertEqual('52.72', e3.id)
+
   def testStartFinishOneSliceOneThread(self):
     events = [
-      # Time is intentionally out of order.
-      {'name': 'a', 'args': {}, 'pid': 52, 'ts': 560, 'cat': 'cat',
-       'tid': 53,
-         'ph': 'F', 'id': 72},
-      {'name': 'a', 'pid': 52, 'ts': 524, 'cat': 'cat',
-       'tid': 53,
-         'ph': 'S', 'id': 72, 'args': {'foo': 'bar'}}
+        # Time is intentionally out of order.
+        {'name': 'a', 'args': {}, 'pid': 52, 'ts': 560, 'cat': 'cat',
+         'tid': 53, 'ph': 'F', 'id2': {'global': 72}},
+        {'name': 'a', 'pid': 52, 'ts': 524, 'cat': 'cat',
+         'tid': 53, 'ph': 'S', 'id2': {'global': 72}, 'args': {'foo': 'bar'}}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
 
     events = list(m.IterAllEvents())
@@ -649,13 +696,13 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testEndArgsAddedToSlice(self):
     events = [
-      {'name': 'a', 'args': {'x': 1}, 'pid': 52, 'ts': 520, 'cat': 'foo',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'a', 'args': {'y': 2}, 'pid': 52, 'ts': 560, 'cat': 'foo',
-       'tid': 53, 'ph': 'E'}
+        {'name': 'a', 'args': {'x': 1}, 'pid': 52, 'ts': 520, 'cat': 'foo',
+         'tid': 53, 'ph': 'B'},
+        {'name': 'a', 'args': {'y': 2}, 'pid': 52, 'ts': 560, 'cat': 'foo',
+         'tid': 53, 'ph': 'E'}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     processes = m.GetAllProcesses()
     self.assertEqual(1, len(processes))
@@ -674,13 +721,13 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testEndArgOverrwritesOriginalArgValueIfDuplicated(self):
     events = [
-      {'name': 'b', 'args': {'z': 3}, 'pid': 52, 'ts': 629, 'cat': 'foo',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'b', 'args': {'z': 4}, 'pid': 52, 'ts': 631, 'cat': 'foo',
-       'tid': 53, 'ph': 'E'}
+        {'name': 'b', 'args': {'z': 3}, 'pid': 52, 'ts': 629, 'cat': 'foo',
+         'tid': 53, 'ph': 'B'},
+        {'name': 'b', 'args': {'z': 4}, 'pid': 52, 'ts': 631, 'cat': 'foo',
+         'tid': 53, 'ph': 'E'}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     processes = m.GetAllProcesses()
     self.assertEqual(1, len(processes))
@@ -701,28 +748,28 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
               [ c ]     [ e ]
     """
     events = [
-      {'name': 'a', 'args': {}, 'pid': 52, 'ts': 100, 'cat': 'foo',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'a', 'args': {}, 'pid': 52, 'ts': 200, 'cat': 'foo',
-       'tid': 53, 'ph': 'E'},
-      {'name': 'b', 'args': {}, 'pid': 52, 'ts': 125, 'cat': 'foo',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'b', 'args': {}, 'pid': 52, 'ts': 165, 'cat': 'foo',
-       'tid': 53, 'ph': 'E'},
-      {'name': 'c', 'args': {}, 'pid': 52, 'ts': 125, 'cat': 'foo',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'c', 'args': {}, 'pid': 52, 'ts': 135, 'cat': 'foo',
-       'tid': 53, 'ph': 'E'},
-      {'name': 'd', 'args': {}, 'pid': 52, 'ts': 175, 'cat': 'foo',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'd', 'args': {}, 'pid': 52, 'ts': 190, 'cat': 'foo',
-       'tid': 53, 'ph': 'E'},
-      {'name': 'e', 'args': {}, 'pid': 52, 'ts': 155, 'cat': 'foo',
-       'tid': 53, 'ph': 'B'},
-      {'name': 'e', 'args': {}, 'pid': 52, 'ts': 165, 'cat': 'foo',
-       'tid': 53, 'ph': 'E'}
+        {'name': 'a', 'args': {}, 'pid': 52, 'ts': 100, 'cat': 'foo',
+         'tid': 53, 'ph': 'B'},
+        {'name': 'a', 'args': {}, 'pid': 52, 'ts': 200, 'cat': 'foo',
+         'tid': 53, 'ph': 'E'},
+        {'name': 'b', 'args': {}, 'pid': 52, 'ts': 125, 'cat': 'foo',
+         'tid': 53, 'ph': 'B'},
+        {'name': 'b', 'args': {}, 'pid': 52, 'ts': 165, 'cat': 'foo',
+         'tid': 53, 'ph': 'E'},
+        {'name': 'c', 'args': {}, 'pid': 52, 'ts': 125, 'cat': 'foo',
+         'tid': 53, 'ph': 'B'},
+        {'name': 'c', 'args': {}, 'pid': 52, 'ts': 135, 'cat': 'foo',
+         'tid': 53, 'ph': 'E'},
+        {'name': 'd', 'args': {}, 'pid': 52, 'ts': 175, 'cat': 'foo',
+         'tid': 53, 'ph': 'B'},
+        {'name': 'd', 'args': {}, 'pid': 52, 'ts': 190, 'cat': 'foo',
+         'tid': 53, 'ph': 'E'},
+        {'name': 'e', 'args': {}, 'pid': 52, 'ts': 155, 'cat': 'foo',
+         'tid': 53, 'ph': 'B'},
+        {'name': 'e', 'args': {}, 'pid': 52, 'ts': 165, 'cat': 'foo',
+         'tid': 53, 'ph': 'E'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data, shift_world_to_zero=False)
     processes = m.GetAllProcesses()
     self.assertEqual(1, len(processes))
@@ -750,16 +797,14 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testAsyncEndArgAddedToSlice(self):
     events = [
-      # Time is intentionally out of order.
-      {'name': 'c', 'args': {'y': 2}, 'pid': 52, 'ts': 560, 'cat': 'foo',
-       'tid': 53,
-         'ph': 'F', 'id': 72},
-      {'name': 'c', 'args': {'x': 1}, 'pid': 52, 'ts': 524, 'cat': 'foo',
-       'tid': 53,
-         'ph': 'S', 'id': 72}
+        # Time is intentionally out of order.
+        {'name': 'c', 'args': {'y': 2}, 'pid': 52, 'ts': 560, 'cat': 'foo',
+         'tid': 53, 'ph': 'F', 'id2': {'local': 72}},
+        {'name': 'c', 'args': {'x': 1}, 'pid': 52, 'ts': 524, 'cat': 'foo',
+         'tid': 53, 'ph': 'S', 'id2': {'local': 72}}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     t = m.GetAllProcesses()[0].threads[53]
     self.assertEqual(1, len(t.async_slices))
@@ -774,16 +819,14 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testAsyncEndArgOverrwritesOriginalArgValueIfDuplicated(self):
     events = [
-      # Time is intentionally out of order.
-      {'name': 'd', 'args': {'z': 4}, 'pid': 52, 'ts': 560, 'cat': 'foo',
-       'tid': 53,
-         'ph': 'F', 'id': 72},
-      {'name': 'd', 'args': {'z': 3}, 'pid': 52, 'ts': 524, 'cat': 'foo',
-       'tid': 53,
-         'ph': 'S', 'id': 72}
+        # Time is intentionally out of order.
+        {'name': 'd', 'args': {'z': 4}, 'pid': 52, 'ts': 560, 'cat': 'foo',
+         'tid': 53, 'ph': 'F', 'id': 72},
+        {'name': 'd', 'args': {'z': 3}, 'pid': 52, 'ts': 524, 'cat': 'foo',
+         'tid': 53, 'ph': 'S', 'id': 72}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     t = m.GetAllProcesses()[0].threads[53]
     self.assertEqual(1, len(t.async_slices))
@@ -797,16 +840,16 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testAsyncStepsInOneThread(self):
     events = [
-      # Time is intentionally out of order.
-      {'name': 'a', 'args': {'z': 3}, 'pid': 52, 'ts': 560, 'cat': 'foo',
-       'tid': 53, 'ph': 'F', 'id': 72, 'tts': 25},
-      {'name': 'a', 'args': {'step': 's1', 'y': 2}, 'pid': 52, 'ts': 548,
-       'cat': 'foo', 'tid': 53, 'ph': 'T', 'id': 72, 'tts': 20},
-      {'name': 'a', 'args': {'x': 1}, 'pid': 52, 'ts': 524, 'cat': 'foo',
-       'tid': 53, 'ph': 'S', 'id': 72, 'tts': 17}
+        # Time is intentionally out of order.
+        {'name': 'a', 'args': {'z': 3}, 'pid': 52, 'ts': 560, 'cat': 'foo',
+         'tid': 53, 'ph': 'F', 'id': 72, 'tts': 25},
+        {'name': 'a', 'args': {'step': 's1', 'y': 2}, 'pid': 52, 'ts': 548,
+         'cat': 'foo', 'tid': 53, 'ph': 'T', 'id': 72, 'tts': 20},
+        {'name': 'a', 'args': {'x': 1}, 'pid': 52, 'ts': 524, 'cat': 'foo',
+         'tid': 53, 'ph': 'S', 'id': 72, 'tts': 17}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     t = m.GetAllProcesses()[0].threads[53]
     self.assertEqual(1, len(t.async_slices))
@@ -814,8 +857,8 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
     self.assertEqual('a', parent_slice.name)
     self.assertEqual('foo', parent_slice.category)
     self.assertEqual(0, parent_slice.start)
-    self.assertAlmostEqual(17/1000.0, parent_slice.thread_start)
-    self.assertAlmostEqual(25/1000.0, parent_slice.thread_end)
+    self.assertAlmostEqual(17 / 1000.0, parent_slice.thread_start)
+    self.assertAlmostEqual(25 / 1000.0, parent_slice.thread_end)
 
     self.assertEqual(2, len(parent_slice.sub_slices))
     sub_slice = parent_slice.sub_slices[0]
@@ -837,42 +880,42 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testAsyncStepsMissingStart(self):
     events = [
-      # Time is intentionally out of order.
-      {'name': 'a', 'args': {'z': 3}, 'pid': 52, 'ts': 560, 'cat': 'foo',
-       'tid': 53, 'ph': 'F', 'id': 72},
-      {'name': 'a', 'args': {'step': 's1', 'y': 2}, 'pid': 52, 'ts': 548,
-       'cat': 'foo', 'tid': 53, 'ph': 'T', 'id': 72}
+        # Time is intentionally out of order.
+        {'name': 'a', 'args': {'z': 3}, 'pid': 52, 'ts': 560, 'cat': 'foo',
+         'tid': 53, 'ph': 'F', 'id': 72},
+        {'name': 'a', 'args': {'step': 's1', 'y': 2}, 'pid': 52, 'ts': 548,
+         'cat': 'foo', 'tid': 53, 'ph': 'T', 'id': 72}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     t = m.GetAllProcesses()[0].threads[53]
     self.assertTrue(t is not None)
 
   def testAsyncStepsMissingFinish(self):
     events = [
-      # Time is intentionally out of order.
-      {'name': 'a', 'args': {'step': 's1', 'y': 2}, 'pid': 52, 'ts': 548,
-       'cat': 'foo', 'tid': 53, 'ph': 'T', 'id': 72},
-      {'name': 'a', 'args': {'z': 3}, 'pid': 52, 'ts': 560, 'cat': 'foo',
-       'tid': 53, 'ph': 'S', 'id': 72}
+        # Time is intentionally out of order.
+        {'name': 'a', 'args': {'step': 's1', 'y': 2}, 'pid': 52, 'ts': 548,
+         'cat': 'foo', 'tid': 53, 'ph': 'T', 'id': 72},
+        {'name': 'a', 'args': {'z': 3}, 'pid': 52, 'ts': 560, 'cat': 'foo',
+         'tid': 53, 'ph': 'S', 'id': 72}
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     t = m.GetAllProcesses()[0].threads[53]
     self.assertTrue(t is not None)
 
   def testImportSamples(self):
     events = [
-      {'name': 'a', 'args': {}, 'pid': 52, 'ts': 548, 'cat': 'test',
-       'tid': 53, 'ph': 'P'},
-      {'name': 'b', 'args': {}, 'pid': 52, 'ts': 548, 'cat': 'test',
-       'tid': 53, 'ph': 'P'},
-      {'name': 'c', 'args': {}, 'pid': 52, 'ts': 558, 'cat': 'test',
-       'tid': 53, 'ph': 'P'}
+        {'name': 'a', 'args': {}, 'pid': 52, 'ts': 548, 'cat': 'test',
+         'tid': 53, 'ph': 'P'},
+        {'name': 'b', 'args': {}, 'pid': 52, 'ts': 548, 'cat': 'test',
+         'tid': 53, 'ph': 'P'},
+        {'name': 'c', 'args': {}, 'pid': 52, 'ts': 558, 'cat': 'test',
+         'tid': 53, 'ph': 'P'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     p = m.GetAllProcesses()[0]
     t = p.threads[53]
@@ -887,14 +930,14 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testImportSamplesMissingArgs(self):
     events = [
-      {'name': 'a', 'pid': 52, 'ts': 548, 'cat': 'test',
-       'tid': 53, 'ph': 'P'},
-      {'name': 'b', 'pid': 52, 'ts': 548, 'cat': 'test',
-       'tid': 53, 'ph': 'P'},
-      {'name': 'c', 'pid': 52, 'ts': 549, 'cat': 'test',
-       'tid': 53, 'ph': 'P'}
+        {'name': 'a', 'pid': 52, 'ts': 548, 'cat': 'test',
+         'tid': 53, 'ph': 'P'},
+        {'name': 'b', 'pid': 52, 'ts': 548, 'cat': 'test',
+         'tid': 53, 'ph': 'P'},
+        {'name': 'c', 'pid': 52, 'ts': 549, 'cat': 'test',
+         'tid': 53, 'ph': 'P'}
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     p = m.GetAllProcesses()[0]
     t = p.threads[53]
@@ -903,14 +946,14 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testImportCompleteEvent(self):
     events = [
-      {'name': 'a', 'args': {}, 'pid': 52, 'ts': 629, 'tts': 538, 'dur': 1,
-       'tdur': 1, 'cat': 'baz', 'tid': 53, 'ph': 'X'},
-      {'name': 'b', 'args': {}, 'pid': 52, 'ts': 730, 'tts': 620, 'dur': 20,
-       'tdur': 14, 'cat': 'foo', 'tid': 53, 'ph': 'X'},
-      {'name': 'c', 'args': {}, 'pid': 52, 'ts': 740, 'tts': 625, 'cat': 'baz',
-       'tid': 53, 'ph': 'X'},
+        {'name': 'a', 'args': {}, 'pid': 52, 'ts': 629, 'tts': 538, 'dur': 1,
+         'tdur': 1, 'cat': 'baz', 'tid': 53, 'ph': 'X'},
+        {'name': 'b', 'args': {}, 'pid': 52, 'ts': 730, 'tts': 620, 'dur': 20,
+         'tdur': 14, 'cat': 'foo', 'tid': 53, 'ph': 'X'},
+        {'name': 'c', 'args': {}, 'pid': 52, 'ts': 740, 'tts': 625,
+         'cat': 'baz', 'tid': 53, 'ph': 'X'},
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     p = m.GetAllProcesses()[0]
     t = p.threads[53]
@@ -946,11 +989,11 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testImportMarkEvent(self):
     events = [
-      {'name': 'a', 'pid': 52, 'ts': 629, 'cat': 'baz', 'tid': 53, 'ph': 'R'},
-      {'name': 'b', 'pid': 52, 'ts': 730, 'cat': 'foo', 'tid': 53, 'ph': 'R'},
-      {'name': 'c', 'pid': 52, 'ts': 740, 'cat': 'baz', 'tid': 53, 'ph': 'R'},
+        {'name': 'a', 'pid': 52, 'ts': 629, 'cat': 'baz', 'tid': 53, 'ph': 'R'},
+        {'name': 'b', 'pid': 52, 'ts': 730, 'cat': 'foo', 'tid': 53, 'ph': 'R'},
+        {'name': 'c', 'pid': 52, 'ts': 740, 'cat': 'baz', 'tid': 53, 'ph': 'R'},
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     p = m.GetAllProcesses()[0]
     t = p.threads[53]
@@ -979,15 +1022,15 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testImportFlowEvent(self):
     events = [
-      {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 548,
-       'ph': 's', 'args': {}},
-      {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 560,
-       'ph': 't', 'args': {}},
-      {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 580,
-       'ph': 'f', 'args': {}},
+        {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 548,
+         'ph': 's', 'args': {}},
+        {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 560,
+         'ph': 't', 'args': {}},
+        {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 580,
+         'ph': 'f', 'args': {}},
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     p = m.GetAllProcesses()[0]
     t = p.threads[53]
@@ -1018,62 +1061,62 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testImportOutOfOrderFlowEvent(self):
     events = [
-      {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 548,
-       'ph': 's', 'args': {}},
-      {'name': 'b', 'cat': 'foo', 'id': 73, 'pid': 52, 'tid': 53, 'ts': 148,
-       'ph': 's', 'args': {}},
-      {'name': 'b', 'cat': 'foo', 'id': 73, 'pid': 52, 'tid': 53, 'ts': 570,
-       'ph': 'f', 'args': {}},
-      {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 560,
-       'ph': 't', 'args': {}},
-      {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 580,
-       'ph': 'f', 'args': {}},
+        {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 548,
+         'ph': 's', 'args': {}},
+        {'name': 'b', 'cat': 'foo', 'id': 73, 'pid': 52, 'tid': 53, 'ts': 148,
+         'ph': 's', 'args': {}},
+        {'name': 'b', 'cat': 'foo', 'id': 73, 'pid': 52, 'tid': 53, 'ts': 570,
+         'ph': 'f', 'args': {}},
+        {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 560,
+         'ph': 't', 'args': {}},
+        {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 580,
+         'ph': 'f', 'args': {}},
     ]
 
     expected = [[0.4, 0.412], [0.0, 0.422], [0.412, 0.432]]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     self.assertEqual(3, len(m.flow_events))
 
-    for i in range(len(expected)):
-      self.assertAlmostEqual(expected[i][0], m.flow_events[i][0].start)
-      self.assertAlmostEqual(expected[i][1], m.flow_events[i][1].start)
+    for i, time in enumerate(expected):
+      self.assertAlmostEqual(time[0], m.flow_events[i][0].start)
+      self.assertAlmostEqual(time[1], m.flow_events[i][1].start)
 
   def testImportErrornousFlowEvent(self):
     events = [
-      {'name': 'a', 'cat': 'foo', 'id': 70, 'pid': 52, 'tid': 53, 'ts': 548,
-       'ph': 's', 'args': {}},
-      {'name': 'a2', 'cat': 'foo', 'id': 70, 'pid': 52, 'tid': 53, 'ts': 550,
-       'ph': 's', 'args': {}},
-      {'name': 'b', 'cat': 'foo', 'id': 73, 'pid': 52, 'tid': 53, 'ts': 570,
-       'ph': 'f', 'args': {}},
-      {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 560,
-       'ph': 't', 'args': {}},
+        {'name': 'a', 'cat': 'foo', 'id': 70, 'pid': 52, 'tid': 53, 'ts': 548,
+         'ph': 's', 'args': {}},
+        {'name': 'a2', 'cat': 'foo', 'id': 70, 'pid': 52, 'tid': 53, 'ts': 550,
+         'ph': 's', 'args': {}},
+        {'name': 'b', 'cat': 'foo', 'id': 73, 'pid': 52, 'tid': 53, 'ts': 570,
+         'ph': 'f', 'args': {}},
+        {'name': 'a', 'cat': 'foo', 'id': 72, 'pid': 52, 'tid': 53, 'ts': 560,
+         'ph': 't', 'args': {}},
     ]
 
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     self.assertEqual(0, len(m.flow_events))
 
   def testImportMemoryDumpEvents(self):
     events = [
-      {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 123,
-       'id': '1234ABCD'},
-      {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 54, 'ts': 134,
-       'id': '1234ABCD'},
-      {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 144,
-       'id': '1234ABCD'},
-      {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 245,
-       'id': '1234ABDF'},
-      {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 54, 'ts': 256,
-       'id': '1234ABDF'},
-      {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 233,
-       'id': '1234ABDF'},
+        {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 123,
+         'id': '1234ABCD'},
+        {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 54, 'ts': 134,
+         'id': '1234ABCD'},
+        {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 144,
+         'id': '1234ABCD'},
+        {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 245,
+         'id': '1234ABDF'},
+        {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 54, 'ts': 256,
+         'id': '1234ABDF'},
+        {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 233,
+         'id': '1234ABDF'},
     ]
 
-    expected_processes = set([52, 54])
+    expected_processes = {52, 54}
     expected_results = [['1234ABCD', 0, 21], ['1234ABDF', 110, 23]]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     assert set(p.pid for p in m.GetAllProcesses()) == expected_processes
 
@@ -1089,18 +1132,18 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testImportOutOfOrderMemoryDumpEvents(self):
     events = [
-      {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 245,
-       'id': '1234ABDF'},
-      {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 54, 'ts': 134,
-       'id': '1234ABCD'},
-      {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 54, 'ts': 256,
-       'id': '1234ABDF'},
-      {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 123,
-       'id': '1234ABCD'},
+        {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 245,
+         'id': '1234ABDF'},
+        {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 54, 'ts': 134,
+         'id': '1234ABCD'},
+        {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 54, 'ts': 256,
+         'id': '1234ABDF'},
+        {'name': 'a', 'cat': 'b', 'ph': 'v', 'pid': 52, 'ts': 123,
+         'id': '1234ABCD'},
     ]
 
     expected = [['1234ABCD', 0, 11], ['1234ABDF', 122, 11]]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     memory_dumps = list(m.IterGlobalMemoryDumps())
     self.assertEqual(len(expected), len(memory_dumps))
@@ -1112,18 +1155,18 @@ class TraceEventTimelineImporterTest(unittest.TestCase):
 
   def testMetadataImport(self):
     events = [
-      {'cat': '__metadata', 'pid': 14689, 'tid': 14740, 'ts': 245,
-       'ph': 'M', 'name': 'process_name', 'args': {'name': 'Browser'}},
-      {'cat': '__metadata', 'pid': 23828, 'tid': 23828, 'ts': 0,
-       'ph': 'M', 'name': 'process_labels',
-       'args': {'labels': 'huge image - Google Search'}}
+        {'cat': '__metadata', 'pid': 14689, 'tid': 14740, 'ts': 245,
+         'ph': 'M', 'name': 'process_name', 'args': {'name': 'Browser'}},
+        {'cat': '__metadata', 'pid': 23828, 'tid': 23828, 'ts': 0,
+         'ph': 'M', 'name': 'process_labels',
+         'args': {'labels': 'huge image - Google Search'}}
     ]
 
     expected = [
-      [None, 'Browser'],
-      ['huge image - Google Search', 'process 23828']
+        [None, 'Browser'],
+        ['huge image - Google Search', 'process 23828']
     ]
-    trace_data = trace_data_module.TraceData(events)
+    trace_data = trace_data_module.CreateFromRawChromeEvents(events)
     m = timeline_model.TimelineModel(trace_data)
     processes = m.GetAllProcesses()
 

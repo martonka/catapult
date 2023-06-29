@@ -2,6 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import json
 import math
 import os
@@ -9,6 +13,7 @@ import random
 import tempfile
 import unittest
 
+from six.moves import range  # pylint: disable=redefined-builtin
 from tracing.metrics import compare_samples
 
 
@@ -101,7 +106,7 @@ class CompareSamplesUnittest(unittest.TestCase):
     }
     return self.NewJsonTempfile(charts)
 
-  def MakeChart(self, metric, seed, mu, sigma, n):
+  def MakeChart(self, metric, seed, mu, sigma, n, keys=None):
     """Creates a normally distributed pseudo-random sample. (continuous).
 
     This function creates a deterministic pseudo-random sample and stores it in
@@ -126,31 +131,132 @@ class CompareSamplesUnittest(unittest.TestCase):
             }
         }
     }
+    if keys:
+      grouping_keys = dict(enumerate(keys))
+      charts['charts'][chart_name][trace_name]['grouping_keys'] = grouping_keys
     return self.NewJsonTempfile(charts)
 
-  def testCompareClearRegression(self):
+  def MakeNoneValuesChart(self, metric, keys=None):
+    """Creates a chart with merged None values.
+
+    Args:
+      metric (str pair): name of chart, name of the trace.
+    """
+    chart_name, trace_name = metric
+    charts = {
+        'charts': {
+            chart_name: {
+                trace_name: {
+                    'type': 'list_of_scalar_values',
+                    'values': None
+                }
+            }
+        }
+    }
+    if keys:
+      grouping_keys = dict(enumerate(keys))
+      charts['charts'][chart_name][trace_name]['grouping_keys'] = grouping_keys
+    return self.NewJsonTempfile(charts)
+
+  def MakeCharts(self, metric, seed, mu, sigma, n, keys=None):
+    return [
+        self.MakeChartJSONScalar(metric, seed + '%d' % i, mu, sigma, keys)
+        for i in range(n)]
+
+  def MakeChartJSONScalar(self, metric, seed, mu, sigma, keys=None):
+    """Creates a normally distributed pseudo-random sample. (continuous).
+
+    This function creates a deterministic pseudo-random sample and stores it in
+    chartjson format to facilitate the testing of the sample comparison logic.
+
+    Args:
+      metric (str pair): name of chart, name of the trace.
+      seed (hashable obj): to make the sequences deterministic we seed the RNG.
+      mu (float): desired mean for the sample
+      sigma (float): desired standard deviation for the sample
+    """
+    chart_name, trace_name = metric
+    random.seed(seed)
+    charts = {
+        'charts': {
+            chart_name: {
+                trace_name: {
+                    'type': 'scalar',
+                    'value': random.gauss(mu, sigma)}
+            }
+        }
+    }
+    if keys:
+      grouping_keys = dict(enumerate(keys))
+      charts['charts'][chart_name][trace_name]['grouping_keys'] = grouping_keys
+    return self.NewJsonTempfile(charts)
+
+  def testCompareClearRegressionListOfScalars(self):
     metric = ('some_chart', 'some_trace')
-    lower_values = ','.join([self.MakeChart(metric=metric, seed='lower',
-                                            mu=10, sigma=1, n=10)])
-    higher_values = ','.join([self.MakeChart(metric=metric, seed='higher',
-                                             mu=20, sigma=2, n=10)])
+    lower_values = ','.join(self.MakeCharts(metric=metric, seed='lower',
+                                            mu=10, sigma=1, n=10))
+    higher_values = ','.join(self.MakeCharts(metric=metric, seed='higher',
+                                             mu=20, sigma=2, n=10))
+    result = json.loads(compare_samples.CompareSamples(
+        lower_values, higher_values, '/'.join(metric)).stdout)
+    self.assertEqual(result['result']['significance'], REJECT)
+
+  def testCompareListOfScalarsWithNoneValue(self):
+    metric = ('some_chart', 'some_trace')
+    lower_values = ','.join(self.MakeCharts(metric=metric, seed='lower',
+                                            mu=10, sigma=1, n=10))
+    lower_values += ',' + self.MakeNoneValuesChart(metric=metric)
+    higher_values = ','.join(self.MakeCharts(metric=metric, seed='higher',
+                                             mu=20, sigma=2, n=10))
+    result = json.loads(compare_samples.CompareSamples(
+        lower_values, higher_values, '/'.join(metric)).stdout)
+    self.assertEqual(result['result']['significance'], REJECT)
+
+  def testCompareClearRegressionScalars(self):
+    metric = ('some_chart', 'some_trace')
+    lower_values = ','.join(
+        [self.MakeChartJSONScalar(
+            metric=metric, seed='lower', mu=10, sigma=1) for _ in range(10)])
+    higher_values = ','.join(
+        [self.MakeChartJSONScalar(
+            metric=metric, seed='higher', mu=20, sigma=2) for _ in range(10)])
     result = json.loads(compare_samples.CompareSamples(
         lower_values, higher_values, '/'.join(metric)).stdout)
     self.assertEqual(result['result']['significance'], REJECT)
 
   def testCompareUnlikelyRegressionWithMultipleRuns(self):
     metric = ('some_chart', 'some_trace')
-    lower_values = ','.join([
-        self.MakeChart(
-            metric=metric, seed='lower%d' % i, mu=10, sigma=1, n=5)
-        for i in range(4)])
-    higher_values = ','.join([
-        self.MakeChart(
-            metric=metric, seed='higher%d' % i, mu=10.01, sigma=0.95, n=5)
-        for i in range(4)])
+    lower_values = ','.join(
+        self.MakeCharts(
+            metric=metric, seed='lower', mu=10, sigma=1, n=20))
+    higher_values = ','.join(
+        self.MakeCharts(
+            metric=metric, seed='higher', mu=10.01, sigma=0.95, n=20))
     result = json.loads(compare_samples.CompareSamples(
         lower_values, higher_values, '/'.join(metric)).stdout)
     self.assertEqual(result['result']['significance'], FAIL_TO_REJECT)
+
+  def testCompareGroupingLabel(self):
+    parts = ('some_chart', 'some_label', 'some_trace')
+    metric_name = ('%s@@%s' % (parts[1], parts[0]), parts[2])
+    lower_values = ','.join(self.MakeCharts(
+        metric=metric_name, seed='lower', mu=10, sigma=1, n=10))
+    higher_values = ','.join(self.MakeCharts(
+        metric=metric_name, seed='higher', mu=20, sigma=2, n=10))
+    result = json.loads(compare_samples.CompareSamples(
+        lower_values, higher_values, '/'.join(parts)).stdout)
+    self.assertEqual(result['result']['significance'], REJECT)
+
+  def testCompareGroupingLabelMissingSummary(self):
+    parts = ('some_chart', 'some_label')
+    metric_name = ('%s@@%s' % (parts[1], parts[0]), 'summary')
+    lower_values = ','.join(self.MakeCharts(
+        metric=metric_name, seed='lower', mu=10, sigma=1, n=10))
+    higher_values = ','.join(self.MakeCharts(
+        metric=metric_name, seed='higher', mu=20, sigma=2, n=10))
+    result = json.loads(compare_samples.CompareSamples(
+        lower_values, higher_values, '/'.join(parts)).stdout)
+    self.assertEqual(result['result']['significance'], REJECT)
 
   def testCompareInsufficientData(self):
     metric = ('some_chart', 'some_trace')
@@ -178,29 +284,18 @@ class CompareSamplesUnittest(unittest.TestCase):
     higher_values = ','.join([self.MakeChart(metric=metric, seed='higher',
                                              mu=20, sigma=2, n=5)])
     metric = ('some_chart', 'missing_trace')
-    with self.assertRaises(RuntimeError):
-      compare_samples.CompareSamples(
-          lower_values, higher_values, '/'.join(metric))
+    result = json.loads(compare_samples.CompareSamples(
+        lower_values, higher_values, '/'.join(metric)).stdout)
+    self.assertEqual(result['result']['significance'], NEED_MORE_DATA)
 
   def testCompareBadChart(self):
     metric = ('some_chart', 'some_trace')
     lower_values = ','.join([self.MakeChart(metric=metric, seed='lower',
                                             mu=10, sigma=1, n=5)])
     higher_values = self.NewJsonTempfile(['obviously', 'not', 'a', 'chart]'])
-    with self.assertRaises(RuntimeError):
-      compare_samples.CompareSamples(
-          lower_values, higher_values, '/'.join(metric))
-
-  def testCompareValuesets(self):
-    vs = os.path.join(os.path.dirname(__file__),
-                      'valueset_output_for_compare_samples_test.json')
-    result = compare_samples.CompareSamples(
-        vs, vs, 'timeToFirstContentfulPaint/pcv1-cold/'
-        'http___www.rambler.ru_', data_format='valueset')
-    result = json.loads(result.stdout)
+    result = json.loads(compare_samples.CompareSamples(
+        lower_values, higher_values, '/'.join(metric)).stdout)
     self.assertEqual(result['result']['significance'], NEED_MORE_DATA)
-    self.assertAlmostEqual(Mean(result['sampleA']), 75.3177999958396)
-    self.assertAlmostEqual(Mean(result['sampleB']), 75.3177999958396)
 
   def testCompareBuildbotOutput(self):
     bb = os.path.join(os.path.dirname(__file__),
@@ -223,3 +318,22 @@ class CompareSamplesUnittest(unittest.TestCase):
         lower_values, higher_values, '/'.join(metric)).stdout)
     self.assertEqual(result['result']['significance'], REJECT)
 
+  def testParseComplexMetricName(self):
+    full_metric_name = ('memory:chrome:all_processes:reported_by_os:'
+                        'system_memory:native_heap:'
+                        'proportional_resident_size_avg/blank_about/'
+                        'blank_about_blank')
+    chart_name = ('blank_about@@memory:chrome:all_processes:reported_by_os:'
+                  'system_memory:native_heap:proportional_resident_size_avg')
+    trace_name = 'blank:about:blank'
+    metric = chart_name, trace_name
+    keys = 'blank', 'about'
+    lower_values = ','.join(self.MakeCharts(metric=metric, seed='lower',
+                                            mu=10, sigma=1, n=10, keys=keys))
+    higher_values = ','.join(self.MakeCharts(metric=metric, seed='higher',
+                                             mu=20, sigma=2, n=10, keys=keys))
+    result = compare_samples.CompareSamples(
+        lower_values, higher_values, full_metric_name).stdout
+    print(result)
+    result = json.loads(result)
+    self.assertEqual(result['result']['significance'], REJECT)

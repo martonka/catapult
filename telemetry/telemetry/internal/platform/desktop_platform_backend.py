@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import os
 import subprocess
 
@@ -18,10 +19,15 @@ class DesktopPlatformBackend(platform_backend.PlatformBackend):
     assert directory and os.path.exists(directory), \
         'Target directory %s must exist' % directory
     flush_command = binary_manager.FetchPath(
-        'clear_system_cache', self.GetArchName(), self.GetOSName())
+        'clear_system_cache', self.GetOSName(), self.GetArchName())
     assert flush_command, 'You must build clear_system_cache first'
 
     subprocess.check_call([flush_command, '--recurse', directory])
 
   def GetDeviceTypeName(self):
     return 'Desktop'
+
+  def GetTypExpectationsTags(self):
+    tags = super(DesktopPlatformBackend, self).GetTypExpectationsTags()
+    tags.append('desktop')
+    return tags

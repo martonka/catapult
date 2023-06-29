@@ -6,11 +6,13 @@
 
 import os
 import unittest
+import six
 
 from py_utils import cloud_storage
 import mock
 from pyfakefs import fake_filesystem_unittest
 from pyfakefs import fake_filesystem
+from pyfakefs import fake_filesystem_glob
 
 import dependency_manager
 from dependency_manager import uploader
@@ -232,11 +234,14 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
       self.assertEqual(expected_file_lines.pop(0), line.strip())
     self.fs.CloseOpenFile(file_module(self.file_path))
 
-  @mock.patch('dependency_manager.uploader.cloud_storage')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Delete')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Copy')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Insert')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Exists')
   def testExecuteUpdateJobsFailureOnInsertNoCSCollision(
-      self, uploader_cs_mock):
-    uploader_cs_mock.Exists.return_value = False
-    uploader_cs_mock.Insert.side_effect = cloud_storage.CloudStorageError
+      self, cs_mock_exists, cs_mock_insert, cs_mock_copy, cs_mock_delete):
+    cs_mock_exists.return_value = False
+    cs_mock_insert.side_effect = cloud_storage.CloudStorageError
     self.fs.CreateFile(self.file_path,
                        contents='\n'.join(self.expected_file_lines))
     config = dependency_manager.BaseConfig(self.file_path, writable=True)
@@ -267,19 +272,22 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
     self.assertEqual(1, len(config._pending_uploads))
     self.assertEqual(self.new_pending_upload, config._pending_uploads[0])
     self.assertEqual(expected_insert_calls,
-                     uploader_cs_mock.Insert.call_args_list)
+                     cs_mock_insert.call_args_list)
     self.assertEqual(expected_exists_calls,
-                     uploader_cs_mock.Exists.call_args_list)
+                     cs_mock_exists.call_args_list)
     self.assertEqual(expected_copy_calls,
-                     uploader_cs_mock.Copy.call_args_list)
+                     cs_mock_copy.call_args_list)
     self.assertEqual(expected_delete_calls,
-                     uploader_cs_mock.Delete.call_args_list)
+                     cs_mock_delete.call_args_list)
 
-  @mock.patch('dependency_manager.uploader.cloud_storage')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Delete')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Copy')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Insert')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Exists')
   def testExecuteUpdateJobsFailureOnInsertCSCollisionForce(
-      self, uploader_cs_mock):
-    uploader_cs_mock.Exists.return_value = True
-    uploader_cs_mock.Insert.side_effect = cloud_storage.CloudStorageError
+      self, cs_mock_exists, cs_mock_insert, cs_mock_copy, cs_mock_delete):
+    cs_mock_exists.return_value = True
+    cs_mock_insert.side_effect = cloud_storage.CloudStorageError
     self.fs.CreateFile(self.file_path,
                        contents='\n'.join(self.expected_file_lines))
     config = dependency_manager.BaseConfig(self.file_path, writable=True)
@@ -315,13 +323,13 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
     self.assertEqual(1, len(config._pending_uploads))
     self.assertEqual(self.new_pending_upload, config._pending_uploads[0])
     self.assertEqual(expected_insert_calls,
-                     uploader_cs_mock.Insert.call_args_list)
+                     cs_mock_insert.call_args_list)
     self.assertEqual(expected_exists_calls,
-                     uploader_cs_mock.Exists.call_args_list)
+                     cs_mock_exists.call_args_list)
     self.assertEqual(expected_copy_calls,
-                     uploader_cs_mock.Copy.call_args_list)
+                     cs_mock_copy.call_args_list)
     self.assertEqual(expected_delete_calls,
-                     uploader_cs_mock.Delete.call_args_list)
+                     cs_mock_delete.call_args_list)
 
   @mock.patch('dependency_manager.uploader.cloud_storage')
   def testExecuteUpdateJobsFailureOnInsertCSCollisionNoForce(
@@ -365,11 +373,14 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
     self.assertEqual(expected_delete_calls,
                      uploader_cs_mock.Delete.call_args_list)
 
-  @mock.patch('dependency_manager.uploader.cloud_storage')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Delete')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Copy')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Insert')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Exists')
   def testExecuteUpdateJobsFailureOnCopy(
-      self, uploader_cs_mock):
-    uploader_cs_mock.Exists.return_value = True
-    uploader_cs_mock.Copy.side_effect = cloud_storage.CloudStorageError
+      self, cs_mock_exists, cs_mock_insert, cs_mock_copy, cs_mock_delete):
+    cs_mock_exists.return_value = True
+    cs_mock_copy.side_effect = cloud_storage.CloudStorageError
     self.fs.CreateFile(self.file_path,
                        contents='\n'.join(self.expected_file_lines))
     config = dependency_manager.BaseConfig(self.file_path, writable=True)
@@ -401,19 +412,22 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
     self.assertEqual(1, len(config._pending_uploads))
     self.assertEqual(self.new_pending_upload, config._pending_uploads[0])
     self.assertEqual(expected_insert_calls,
-                     uploader_cs_mock.Insert.call_args_list)
+                     cs_mock_insert.call_args_list)
     self.assertEqual(expected_exists_calls,
-                     uploader_cs_mock.Exists.call_args_list)
+                     cs_mock_exists.call_args_list)
     self.assertEqual(expected_copy_calls,
-                     uploader_cs_mock.Copy.call_args_list)
+                     cs_mock_copy.call_args_list)
     self.assertEqual(expected_delete_calls,
-                     uploader_cs_mock.Delete.call_args_list)
+                     cs_mock_delete.call_args_list)
 
-  @mock.patch('dependency_manager.uploader.cloud_storage')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Delete')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Copy')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Insert')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Exists')
   def testExecuteUpdateJobsFailureOnSecondInsertNoCSCollision(
-      self, uploader_cs_mock):
-    uploader_cs_mock.Exists.return_value = False
-    uploader_cs_mock.Insert.side_effect = [
+      self, cs_mock_exists, cs_mock_insert, cs_mock_copy, cs_mock_delete):
+    cs_mock_exists.return_value = False
+    cs_mock_insert.side_effect = [
         True, cloud_storage.CloudStorageError]
     self.fs.CreateFile(self.file_path,
                        contents='\n'.join(self.expected_file_lines))
@@ -451,19 +465,22 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
       self.assertEqual(expected_file_lines.pop(0), line.strip())
     self.fs.CloseOpenFile(file_module(self.file_path))
     self.assertEqual(expected_insert_calls,
-                     uploader_cs_mock.Insert.call_args_list)
+                     cs_mock_insert.call_args_list)
     self.assertEqual(expected_exists_calls,
-                     uploader_cs_mock.Exists.call_args_list)
+                     cs_mock_exists.call_args_list)
     self.assertEqual(expected_copy_calls,
-                     uploader_cs_mock.Copy.call_args_list)
+                     cs_mock_copy.call_args_list)
     self.assertEqual(expected_delete_calls,
-                     uploader_cs_mock.Delete.call_args_list)
+                     cs_mock_delete.call_args_list)
 
-  @mock.patch('dependency_manager.uploader.cloud_storage')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Delete')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Copy')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Insert')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Exists')
   def testExecuteUpdateJobsFailureOnSecondInsertCSCollisionForce(
-      self, uploader_cs_mock):
-    uploader_cs_mock.Exists.return_value = True
-    uploader_cs_mock.Insert.side_effect = [
+      self, cs_mock_exists, cs_mock_insert, cs_mock_copy, cs_mock_delete):
+    cs_mock_exists.return_value = True
+    cs_mock_insert.side_effect = [
         True, cloud_storage.CloudStorageError]
     self.fs.CreateFile(self.file_path,
                        contents='\n'.join(self.expected_file_lines))
@@ -512,19 +529,22 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
       self.assertEqual(expected_file_lines.pop(0), line.strip())
     self.fs.CloseOpenFile(file_module(self.file_path))
     self.assertEqual(expected_insert_calls,
-                     uploader_cs_mock.Insert.call_args_list)
+                     cs_mock_insert.call_args_list)
     self.assertEqual(expected_exists_calls,
-                     uploader_cs_mock.Exists.call_args_list)
+                     cs_mock_exists.call_args_list)
     self.assertEqual(expected_copy_calls,
-                     uploader_cs_mock.Copy.call_args_list)
+                     cs_mock_copy.call_args_list)
     self.assertEqual(expected_delete_calls,
-                     uploader_cs_mock.Delete.call_args_list)
+                     cs_mock_delete.call_args_list)
 
-  @mock.patch('dependency_manager.uploader.cloud_storage')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Delete')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Copy')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Insert')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Exists')
   def testExecuteUpdateJobsFailureOnSecondInsertFirstCSCollisionForce(
-      self, uploader_cs_mock):
-    uploader_cs_mock.Exists.side_effect = [True, False, True]
-    uploader_cs_mock.Insert.side_effect = [
+      self, cs_mock_exists, cs_mock_insert, cs_mock_copy, cs_mock_delete):
+    cs_mock_exists.side_effect = [True, False, True]
+    cs_mock_insert.side_effect = [
         True, cloud_storage.CloudStorageError]
     self.fs.CreateFile(self.file_path,
                        contents='\n'.join(self.expected_file_lines))
@@ -567,13 +587,13 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
       self.assertEqual(expected_file_lines.pop(0), line.strip())
     self.fs.CloseOpenFile(file_module(self.file_path))
     self.assertEqual(expected_insert_calls,
-                     uploader_cs_mock.Insert.call_args_list)
+                     cs_mock_insert.call_args_list)
     self.assertEqual(expected_exists_calls,
-                     uploader_cs_mock.Exists.call_args_list)
+                     cs_mock_exists.call_args_list)
     self.assertEqual(expected_copy_calls,
-                     uploader_cs_mock.Copy.call_args_list)
+                     cs_mock_copy.call_args_list)
     self.assertEqual(expected_delete_calls,
-                     uploader_cs_mock.Delete.call_args_list)
+                     cs_mock_delete.call_args_list)
 
   @mock.patch('dependency_manager.uploader.cloud_storage')
   def testExecuteUpdateJobsFailureOnFirstCSCollisionNoForce(
@@ -619,12 +639,15 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
     self.assertEqual(expected_delete_calls,
                      uploader_cs_mock.Delete.call_args_list)
 
-  @mock.patch('dependency_manager.uploader.cloud_storage')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Delete')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Copy')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Insert')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Exists')
   def testExecuteUpdateJobsFailureOnSecondCopyCSCollision(
-      self, uploader_cs_mock):
-    uploader_cs_mock.Exists.return_value = True
-    uploader_cs_mock.Insert.return_value = True
-    uploader_cs_mock.Copy.side_effect = [
+      self, cs_mock_exists, cs_mock_insert, cs_mock_copy, cs_mock_delete):
+    cs_mock_exists.return_value = True
+    cs_mock_insert.return_value = True
+    cs_mock_copy.side_effect = [
         True, cloud_storage.CloudStorageError, True]
     self.fs.CreateFile(self.file_path,
                        contents='\n'.join(self.expected_file_lines))
@@ -667,19 +690,22 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
       self.assertEqual(expected_file_lines.pop(0), line.strip())
     self.fs.CloseOpenFile(file_module(self.file_path))
     self.assertEqual(expected_insert_calls,
-                     uploader_cs_mock.Insert.call_args_list)
+                     cs_mock_insert.call_args_list)
     self.assertEqual(expected_exists_calls,
-                     uploader_cs_mock.Exists.call_args_list)
+                     cs_mock_exists.call_args_list)
     self.assertEqual(expected_copy_calls,
-                     uploader_cs_mock.Copy.call_args_list)
+                     cs_mock_copy.call_args_list)
     self.assertEqual(expected_delete_calls,
-                     uploader_cs_mock.Delete.call_args_list)
+                     cs_mock_delete.call_args_list)
 
-  @mock.patch('dependency_manager.uploader.cloud_storage')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Delete')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Copy')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Insert')
+  @mock.patch('dependency_manager.uploader.cloud_storage.Exists')
   def testExecuteUpdateJobsFailureOnSecondCopyNoCSCollisionForce(
-      self, uploader_cs_mock):
-    uploader_cs_mock.Exists.side_effect = [False, True, False]
-    uploader_cs_mock.Copy.side_effect = cloud_storage.CloudStorageError
+      self, cs_mock_exists, cs_mock_insert, cs_mock_copy, cs_mock_delete):
+    cs_mock_exists.side_effect = [False, True, False]
+    cs_mock_copy.side_effect = cloud_storage.CloudStorageError
     self.fs.CreateFile(self.file_path,
                        contents='\n'.join(self.expected_file_lines))
     config = dependency_manager.BaseConfig(self.file_path, writable=True)
@@ -715,13 +741,13 @@ class BaseConfigCreationAndUpdateUnittests(fake_filesystem_unittest.TestCase):
       self.assertEqual(expected_file_lines.pop(0), line.strip())
     self.fs.CloseOpenFile(file_module(self.file_path))
     self.assertEqual(expected_insert_calls,
-                     uploader_cs_mock.Insert.call_args_list)
+                     cs_mock_insert.call_args_list)
     self.assertEqual(expected_exists_calls,
-                     uploader_cs_mock.Exists.call_args_list)
+                     cs_mock_exists.call_args_list)
     self.assertEqual(expected_copy_calls,
-                     uploader_cs_mock.Copy.call_args_list)
+                     cs_mock_copy.call_args_list)
     self.assertEqual(expected_delete_calls,
-                     uploader_cs_mock.Delete.call_args_list)
+                     cs_mock_delete.call_args_list)
 
   @mock.patch('dependency_manager.uploader.cloud_storage')
   def testExecuteUpdateJobsFailureOnSecondCopyNoCSCollisionNoForce(
@@ -1118,6 +1144,48 @@ class BaseConfigDataManipulationUnittests(fake_filesystem_unittest.TestCase):
     self.fs.CreateFile(self.file_path,
                        contents='\n'.join(self.expected_file_lines))
 
+  def testContaining(self):
+    config = dependency_manager.BaseConfig(self.file_path)
+    self.assertTrue('dep1' in config)
+    self.assertTrue('dep2' in config)
+    self.assertFalse('dep3' in config)
+
+  def testAddNewDependencyNotWriteable(self):
+    config = dependency_manager.BaseConfig(self.file_path)
+    with self.assertRaises(dependency_manager.ReadWriteError):
+      config.AddNewDependency('dep4', 'foo', 'bar')
+
+  def testAddNewDependencyWriteableButDependencyAlreadyExists(self):
+    config = dependency_manager.BaseConfig(self.file_path, writable=True)
+    with self.assertRaises(ValueError):
+      config.AddNewDependency('dep2', 'foo', 'bar')
+
+  def testAddNewDependencySuccessfully(self):
+    config = dependency_manager.BaseConfig(self.file_path, writable=True)
+    config.AddNewDependency('dep3', 'foo', 'bar')
+    self.assertTrue('dep3' in config)
+
+  def testSetDownloadPathNotWritable(self):
+    config = dependency_manager.BaseConfig(self.file_path)
+    with self.assertRaises(dependency_manager.ReadWriteError):
+      config.SetDownloadPath('dep2', 'plat1', '../../relative/dep1/path1')
+
+  def testSetDownloadPathOnExistingPlatformSuccesfully(self):
+    config = dependency_manager.BaseConfig(self.file_path, writable=True)
+    download_path = '../../relative/dep1/foo.bar'
+    config.SetDownloadPath('dep2', 'plat1', download_path)
+    self.assertEqual(
+        download_path,
+        config._GetPlatformData('dep2', 'plat1', 'download_path'))
+
+  def testSetDownloadPathOnNewPlatformSuccesfully(self):
+    config = dependency_manager.BaseConfig(self.file_path, writable=True)
+    download_path = '../../relative/dep1/foo.bar'
+    config.SetDownloadPath('dep2', 'newplat', download_path)
+    self.assertEqual(
+        download_path,
+        config._GetPlatformData('dep2', 'newplat', 'download_path'))
+
 
   def testSetPlatformDataFailureNotWritable(self):
     config = dependency_manager.BaseConfig(self.file_path)
@@ -1383,7 +1451,7 @@ class BaseConfigTest(unittest.TestCase):
                     'download_path': 'download_path111',
                     'cs_remote_path': 'cs_path111',
                     'version_in_cs': 'version_111',
-                    'path_in_archive': 'path/in/archive',
+                    'path_within_archive': 'path/within/archive',
                     'local_paths': ['local_path1110', 'local_path1111']
                 }
             }
@@ -1396,7 +1464,7 @@ class BaseConfigTest(unittest.TestCase):
     return config_dict.get('dependencies', {})
 
   @mock.patch('os.path')
-  @mock.patch('__builtin__.open')
+  @mock.patch('dependency_manager.base_config.open', create=True)
   def testInitBaseProperties(self, open_mock, path_mock):
     # Init is not meant to be overridden, so we should be mocking the
     # base_config's json module, even in subclasses.
@@ -1409,10 +1477,9 @@ class BaseConfigTest(unittest.TestCase):
       self.assertEqual(self.GetConfigDataFromDict(self.empty_dict),
                        config._config_data)
 
-
   @mock.patch('dependency_manager.dependency_info.DependencyInfo')
   @mock.patch('os.path')
-  @mock.patch('__builtin__.open')
+  @mock.patch('dependency_manager.base_config.open', create=True)
   def testInitWithDependencies(self, open_mock, path_mock, dep_info_mock):
     # Init is not meant to be overridden, so we should be mocking the
     # base_config's json module, even in subclasses.
@@ -1440,7 +1507,7 @@ class BaseConfigTest(unittest.TestCase):
   @mock.patch('dependency_manager.base_config.json')
   @mock.patch('dependency_manager.dependency_info.DependencyInfo')
   @mock.patch('os.path.exists')
-  @mock.patch('__builtin__.open')
+  @mock.patch('dependency_manager.base_config.open', create=True)
   def testIterDependenciesError(
       self, open_mock, exists_mock, dep_info_mock, json_mock):
     # Init is not meant to be overridden, so we should be mocking the
@@ -1457,14 +1524,14 @@ class BaseConfigTest(unittest.TestCase):
   @mock.patch('dependency_manager.base_config.json')
   @mock.patch('dependency_manager.dependency_info.DependencyInfo')
   @mock.patch('os.path.exists')
-  @mock.patch('__builtin__.open')
+  @mock.patch('dependency_manager.base_config.open', create=True)
   def testIterDependencies(
       self, open_mock, exists_mock, dep_info_mock, json_mock):
     json_mock.load.return_value = self.one_dep_dict
     config = self.config_class('file_path')
     self.assertEqual(self.GetConfigDataFromDict(self.one_dep_dict),
                      config._config_data)
-    expected_dep_info = ['dep_info0', 'dep_info1', 'dep_info2']
+    expected_dep_info = ['dep_info0', 'dep_info1', 'dep_info2', 'dep_info3']
     dep_info_mock.side_effect = expected_dep_info
     expected_calls = [
         mock.call('dep', 'plat1_arch1', 'file_path', cs_bucket='bucket1',
@@ -1485,4 +1552,40 @@ class BaseConfigTest(unittest.TestCase):
     for dep_info in config.IterDependencyInfo():
       deps_seen.append(dep_info)
     dep_info_mock.assert_call_args(expected_calls)
-    self.assertItemsEqual(expected_dep_info, deps_seen)
+    six.assertCountEqual(self, expected_dep_info, deps_seen)
+
+  @mock.patch('dependency_manager.base_config.json')
+  @mock.patch('os.path.exists')
+  @mock.patch('dependency_manager.base_config.open', create=True)
+  def testIterDependenciesStaleGlob(self, open_mock, exists_mock, json_mock):
+    json_mock.load.return_value = self.one_dep_dict
+    config = self.config_class('file_path')
+
+    abspath = os.path.abspath
+    should_match = set(map(abspath, [
+        'dep_all_the_variables_0123456789abcdef0123456789abcdef01234567',
+        'dep_all_the_variables_123456789abcdef0123456789abcdef012345678']))
+    # Not testing case changes, because Windows is case-insensitive.
+    should_not_match = set(map(abspath, [
+        # A configuration that doesn't unzip shouldn't clear any stale unzips.
+        'dep_plat1_arch1_0123456789abcdef0123456789abcdef01234567',
+        # "Hash" component less than 40 characters (not a valid SHA1 hash).
+        'dep_all_the_variables_0123456789abcdef0123456789abcdef0123456',
+        # "Hash" component greater than 40 characters (not a valid SHA1 hash).
+        'dep_all_the_variables_0123456789abcdef0123456789abcdef012345678',
+        # "Hash" component not comprised of hex (not a valid SHA1 hash).
+        'dep_all_the_variables_0123456789gggggg0123456789gggggg01234567']))
+
+    # Create a fake filesystem just for glob to use
+    fake_fs = fake_filesystem.FakeFilesystem()
+    fake_glob = fake_filesystem_glob.FakeGlobModule(fake_fs)
+    for stale_dir in set.union(should_match, should_not_match):
+      fake_fs.CreateDirectory(stale_dir)
+      fake_fs.CreateFile(os.path.join(stale_dir, 'some_file'))
+
+    for dep_info in config.IterDependencyInfo():
+      if dep_info.platform == 'all_the_variables':
+        cs_info = dep_info.cloud_storage_info
+        actual_glob = cs_info._archive_info._stale_unzip_path_glob
+        actual_matches = set(fake_glob.glob(actual_glob))
+        six.assertCountEqual(self, should_match, actual_matches)

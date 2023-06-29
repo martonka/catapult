@@ -2,11 +2,16 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 import base64
 import gzip
+import io
 import json
 import re
-import StringIO
+from six.moves import map  # pylint: disable=redefined-builtin
+from six.moves import range  # pylint: disable=redefined-builtin
 
 
 GZIP_HEADER_BYTES = b'\x1f\x8b'
@@ -15,8 +20,8 @@ GZIP_HEADER_BYTES = b'\x1f\x8b'
 # Regular expressions for matching the beginning and end of trace data in HTML
 # traces. See tracing/extras/importer/trace2html_importer.html.
 TRACE_DATA_START_LINE_RE = re.compile(
-    r'^<\s*script id="viewer-data" type="(application\/json|text\/plain)">$')
-TRACE_DATA_END_LINE_RE = re.compile(r'^<\/\s*script>$')
+    r'^<\s*script id="viewer-data" type="(application\/json|text\/plain)">\r?$')
+TRACE_DATA_END_LINE_RE = re.compile(r'^<\/\s*script>\r?$')
 
 
 def IsHTMLTrace(trace_file_handle):
@@ -54,9 +59,9 @@ def CopyTraceDataFromHTMLFilePath(html_file_handle, trace_path,
   return saved_paths
 
 
-def ReadTracesFromHTMLFilePath(html_file_handle):
+def ReadTracesFromHTMLFile(file_handle):
   """Returns a list of inflated JSON traces extracted from an HTML file."""
-  return map(json.load, _ExtractTraceDataFromHTMLFile(html_file_handle))
+  return [json.load(t) for t in _ExtractTraceDataFromHTMLFile(file_handle)]
 
 
 def _ExtractTraceDataFromHTMLFile(html_file_handle, unzip_data=True):
@@ -64,22 +69,22 @@ def _ExtractTraceDataFromHTMLFile(html_file_handle, unzip_data=True):
   html_file_handle.seek(0)
   lines = html_file_handle.readlines()
 
-  start_indices = [i for i in xrange(len(lines))
+  start_indices = [i for i in range(len(lines))
                    if TRACE_DATA_START_LINE_RE.match(lines[i])]
   if not start_indices:
     raise Exception('File %r does not contain trace data')
 
   decoded_data_list = []
   for start_index in start_indices:
-    end_index = next(i for i in xrange(start_index + 1, len(lines))
+    end_index = next(i for i in range(start_index + 1, len(lines))
                      if TRACE_DATA_END_LINE_RE.match(lines[i]))
     encoded_data = '\n'.join(lines[start_index + 1:end_index]).strip()
-    decoded_data_list.append(StringIO.StringIO(base64.b64decode(encoded_data)))
+    decoded_data_list.append(io.BytesIO(base64.b64decode(encoded_data)))
 
   if unzip_data:
-    return map(_UnzipFileIfNecessary, decoded_data_list)
+    return list(map(_UnzipFileIfNecessary, decoded_data_list))
   else:
-    return map(_ZipFileIfNecessary, decoded_data_list)
+    return list(map(_ZipFileIfNecessary, decoded_data_list))
 
 
 def _UnzipFileIfNecessary(original_file):
@@ -93,7 +98,7 @@ def _ZipFileIfNecessary(original_file):
   if _IsFileZipped(original_file):
     return original_file
   else:
-    zipped_file = StringIO.StringIO()
+    zipped_file = io.BytesIO()
     with gzip.GzipFile(fileobj=zipped_file, mode='wb') as gzip_wrapper:
       gzip_wrapper.write(original_file.read())
     zipped_file.seek(0)

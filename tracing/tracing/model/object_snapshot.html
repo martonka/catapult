@@ -47,13 +47,13 @@ tr.exportTo('tr.model', function() {
     /**
      * See ObjectSnapshot constructor notes on object initialization.
      */
-    preInitialize: function() {
+    preInitialize() {
     },
 
     /**
      * See ObjectSnapshot constructor notes on object initialization.
      */
-    initialize: function() {
+    initialize() {
     },
 
     /**
@@ -63,17 +63,15 @@ tr.exportTo('tr.model', function() {
      * @param {Object} object The object directly containing the reference.
      * @param {String} field The field name of the reference in |object|.
      */
-    referencedAt: function(item, object, field) {
+    referencedAt(item, object, field) {
     },
 
-    addBoundsToRange: function(range) {
+    addBoundsToRange(range) {
       range.addValue(this.ts);
     },
 
     get userFriendlyName() {
-      return 'Snapshot of ' +
-             this.objectInstance.typeName + ' ' +
-             this.objectInstance.id + ' @ ' +
+      return 'Snapshot of ' + this.objectInstance.userFriendlyName + ' @ ' +
              tr.b.Unit.byName.timeStampInMs.format(this.ts);
     }
   };
@@ -86,7 +84,7 @@ tr.exportTo('tr.model', function() {
       });
 
   return {
-    ObjectSnapshot: ObjectSnapshot
+    ObjectSnapshot,
   };
 });
 </script>

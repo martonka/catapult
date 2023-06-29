@@ -1,16 +1,44 @@
+#
+# Copyright 2015 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import base64
 import datetime
 import sys
+import contextlib
 
-from protorpc import message_types
-from protorpc import messages
 import six
+from six.moves import http_client
 from six.moves import urllib_parse
 import unittest2
 
+from apitools.base.protorpclite import message_types
+from apitools.base.protorpclite import messages
 from apitools.base.py import base_api
 from apitools.base.py import encoding
+from apitools.base.py import exceptions
 from apitools.base.py import http_wrapper
+
+
+@contextlib.contextmanager
+def mock(module, fn_name, patch):
+    unpatch = getattr(module, fn_name)
+    setattr(module, fn_name, patch)
+    try:
+        yield
+    finally:
+        setattr(module, fn_name, unpatch)
 
 
 class SimpleMessage(messages.Message):
@@ -104,6 +132,25 @@ class BaseApiTest(unittest2.TestCase):
                 http_response.content,
                 service.ProcessHttpResponse(method_config, http_response))
 
+    def testJsonResponseEncoding(self):
+        # On Python 3, httplib2 always returns bytes, so we need to check that
+        # we can correctly decode the message content using the given encoding.
+        method_config = base_api.ApiMethodInfo(
+            response_type_name='SimpleMessage')
+        service = FakeService(FakeClient(
+            'http://www.example.com/', credentials=FakeCredentials(),
+            response_encoding='utf8'))
+        http_response = http_wrapper.Response(
+            info={'status': '200'}, content=b'{"field": "abc"}',
+            request_url='http://www.google.com')
+        response_message = SimpleMessage(field=u'abc')
+        self.assertEqual(response_message, service.ProcessHttpResponse(
+            method_config, http_response))
+        with service.client.JsonResponseModel():
+            self.assertEqual(
+                http_response.content.decode('utf8'),
+                service.ProcessHttpResponse(method_config, http_response))
+
     def testAdditionalHeaders(self):
         additional_headers = {'Request-Is-Awesome': '1'}
         client = self.__GetFakeClient()
@@ -118,6 +165,65 @@ class BaseApiTest(unittest2.TestCase):
         http_request = http_wrapper.Request('http://www.example.com')
         new_request = client.ProcessHttpRequest(http_request)
         self.assertTrue('Request-Is-Awesome' in new_request.headers)
+
+    def testCustomCheckResponse(self):
+        def check_response():
+            pass
+
+        def fakeMakeRequest(*_, **kwargs):
+            self.assertEqual(check_response, kwargs['check_response_func'])
+            return http_wrapper.Response(
+                info={'status': '200'}, content='{"field": "abc"}',
+                request_url='http://www.google.com')
+        method_config = base_api.ApiMethodInfo(
+            request_type_name='SimpleMessage',
+            response_type_name='SimpleMessage')
+        client = self.__GetFakeClient()
+        client.check_response_func = check_response
+        service = FakeService(client=client)
+        request = SimpleMessage()
+        with mock(base_api.http_wrapper, 'MakeRequest', fakeMakeRequest):
+            service._RunMethod(method_config, request)
+
+    def testCustomRetryFunc(self):
+        def retry_func():
+            pass
+
+        def fakeMakeRequest(*_, **kwargs):
+            self.assertEqual(retry_func, kwargs['retry_func'])
+            return http_wrapper.Response(
+                info={'status': '200'}, content='{"field": "abc"}',
+                request_url='http://www.google.com')
+        method_config = base_api.ApiMethodInfo(
+            request_type_name='SimpleMessage',
+            response_type_name='SimpleMessage')
+        client = self.__GetFakeClient()
+        client.retry_func = retry_func
+        service = FakeService(client=client)
+        request = SimpleMessage()
+        with mock(base_api.http_wrapper, 'MakeRequest', fakeMakeRequest):
+            service._RunMethod(method_config, request)
+
+    def testHttpError(self):
+        def fakeMakeRequest(*unused_args, **unused_kwargs):
+            return http_wrapper.Response(
+                info={'status': http_client.BAD_REQUEST},
+                content='{"field": "abc"}',
+                request_url='http://www.google.com')
+        method_config = base_api.ApiMethodInfo(
+            request_type_name='SimpleMessage',
+            response_type_name='SimpleMessage')
+        client = self.__GetFakeClient()
+        service = FakeService(client=client)
+        request = SimpleMessage()
+        with mock(base_api.http_wrapper, 'MakeRequest', fakeMakeRequest):
+            with self.assertRaises(exceptions.HttpBadRequestError) as err:
+                service._RunMethod(method_config, request)
+        http_error = err.exception
+        self.assertEquals('http://www.google.com', http_error.url)
+        self.assertEquals('{"field": "abc"}', http_error.content)
+        self.assertEquals(method_config, http_error.method_config)
+        self.assertEquals(request, http_error.request)
 
     def testQueryEncoding(self):
         method_config = base_api.ApiMethodInfo(
@@ -222,3 +328,7 @@ class BaseApiTest(unittest2.TestCase):
         http_request = service.PrepareHttpRequest(method_config, request)
         self.assertEqual('http://www.example.com/path:withJustColon',
                          http_request.url)
+
+
+if __name__ == '__main__':
+    unittest2.main()

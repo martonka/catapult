@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry.core import platform
 from telemetry.internal.platform import device
 
@@ -11,7 +12,7 @@ class DesktopDevice(device.Device):
     super(DesktopDevice, self).__init__(name='desktop', guid='desktop')
 
   @classmethod
-  def GetAllConnectedDevices(cls, blacklist):
+  def GetAllConnectedDevices(cls, denylist):
     return []
 
 

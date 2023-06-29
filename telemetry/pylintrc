@@ -6,14 +6,12 @@ disable=
   design,
   similarities,
 
-  abstract-class-little-used,
-  abstract-class-not-used,
-  bad-builtin,
-  bad-continuation,
-  broad-except,
+  
+  
+  
   fixme,
-  global-statement,
-  interface-not-implemented,
+  
+  
   invalid-name,
   locally-disabled,
   locally-enabled,
@@ -23,6 +21,7 @@ disable=
   no-self-use,
   protected-access,
   star-args,
+  too-many-function-args
 
 
 [REPORTS]

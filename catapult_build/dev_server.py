@@ -2,11 +2,15 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import print_function
+
+from __future__ import absolute_import
 import argparse
 import json
 import os
 import sys
-import urlparse
+import six
+import six.moves.urllib.parse # pylint: disable=import-error
 
 from hooks import install
 
@@ -67,7 +71,7 @@ def _RelPathToUnixPath(p):
 
 class TestResultHandler(webapp2.RequestHandler):
   def post(self, *args, **kwargs):  # pylint: disable=unused-argument
-    msg = self.request.body
+    msg = six.ensure_str(self.request.body)
     ostream = sys.stdout if 'PASSED' in msg else sys.stderr
     ostream.write(msg + '\n')
     return self.response.write('')
@@ -75,13 +79,22 @@ class TestResultHandler(webapp2.RequestHandler):
 
 class TestsCompletedHandler(webapp2.RequestHandler):
   def post(self, *args, **kwargs):  # pylint: disable=unused-argument
-    msg = self.request.body
+    msg = six.ensure_str(self.request.body)
     sys.stdout.write(msg + '\n')
     exit_code = 0 if 'ALL_PASSED' in msg else 1
     if hasattr(self.app.server, 'please_exit'):
       self.app.server.please_exit(exit_code)
     return self.response.write('')
 
+class TestsErrorHandler(webapp2.RequestHandler):
+  def post(self, *args, **kwargs):
+    del args, kwargs
+    msg = six.ensure_str(self.request.body)
+    sys.stderr.write(msg + '\n')
+    exit_code = 1
+    if hasattr(self.app.server, 'please_exit'):
+      self.app.server.please_exit(exit_code)
+    return self.response.write('')
 
 class DirectoryListingHandler(webapp2.RequestHandler):
   def get(self, *args, **kwargs):  # pylint: disable=unused-argument
@@ -158,7 +171,7 @@ class SimpleDirectoryHandler(webapp2.RequestHandler):
 class TestOverviewHandler(webapp2.RequestHandler):
   def get(self, *args, **kwargs):  # pylint: disable=unused-argument
     test_links = []
-    for name, path in kwargs.pop('pds').iteritems():
+    for name, path in kwargs.pop('pds').items():
       test_links.append(_LINK_ITEM % (path, name))
     quick_links = []
     for name, path in _QUICK_LINKS:
@@ -198,7 +211,9 @@ class DevServerApp(webapp2.WSGIApplication):
           Route('/%s/notify_test_result' % pd.GetName(),
                 TestResultHandler),
           Route('/%s/notify_tests_completed' % pd.GetName(),
-                TestsCompletedHandler)
+                TestsCompletedHandler),
+          Route('/%s/notify_test_error' % pd.GetName(),
+                TestsErrorHandler)
       ]
 
     for pd in self.pds:
@@ -246,14 +261,14 @@ class DevServerApp(webapp2.WSGIApplication):
         continue
       rel = os.path.relpath(filename, source_path)
       unix_rel = _RelPathToUnixPath(rel)
-      url = urlparse.urljoin(mapped_path, unix_rel)
+      url = six.moves.urllib.parse.urljoin(mapped_path, unix_rel)
       return url
 
     path = SourcePathsHandler.GetServingPathForAbsFilename(
         self._all_source_paths, filename)
     if path is None:
       return None
-    return urlparse.urljoin('/', path)
+    return six.moves.urllib.parse.urljoin('/', path)
 
 
 def _AddPleaseExitMixinToServer(server):
@@ -276,6 +291,7 @@ def _AddPleaseExitMixinToServer(server):
       # allow CTRL+C to shutdown
       return 255
 
+    print("Exiting dev server")
     if len(exit_code_attempt) == 1:
       return exit_code_attempt[0]
     # The serve_forever returned for some reason separate from

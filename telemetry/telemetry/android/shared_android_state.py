@@ -1,6 +1,7 @@
 # Copyright 2014 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import absolute_import
 from telemetry.core import android_platform
 from telemetry.core import platform
 from telemetry.internal.platform import android_device
@@ -15,7 +16,7 @@ class SharedAndroidState(story_module.SharedState):
   Email telemetry@chromium.org if you feel like you must use it.
   """
 
-  def __init__(self, test, finder_options, story_set):
+  def __init__(self, test, finder_options, story_set, possible_browser):
     """This method is styled on unittest.TestCase.setUpClass.
 
     Args:
@@ -23,7 +24,8 @@ class SharedAndroidState(story_module.SharedState):
       options: a BrowserFinderOptions instance with command line options.
       story_set: a story.StorySet instance.
     """
-    super(SharedAndroidState, self).__init__(test, finder_options, story_set)
+    super(SharedAndroidState, self).__init__(
+        test, finder_options, story_set, possible_browser)
     if not isinstance(
         test, timeline_based_measurement.TimelineBasedMeasurement):
       raise ValueError(
@@ -65,7 +67,7 @@ class SharedAndroidState(story_module.SharedState):
     self._test.Measure(self._android_platform.tracing_controller, results)
 
   def DidRunStory(self, results):
-    self._test.DidRunStory(self._android_platform.tracing_controller)
+    self._test.DidRunStory(self._android_platform.tracing_controller, results)
     if self._android_app:
       self._android_app.Close()
       self._android_app = None
@@ -77,6 +79,6 @@ class SharedAndroidState(story_module.SharedState):
     """
     pass
 
-  def DumpStateUponFailure(self, story, results):
+  def DumpStateUponStoryRunFailure(self, results):
     # TODO: Dump the state of the Android app.
-    pass
+    del results  # Unused.

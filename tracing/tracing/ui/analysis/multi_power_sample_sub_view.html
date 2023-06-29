@@ -5,7 +5,7 @@ Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
 
-<link rel="import" href="/tracing/base/iteration_helpers.html">
+<link rel="import" href="/tracing/base/utils.html">
 <link rel="import" href="/tracing/ui/analysis/analysis_sub_view.html">
 <link rel="import" href="/tracing/ui/analysis/frame_power_usage_chart.html">
 <link rel="import" href="/tracing/ui/analysis/power_sample_summary_table.html">
@@ -44,7 +44,7 @@ Polymer({
   is: 'tr-ui-a-multi-power-sample-sub-view',
   behaviors: [tr.ui.analysis.AnalysisSubView],
 
-  ready: function() {
+  ready() {
     this.currentSelection_ = undefined;
   },
 
@@ -57,10 +57,10 @@ Polymer({
     this.updateContents_();
   },
 
-  updateContents_: function() {
-    var samples = this.selection;
-    var vSyncTimestamps = (!samples ? [] :
-        tr.b.getFirstElement(samples).series.device.vSyncTimestamps);
+  updateContents_() {
+    const samples = this.selection;
+    const vSyncTimestamps = (!samples ? [] :
+      tr.b.getFirstElement(samples).series.device.vSyncTimestamps);
 
     this.$.summaryTable.samples = samples;
     this.$.chart.setData(this.selection, vSyncTimestamps);

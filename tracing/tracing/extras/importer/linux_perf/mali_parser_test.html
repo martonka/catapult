@@ -19,7 +19,7 @@ tr.b.unittest.testSuite(function() {
   }
 
   test('maliDDKImport', function() {
-    var linesNoThread = [
+    const linesNoThread = [
       // Row 1 open
       '           chrome-1780  [001] ...1   28.562633: tracing_mark_write: ' +
           'mali_driver: cros_trace_print_enter: ' +
@@ -103,7 +103,7 @@ tr.b.unittest.testSuite(function() {
           'gles/src/dispatch/mali_gles_dispatch_entrypoints.c992'
     ];
 
-    var linesWithThread = [
+    const linesWithThread = [
       // Row 1 open
       '           chrome-1780  [001] ...1   28.562633: tracing_mark_write: ' +
           'mali_driver: (mali-1878934320) cros_trace_print_enter: ' +
@@ -186,80 +186,80 @@ tr.b.unittest.testSuite(function() {
           'mali_driver: (mali-1878934320) cros_trace_print_exit: ' +
           'gles/src/dispatch/mali_gles_dispatch_entrypoints.c@992'
     ];
-    var traceNoThread = newModel(linesNoThread.join('\n'));
-    var traceWithThread = newModel(linesWithThread.join('\n'));
+    const traceNoThread = newModel(linesNoThread.join('\n'));
+    const traceWithThread = newModel(linesWithThread.join('\n'));
     assert.isFalse(traceNoThread.hasImportWarnings);
     assert.isFalse(traceWithThread.hasImportWarnings);
 
-    var threadsNoThread = traceNoThread.getAllThreads();
-    var threadsWithThread = traceWithThread.getAllThreads();
-    assert.equal(threadsNoThread.length, 1);
-    assert.equal(threadsWithThread.length, 1);
+    const threadsNoThread = traceNoThread.getAllThreads();
+    const threadsWithThread = traceWithThread.getAllThreads();
+    assert.strictEqual(threadsNoThread.length, 1);
+    assert.strictEqual(threadsWithThread.length, 1);
 
-    var maliThreadNoThread = threadsNoThread[0];
-    var maliThreadWithThread = threadsWithThread[0];
-    assert.equal(maliThreadNoThread.tid, 'mali');
-    assert.equal(maliThreadWithThread.tid, 'mali-1878934320');
-    assert.equal(maliThreadNoThread.sliceGroup.length, 9);
-    assert.equal(maliThreadWithThread.sliceGroup.length, 9);
+    const maliThreadNoThread = threadsNoThread[0];
+    const maliThreadWithThread = threadsWithThread[0];
+    assert.strictEqual(maliThreadNoThread.tid, 'mali');
+    assert.strictEqual(maliThreadWithThread.tid, 'mali-1878934320');
+    assert.strictEqual(maliThreadNoThread.sliceGroup.length, 9);
+    assert.strictEqual(maliThreadWithThread.sliceGroup.length, 9);
   });
 
   test('DVFSFrequencyImport', function() {
-    var lines = [
+    const lines = [
       '     kworker/u:0-5     [001] ....  1174.839552: mali_dvfs_set_clock: ' +
                      'frequency=266',
       '     kworker/u:0-5     [000] ....  1183.840486: mali_dvfs_set_clock: ' +
                      'frequency=400'
     ];
-    var m = newModel(lines.join('\n'));
+    const m = newModel(lines.join('\n'));
     assert.isFalse(m.hasImportWarnings);
 
-    var counters = m.getAllCounters();
-    assert.equal(counters.length, 1);
+    const counters = m.getAllCounters();
+    assert.strictEqual(counters.length, 1);
 
-    var c0 = counters[0];
-    assert.equal(c0.name, 'DVFS Frequency');
-    assert.equal(c0.series[0].samples.length, 2);
+    const c0 = counters[0];
+    assert.strictEqual(c0.name, 'DVFS Frequency');
+    assert.strictEqual(c0.series[0].samples.length, 2);
   });
 
   test('DVFSVoltageImport', function() {
-    var lines = [
+    const lines = [
       '    kworker/u:0-5     [001] ....  1174.839562: mali_dvfs_set_voltage: ' +
                      'voltage=937500',
       '    kworker/u:0-5     [000] ....  1183.840009: mali_dvfs_set_voltage: ' +
                      'voltage=1100000'
     ];
-    var m = newModel(lines.join('\n'));
+    const m = newModel(lines.join('\n'));
     assert.isFalse(m.hasImportWarnings);
 
-    var counters = m.getAllCounters();
-    assert.equal(counters.length, 1);
+    const counters = m.getAllCounters();
+    assert.strictEqual(counters.length, 1);
 
-    var c0 = counters[0];
-    assert.equal(c0.name, 'DVFS Voltage');
-    assert.equal(c0.series[0].samples.length, 2);
+    const c0 = counters[0];
+    assert.strictEqual(c0.name, 'DVFS Voltage');
+    assert.strictEqual(c0.series[0].samples.length, 2);
   });
 
   test('DVFSUtilizationImport', function() {
-    var lines = [
+    const lines = [
       '     kworker/u:0-5     [001] ....  1174.839552: mali_dvfs_event: ' +
                      'utilization=7',
       '     kworker/u:0-5     [000] ....  1183.840486: mali_dvfs_event: ' +
                      'utilization=37'
     ];
-    var m = newModel(lines.join('\n'));
+    const m = newModel(lines.join('\n'));
     assert.isFalse(m.hasImportWarnings);
 
-    var counters = m.getAllCounters();
-    assert.equal(counters.length, 1);
+    const counters = m.getAllCounters();
+    assert.strictEqual(counters.length, 1);
 
-    var c0 = counters[0];
-    assert.equal(c0.name, 'DVFS Utilization');
-    assert.equal(c0.series[0].samples.length, 2);
+    const c0 = counters[0];
+    assert.strictEqual(c0.name, 'DVFS Utilization');
+    assert.strictEqual(c0.series[0].samples.length, 2);
   });
 
   test('maliHWCImport', function() {
-    var lines = [
+    const lines = [
       '     kworker/u:0-5     [000] ....    78.896588: ' +
                      'mali_hwc_ACTIVE: val=238',
       '     kworker/u:0-5     [000] ....    79.046889: ' +
@@ -467,18 +467,92 @@ tr.b.unittest.testSuite(function() {
       '     kworker/u:0-5     [000] ....    79.046851: ' +
                      'mali_hwc_VCACHE_MISS: val=70'
     ];
-    var m = newModel(lines.join('\n'));
+    const m = newModel(lines.join('\n'));
     assert.isFalse(m.hasImportWarnings);
 
-    var counters = m.getAllCounters();
-    assert.equal(counters.length, 103);
+    const counters = m.getAllCounters();
+    assert.strictEqual(counters.length, 103);
 
     // all counters should have 1 sample
-    for (var tI = 0; tI < counters.length; tI++) {
-      var counter = counters[tI];
-      assert.equal(counter.series[0].samples.length, 1);
+    for (let tI = 0; tI < counters.length; tI++) {
+      const counter = counters[tI];
+      assert.strictEqual(counter.series[0].samples.length, 1);
     }
     // TODO(sleffler) verify counter names? (not sure if it's worth the effort)
+  });
+
+  test('maliJobImport', function() {
+    const jobEvents = [
+      // vertex slice 0 open
+      '  surfaceflinger-6962  ( 6962) [000] d.h2 498269.966588: ' +
+          'mali_job_systrace_event_start: tracing_mark_write: ' +
+          'S|6962|vertex-job|85|84|1|0|0|920d408|69628513498269966584032',
+      // vertex slice 0 close
+      '  surfaceflinger-6962  ( 6962) [000] d.h2 498269.966702: ' +
+          'mali_job_systrace_event_stop: tracing_mark_write: ' +
+          'F|6962|vertex-job|85|84|1|0|0|920d408|69628513498269966584032',
+
+      // vertex slice 1 open
+      '  surfaceflinger-6962  ( 6962) [000] d..1 498269.966966: ' +
+          'mali_job_systrace_event_start: tracing_mark_write: ' +
+          'S|7541|vertex-job|225|0|0|0|0|f5e13b48|754122517498269966963802',
+      // vertex slice 1 close
+      '  surfaceflinger-6962  ( 6962) [000] d.h1 498269.967109: ' +
+          'mali_job_systrace_event_stop: tracing_mark_write: ' +
+          'F|7541|vertex-job|225|0|0|0|0|f5e13b48|754122517498269966963802',
+
+      // fragment slice 0 open
+      '   kworker/u17:4-6269  ( 6269) [001] d..1 498269.967667: ' +
+          'mali_job_systrace_event_start: tracing_mark_write: ' +
+          'S|6962|fragment-job|86|85|1|0|0|920d408|69628613498269967664417',
+      // fragment slice 1 open (deferred)
+      ' mali-cmar-backe-7634  ( 7541) [003] d..1 498269.968473: ' +
+          'mali_job_systrace_event_start: tracing_mark_write: ' +
+          'S|7541|fragment-job|223|225|1|0|0|f5e13b48|754122317498269968470186',
+      // fragment slice 0 close (adjusted open of slice 1)
+      ' HwBinder:6936_2-7001  ( 6936) [000] d.h3 498269.970336: ' +
+          'mali_job_systrace_event_stop: tracing_mark_write: ' +
+          'F|6962|fragment-job|86|85|1|0|0|920d408|69628613498269967664417',
+      // fragment slice 1 close
+      ' RenderThread-7619  ( 7541) [000] d.h1 498269.971688: ' +
+          'mali_job_systrace_event_stop: tracing_mark_write: ' +
+          'F|7541|fragment-job|223|225|1|0|0|f5e13b48|754122317498269970293032',
+    ];
+
+    const expectedThreads = [
+      {
+        tid: 'mali:vertex',
+        slices: [
+          {title: '85', start: '498269.966588', end: '498269.966702'},
+          {title: '225', start: '498269.966966', end: '498269.967109'}]},
+      {
+        tid: 'mali:fragment',
+        slices: [
+          {title: '86', start: '498269.967667', end: '498269.970336'},
+          {title: '223', start: '498269.970336', end: '498269.971688'}]},
+    ];
+
+    const trace = newModel(jobEvents.join('\n'));
+    assert.isFalse(trace.hasImportWarnings);
+
+    const threads = trace.getAllThreads();
+    assert.strictEqual(threads.length, expectedThreads.length);
+    for (let tidx = 0; tidx < threads.length; tidx++) {
+      const actualThread = threads[tidx];
+      const expectedThread = expectedThreads[tidx];
+      assert.strictEqual(actualThread.tid, expectedThreads[tidx].tid);
+      assert.strictEqual(actualThread.sliceGroup.length,
+          expectedThreads[tidx].slices.length);
+      for (let sidx = 0; sidx < actualThread.sliceGroup.length; sidx++) {
+        const actualSlice = actualThread.sliceGroup.slices[sidx];
+        const expectedSlice = expectedThread.slices[sidx];
+        assert.strictEqual(actualSlice.title, expectedSlice.title);
+        assert.strictEqual(actualSlice.start,
+            parseFloat(expectedSlice.start) * 1000);
+        assert.strictEqual(actualSlice.end,
+            parseFloat(expectedSlice.end) * 1000);
+      }
+    }
   });
 });
 </script>

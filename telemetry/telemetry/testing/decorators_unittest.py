@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import unittest
 
 from telemetry import decorators
@@ -12,7 +13,7 @@ _counter = 0
 class Foo(object):
   @decorators.Cache
   def GetCountCached(self, _):
-    global _counter
+    global _counter # pylint: disable=global-statement
     _counter = _counter + 1
     return _counter
 

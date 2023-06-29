@@ -7,15 +7,21 @@
 This test allows one to test code that itself uses os, sys, and subprocess.
 """
 
+from __future__ import absolute_import
 import ntpath
 import os
 import posixpath
 import re
 import shlex
 import sys
+import traceback
+import six
 
 
 class Override(object):
+
+  _overidden_modules = set()
+
   def __init__(self, base_module, module_list):
     self.cloud_storage = None
     self.open = None
@@ -26,21 +32,25 @@ class Override(object):
     self.sys = None
     self.thermal_throttle = None
     self.logging = None
-    stubs = {'cloud_storage': CloudStorageModuleStub,
-             'open': OpenFunctionStub,
-             'os': OsModuleStub,
-             'perf_control': PerfControlModuleStub,
-             'raw_input': RawInputFunctionStub,
-             'subprocess': SubprocessModuleStub,
-             'sys': SysModuleStub,
-             'thermal_throttle': ThermalThrottleModuleStub,
-             'logging': LoggingStub,
+    stubs = {
+        'cloud_storage': CloudStorageModuleStub,
+        'open': OpenFunctionStub,
+        'os': OsModuleStub,
+        'perf_control': PerfControlModuleStub,
+        'raw_input': RawInputFunctionStub,
+        'subprocess': SubprocessModuleStub,
+        'sys': SysModuleStub,
+        'thermal_throttle': ThermalThrottleModuleStub,
+        'logging': LoggingStub,
     }
     self.adb_commands = None
     self.os = None
     self.subprocess = None
     self.sys = None
 
+    assert base_module not in self._overidden_modules, (
+        '%s is already overridden' % base_module.__name__)
+    self._overidden_modules.add(base_module)
     self._base_module = base_module
     self._overrides = {}
 
@@ -56,7 +66,7 @@ class Override(object):
     assert not len(self._overrides)
 
   def Restore(self):
-    for module_name, original_module in self._overrides.iteritems():
+    for module_name, original_module in six.iteritems(self._overrides):
       if original_module is None:
         # This will happen when we override built-in functions, like open.
         # If we don't delete the attribute, we will shadow the built-in
@@ -65,6 +75,8 @@ class Override(object):
       else:
         setattr(self._base_module, module_name, original_module)
     self._overrides = {}
+    self._overidden_modules.remove(self._base_module)
+    self._base_module = None
 
 
 class AdbDevice(object):
@@ -75,7 +87,7 @@ class AdbDevice(object):
     self.shell_command_handlers = {}
     self.mock_content = []
     self.system_properties = {}
-    if self.system_properties.get('ro.product.cpu.abi') == None:
+    if self.system_properties.get('ro.product.cpu.abi') is None:
       self.system_properties['ro.product.cpu.abi'] = 'armeabi-v7a'
 
   def HasRoot(self):
@@ -86,7 +98,7 @@ class AdbDevice(object):
 
   def RunShellCommand(self, args, **kwargs):
     del kwargs  # unused
-    if isinstance(args, basestring):
+    if isinstance(args, six.string_types):
       args = shlex.split(args)
     handler = self.shell_command_handlers[args[0]]
     return handler(args)
@@ -110,9 +122,9 @@ class CloudStorageModuleStub(object):
   PARTNER_BUCKET = 'chrome-partner-telemetry'
   INTERNAL_BUCKET = 'chrome-telemetry'
   BUCKET_ALIASES = {
-    'public': PUBLIC_BUCKET,
-    'partner': PARTNER_BUCKET,
-    'internal': INTERNAL_BUCKET,
+      'public': PUBLIC_BUCKET,
+      'partner': PARTNER_BUCKET,
+      'internal': INTERNAL_BUCKET,
   }
 
   # These are used to test for CloudStorage errors.
@@ -135,9 +147,9 @@ class CloudStorageModuleStub(object):
     pass
 
   def __init__(self):
-    self.default_remote_paths = {CloudStorageModuleStub.INTERNAL_BUCKET:{},
-                                 CloudStorageModuleStub.PARTNER_BUCKET:{},
-                                 CloudStorageModuleStub.PUBLIC_BUCKET:{}}
+    self.default_remote_paths = {CloudStorageModuleStub.INTERNAL_BUCKET: {},
+                                 CloudStorageModuleStub.PARTNER_BUCKET: {},
+                                 CloudStorageModuleStub.PUBLIC_BUCKET: {}}
     self.remote_paths = self.default_remote_paths
     self.local_file_hashes = {}
     self.local_hash_files = {}
@@ -178,14 +190,14 @@ class CloudStorageModuleStub(object):
     self.local_file_hashes = calculated_hash_dictionary
 
   def GetLocalDataFiles(self):
-    return self.local_file_hashes.keys()
+    return list(self.local_file_hashes.keys())
 
   # Set a dictionary of hash files and the hashes they should contain.
   def SetHashFileContentsForTesting(self, hash_file_dictionary):
     self.local_hash_files = hash_file_dictionary
 
   def GetLocalHashFiles(self):
-    return self.local_hash_files.keys()
+    return list(self.local_hash_files.keys())
 
   def ChangeRemoteHashForTesting(self, bucket, remote_path, new_hash):
     self.remote_paths[bucket][remote_path] = new_hash
@@ -208,7 +220,7 @@ class CloudStorageModuleStub(object):
       file_path_error = 'Local file path does not exist'
       raise CloudStorageModuleStub.CloudStorageError(file_path_error)
     self.remote_paths[bucket][remote_path] = (
-      CloudStorageModuleStub.CalculateHash(self, local_path))
+        CloudStorageModuleStub.CalculateHash(self, local_path))
     return remote_path
 
   def GetHelper(self, bucket, remote_path, local_path, only_if_changed):
@@ -267,17 +279,37 @@ class LoggingStub(object):
   def __init__(self):
     self.warnings = []
     self.errors = []
+    self.exceptions = []
+    self.fatals = []
+    self.stdout_stream = None
 
   def info(self, msg, *args):
     pass
 
+  def fatal(self, msg, *args):
+    if self.stdout_stream:
+      self.stdout_stream.write(msg % args)
+    self.fatals.append(msg)
+
+  def exception(self, msg, *args):
+    if self.stdout_stream:
+      self.stdout_stream.write(msg % args)
+      traceback.print_exc(file=self.stdout_stream)
+    self.exceptions.append(msg)
+
   def error(self, msg, *args):
+    if self.stdout_stream:
+      self.stdout_stream.write(msg % args)
     self.errors.append(msg % args)
 
   def warning(self, msg, *args):
+    if self.stdout_stream:
+      self.stdout_stream.write(msg % args)
     self.warnings.append(msg % args)
 
   def warn(self, msg, *args):
+    if self.stdout_stream:
+      self.stdout_stream.write(msg % args)
     self.warning(msg, *args)
 
 

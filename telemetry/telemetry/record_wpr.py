@@ -2,14 +2,16 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 import argparse
 import logging
+import shutil
 import sys
+import tempfile
+import six
 
 from telemetry import benchmark
 from telemetry import story
-from telemetry.core import discover
-from telemetry.core import util
 from telemetry.internal.browser import browser_options
 from telemetry.internal.results import results_options
 from telemetry.internal import story_runner
@@ -17,56 +19,59 @@ from telemetry.internal.util import binary_manager
 from telemetry.page import legacy_page_test
 from telemetry.util import matching
 from telemetry.util import wpr_modes
-from telemetry.web_perf import timeline_based_measurement
-from telemetry.web_perf import timeline_based_page_test
+
+from py_utils import discover
+import py_utils
 
 DEFAULT_LOG_FORMAT = (
-  '(%(levelname)s) %(asctime)s %(module)s.%(funcName)s:%(lineno)d  '
-  '%(message)s')
+    '(%(levelname)s) %(asctime)s %(module)s.%(funcName)s:%(lineno)d  '
+    '%(message)s')
 
 
 class RecorderPageTest(legacy_page_test.LegacyPageTest):
-  def __init__(self):
+  def __init__(self, page_test):
     super(RecorderPageTest, self).__init__()
-    self.page_test = None
+    self._page_test = page_test
+    self._platform = None
+
+  @property
+  def platform(self):
+    return self._platform
 
   def CustomizeBrowserOptions(self, options):
-    if self.page_test:
-      self.page_test.CustomizeBrowserOptions(options)
+    if self._page_test:
+      self._page_test.CustomizeBrowserOptions(options)
 
   def WillStartBrowser(self, browser):
-    if self.page_test:
-      self.page_test.WillStartBrowser(browser)
+    if self.platform is not None:
+      assert browser.GetOSName() == self.platform
+    self._platform = browser.GetOSName()  # Record platform name from browser.
+    if self._page_test:
+      self._page_test.WillStartBrowser(browser)
 
   def DidStartBrowser(self, browser):
-    if self.page_test:
-      self.page_test.DidStartBrowser(browser)
+    if self._page_test:
+      self._page_test.DidStartBrowser(browser)
 
   def WillNavigateToPage(self, page, tab):
     """Override to ensure all resources are fetched from network."""
     tab.ClearCache(force=False)
-    if self.page_test:
-      self.page_test.WillNavigateToPage(page, tab)
+    if self._page_test:
+      self._page_test.WillNavigateToPage(page, tab)
 
   def DidNavigateToPage(self, page, tab):
-    if self.page_test:
-      self.page_test.DidNavigateToPage(page, tab)
+    if self._page_test:
+      self._page_test.DidNavigateToPage(page, tab)
     tab.WaitForDocumentReadyStateToBeComplete()
-    util.WaitFor(tab.HasReachedQuiescence, 30)
+    py_utils.WaitFor(tab.HasReachedQuiescence, 30)
 
   def CleanUpAfterPage(self, page, tab):
-    if self.page_test:
-      self.page_test.CleanUpAfterPage(page, tab)
+    if self._page_test:
+      self._page_test.CleanUpAfterPage(page, tab)
 
   def ValidateAndMeasurePage(self, page, tab, results):
-    if self.page_test:
-      self.page_test.ValidateAndMeasurePage(page, tab, results)
-
-  def RunNavigateSteps(self, page, tab):
-    if self.page_test:
-      self.page_test.RunNavigateSteps(page, tab)
-    else:
-      super(RecorderPageTest, self).RunNavigateSteps(page, tab)
+    if self._page_test:
+      self._page_test.ValidateAndMeasurePage(page, tab, results)
 
 
 def _GetSubclasses(base_dir, cls):
@@ -122,28 +127,38 @@ def _PrintPairs(pairs, output_stream, prefix=''):
 
 class WprRecorder(object):
 
-  def __init__(self, base_dir, target, args=None):
-    self._base_dir = base_dir
-    self._record_page_test = RecorderPageTest()
-    self._options = self._CreateOptions()
+  def __init__(self, environment, target, args=None):
+    self._base_dir = environment.top_level_dir
+    self._output_dir = tempfile.mkdtemp()
+    try:
+      self._options = self._CreateOptions()
+      self._benchmark = _MaybeGetInstanceOfClass(target, self._base_dir,
+                                                 benchmark.Benchmark)
+      self._parser = self._options.CreateParser(usage='See %prog --help')
+      self._AddCommandLineArgs()
+      self._ParseArgs(args)
+      self._ProcessCommandLineArgs(environment)
+      page_test = None
+      if self._benchmark is not None:
+        test = self._benchmark.CreatePageTest(self.options)
+        # Object only needed for legacy pages; newer benchmarks don't need this.
+        if isinstance(test, legacy_page_test.LegacyPageTest):
+          page_test = test
 
-    self._benchmark = _MaybeGetInstanceOfClass(target, base_dir,
-                                               benchmark.Benchmark)
-    self._parser = self._options.CreateParser(usage='See %prog --help')
-    self._AddCommandLineArgs()
-    self._ParseArgs(args)
-    self._ProcessCommandLineArgs()
-    if self._benchmark is not None:
-      test = self._benchmark.CreatePageTest(self.options)
-      if isinstance(test, timeline_based_measurement.TimelineBasedMeasurement):
-        test = timeline_based_page_test.TimelineBasedPageTest(test)
-      # This must be called after the command line args are added.
-      self._record_page_test.page_test = test
+      self._record_page_test = RecorderPageTest(page_test)
+      self._page_set_base_dir = (
+          self._options.page_set_base_dir if self._options.page_set_base_dir
+          else self._base_dir)
+      self._story_set = self._GetStorySet(target)
+    except:
+      self._CleanUp()
+      raise
 
-    self._page_set_base_dir = (
-        self._options.page_set_base_dir if self._options.page_set_base_dir
-        else self._base_dir)
-    self._story_set = self._GetStorySet(target)
+  def __enter__(self):
+    return self
+
+  def __exit__(self, *args):
+    self._CleanUp()
 
   @property
   def options(self):
@@ -152,15 +167,25 @@ class WprRecorder(object):
   def _CreateOptions(self):
     options = browser_options.BrowserFinderOptions()
     options.browser_options.wpr_mode = wpr_modes.WPR_RECORD
+    options.intermediate_dir = self._output_dir
     return options
+
+  def _CleanUp(self):
+    shutil.rmtree(self._output_dir)
 
   def CreateResults(self):
     if self._benchmark is not None:
-      benchmark_metadata = self._benchmark.GetMetadata()
+      benchmark_name = self._benchmark.Name()
+      benchmark_description = self._benchmark.Description()
     else:
-      benchmark_metadata = benchmark.BenchmarkMetadata('record_wpr')
+      benchmark_name = 'record_wpr'
+      benchmark_description = None
 
-    return results_options.CreateResults(benchmark_metadata, self._options)
+    return results_options.CreateResults(
+        self._options,
+        benchmark_name=benchmark_name,
+        benchmark_description=benchmark_description,
+        report_progress=True)
 
   def _AddCommandLineArgs(self):
     self._parser.add_option('--page-set-base-dir', action='store',
@@ -168,19 +193,24 @@ class WprRecorder(object):
     story_runner.AddCommandLineArgs(self._parser)
     if self._benchmark is not None:
       self._benchmark.AddCommandLineArgs(self._parser)
+      self._benchmark.SetExtraBrowserOptions(self._options)
       self._benchmark.SetArgumentDefaults(self._parser)
     self._parser.add_option('--upload', action='store_true')
+    self._parser.add_option('--use-local-wpr', action='store_true',
+                            help='Builds and runs WPR from Catapult. '
+                            'Also enables WPR debug output to STDOUT.')
     self._SetArgumentDefaults()
 
   def _SetArgumentDefaults(self):
-    self._parser.set_defaults(**{'output_formats': ['none']})
+    self._parser.set_defaults(output_formats=['none'])
 
   def _ParseArgs(self, args=None):
     args_to_parse = sys.argv[1:] if args is None else args
     self._parser.parse_args(args_to_parse)
 
-  def _ProcessCommandLineArgs(self):
-    story_runner.ProcessCommandLineArgs(self._parser, self._options)
+  def _ProcessCommandLineArgs(self, environment):
+    story_runner.ProcessCommandLineArgs(self._parser, self._options,
+                                        environment)
 
     if self._options.use_live_sites:
       self._parser.error("Can't --use-live-sites while recording")
@@ -207,7 +237,7 @@ class WprRecorder(object):
   def _HintMostLikelyBenchmarksStories(self, target):
     def _Impl(all_items, category_name):
       candidates = matching.GetMostLikelyMatchedObject(
-          all_items.iteritems(), target, name_func=lambda kv: kv[1].Name())
+          six.iteritems(all_items), target, name_func=lambda kv: kv[1].Name())
       if candidates:
         sys.stderr.write('\nDo you mean any of those %s below?\n' %
                          category_name)
@@ -223,20 +253,27 @@ class WprRecorder(object):
 
   def Record(self, results):
     assert self._story_set.wpr_archive_info, (
-      'Pageset archive_data_file path must be specified.')
+        'Pageset archive_data_file path must be specified.')
+
+    # Always record the benchmark one time only.
+    self._options.pageset_repeat = 1
     self._story_set.wpr_archive_info.AddNewTemporaryRecording()
     self._record_page_test.CustomizeBrowserOptions(self._options)
-    story_runner.Run(self._record_page_test, self._story_set,
-        self._options, results)
+    story_runner.RunStorySet(
+        self._record_page_test,
+        self._story_set,
+        self._options,
+        results)
 
   def HandleResults(self, results, upload_to_cloud_storage):
-    if results.failures or results.skipped_values:
+    if results.had_failures or results.had_skips:
       logging.warning('Some pages failed and/or were skipped. The recording '
                       'has not been updated for these pages.')
-    results.PrintSummary()
+    results.Finalize()
     self._story_set.wpr_archive_info.AddRecordedStories(
-        results.pages_that_succeeded,
-        upload_to_cloud_storage)
+        [run.story for run in results.IterStoryRuns() if run.ok],
+        upload_to_cloud_storage,
+        target_platform=self._record_page_test.platform)
 
 
 def Main(environment, **log_config_kwargs):
@@ -260,6 +297,7 @@ def Main(environment, **log_config_kwargs):
                       action='store_true', help='list all benchmark names.')
   parser.add_argument('--upload', action='store_true',
                       help='upload to cloud storage.')
+
   args, extra_args = parser.parse_known_args()
 
   if args.list_benchmarks or args.list_stories:
@@ -279,11 +317,11 @@ def Main(environment, **log_config_kwargs):
 
   binary_manager.InitDependencyManager(environment.client_configs)
 
-  # TODO(nednguyen): update WprRecorder so that it handles the difference
-  # between recording a benchmark vs recording a story better based on
-  # the distinction between args.benchmark & args.story
-  wpr_recorder = WprRecorder(environment.top_level_dir, target, extra_args)
-  results = wpr_recorder.CreateResults()
-  wpr_recorder.Record(results)
-  wpr_recorder.HandleResults(results, args.upload)
-  return min(255, len(results.failures))
+  # TODO(crbug.com/1111556): update WprRecorder so that it handles the
+  # difference between recording a benchmark vs recording a story better based
+  # on the distinction between args.benchmark & args.story
+  with WprRecorder(environment, target, extra_args) as wpr_recorder:
+    results = wpr_recorder.CreateResults()
+    wpr_recorder.Record(results)
+    wpr_recorder.HandleResults(results, args.upload)
+    return min(255, results.num_failed)

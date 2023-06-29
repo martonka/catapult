@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from __future__ import absolute_import
 from telemetry import decorators
 from telemetry.testing import tab_test_case
 from telemetry.util import image_util
@@ -35,7 +36,8 @@ class InspectorPageTest(tab_test_case.TabTestCase):
     self._tab.WaitForDocumentReadyStateToBeComplete()
     self.assertEquals(self._tab.EvaluateJavaScript('foo'), 'bar')
 
-  @decorators.Disabled('chromeos')  # crbug.com/483212
+  # crbug.com/483212, crbug.com/736628, crbug.com/758408.
+  @decorators.Disabled('chromeos', 'mac', 'win')
   def testCaptureScreenshot(self):
     if not self._tab.screenshot_supported:
       return

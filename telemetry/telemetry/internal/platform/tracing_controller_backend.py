@@ -2,42 +2,82 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import ast
-from telemetry.internal.util import atexit_with_log
+from __future__ import absolute_import
 import contextlib
 import gc
 import logging
 import os
 import sys
-import tempfile
 import traceback
 import uuid
 
 from py_trace_event import trace_event
-from telemetry.core import discover
-from telemetry.core import util
-from telemetry.internal.platform import tracing_agent
+from telemetry.internal.platform.tracing_agent import atrace_tracing_agent
+from telemetry.internal.platform.tracing_agent import chrome_report_events_tracing_agent
+from telemetry.internal.platform.tracing_agent import chrome_return_as_stream_tracing_agent
 from telemetry.internal.platform.tracing_agent import chrome_tracing_agent
-from telemetry.timeline import trace_data as trace_data_module
+from telemetry.internal.platform.tracing_agent import cpu_tracing_agent
+from telemetry.internal.platform.tracing_agent import display_tracing_agent
+from telemetry.internal.platform.tracing_agent import perfetto_tracing_agent
+from telemetry.internal.platform.tracing_agent import telemetry_tracing_agent
 from telemetry.timeline import tracing_config
+from tracing.trace_data import trace_data
 
 
-def _IterAllTracingAgentClasses():
-  tracing_agent_dir = os.path.join(
-      os.path.dirname(os.path.realpath(__file__)), 'tracing_agent')
-  return discover.DiscoverClasses(
-      tracing_agent_dir, util.GetTelemetryDir(),
-      tracing_agent.TracingAgent).itervalues()
+# Note: TelemetryTracingAgent should be first so that we can record debug
+# trace events when the other agents start/stop.
+_TRACING_AGENT_CLASSES = (
+    telemetry_tracing_agent.TelemetryTracingAgent,
+    chrome_report_events_tracing_agent.ChromeReportEventsTracingAgent,
+    chrome_return_as_stream_tracing_agent.ChromeReturnAsStreamTracingAgent,
+    atrace_tracing_agent.AtraceTracingAgent,
+    cpu_tracing_agent.CpuTracingAgent,
+    display_tracing_agent.DisplayTracingAgent
+)
+
+_EXPERIMENTAL_TRACING_AGENTS = (
+    telemetry_tracing_agent.TelemetryTracingAgent,
+    perfetto_tracing_agent.PerfettoTracingAgent
+)
 
 
-class TracingControllerStoppedError(Exception):
-  pass
+def _GenerateClockSyncId():
+  return str(uuid.uuid4())
+
+
+@contextlib.contextmanager
+def _DisableGarbageCollection():
+  try:
+    gc.disable()
+    yield
+  finally:
+    gc.enable()
+
+
+class _TraceDataDiscarder(object):
+  """A do-nothing data builder that just discards trace data.
+
+  TODO(crbug.com/928278): This should be moved as a "discarding mode" in
+  TraceDataBuilder itself.
+  """
+  def OpenTraceHandleFor(self, part, suffix):
+    del part, suffix  # Unused.
+    return open(os.devnull, 'wb')
+
+  def AddTraceFor(self, part, data, allow_unstructured=False):
+    assert not allow_unstructured
+    del part  # Unused.
+    del data  # Unused.
+
+  def RecordTraceDataException(self):
+    logging.info('Ignoring exception while flushing to TraceDataDiscarder:\n%s',
+                 ''.join(traceback.format_exception(*sys.exc_info())))
 
 
 class _TracingState(object):
 
   def __init__(self, config, timeout):
-    self._builder = trace_data_module.TraceDataBuilder()
+    self._builder = trace_data.TraceDataBuilder()
     self._config = config
     self._timeout = timeout
 
@@ -58,13 +98,12 @@ class TracingControllerBackend(object):
   def __init__(self, platform_backend):
     self._platform_backend = platform_backend
     self._current_state = None
-    self._supported_agents_classes = [
-        agent_classes for agent_classes in _IterAllTracingAgentClasses() if
-        agent_classes.IsSupported(platform_backend)]
     self._active_agents_instances = []
-    self._trace_log = None
     self._is_tracing_controllable = True
-    self._iteration_info = None
+
+  def RecordBenchmarkMetadata(self, results):
+    """Write benchmark metadata into the trace being currently recorded."""
+    telemetry_tracing_agent.RecordBenchmarkMetadata(results)
 
   def StartTracing(self, config, timeout):
     if self.is_tracing_running:
@@ -74,141 +113,87 @@ class TracingControllerBackend(object):
     assert len(self._active_agents_instances) == 0
 
     self._current_state = _TracingState(config, timeout)
-    # Hack: chrome tracing agent may only depend on the number of alive chrome
-    # devtools processes, rather platform (when startup tracing is not
-    # supported), hence we add it to the list of supported agents here if it was
-    # not added.
-    if (chrome_tracing_agent.ChromeTracingAgent.IsSupported(
-        self._platform_backend) and
-        not chrome_tracing_agent.ChromeTracingAgent in
-        self._supported_agents_classes):
-      self._supported_agents_classes.append(
-          chrome_tracing_agent.ChromeTracingAgent)
 
-    self.StartAgentTracing(config, timeout)
-    for agent_class in self._supported_agents_classes:
-      agent = agent_class(self._platform_backend)
-      if agent.StartAgentTracing(config, timeout):
-        self._active_agents_instances.append(agent)
+    if config.enable_experimental_system_tracing:
+      agent_classes = _EXPERIMENTAL_TRACING_AGENTS
+    else:
+      agent_classes = _TRACING_AGENT_CLASSES
+
+    for agent_class in agent_classes:
+      if agent_class.IsSupported(self._platform_backend):
+        agent = agent_class(self._platform_backend, config)
+        if agent.StartAgentTracing(config, timeout):
+          self._active_agents_instances.append(agent)
+
     return True
-
-  def _GenerateClockSyncId(self):
-    return str(uuid.uuid4())
-
-  @contextlib.contextmanager
-  def _DisableGarbageCollection(self):
-    try:
-      gc.disable()
-      yield
-    finally:
-      gc.enable()
 
   def StopTracing(self):
     assert self.is_tracing_running, 'Can only stop tracing when tracing is on.'
     self._IssueClockSyncMarker()
     builder = self._current_state.builder
 
-    raised_exception_messages = []
-    for agent in self._active_agents_instances + [self]:
+    for agent in reversed(self._active_agents_instances):
       try:
         agent.StopAgentTracing()
       except Exception: # pylint: disable=broad-except
-        raised_exception_messages.append(
-            ''.join(traceback.format_exception(*sys.exc_info())))
+        builder.RecordTraceDataException()
 
-    for agent in self._active_agents_instances + [self]:
+    for agent in self._active_agents_instances:
       try:
         agent.CollectAgentTraceData(builder)
       except Exception: # pylint: disable=broad-except
-        raised_exception_messages.append(
-            ''.join(traceback.format_exception(*sys.exc_info())))
+        builder.RecordTraceDataException()
 
-    self._iteration_info = None
     self._active_agents_instances = []
     self._current_state = None
 
-    if raised_exception_messages:
-      raise TracingControllerStoppedError(
-          'Exceptions raised when trying to stop tracing:\n' +
-          '\n'.join(raised_exception_messages))
+    return builder.Freeze()
 
-    return builder.AsData()
-
-  def FlushTracing(self):
+  def FlushTracing(self, discard_current=False):
     assert self.is_tracing_running, 'Can only flush tracing when tracing is on.'
     self._IssueClockSyncMarker()
 
-    raised_exception_messages = []
-    # Flushing the controller's pytrace is not supported.
+    # pylint: disable=redefined-variable-type
+    # See: https://github.com/PyCQA/pylint/issues/710
+    if discard_current:
+      trace_builder = _TraceDataDiscarder()
+    else:
+      trace_builder = self._current_state.builder
+
     for agent in self._active_agents_instances:
       try:
         if agent.SupportsFlushingAgentTracing():
           agent.FlushAgentTracing(self._current_state.config,
                                   self._current_state.timeout,
-                                  self._current_state.builder)
+                                  trace_builder)
       except Exception: # pylint: disable=broad-except
-        raised_exception_messages.append(
-            ''.join(traceback.format_exception(*sys.exc_info())))
-
-    if raised_exception_messages:
-      raise TracingControllerStoppedError(
-          'Exceptions raised when trying to flush tracing:\n' +
-          '\n'.join(raised_exception_messages))
-
-  def StartAgentTracing(self, config, timeout):
-    self._is_tracing_controllable = self._IsTracingControllable()
-    if not self._is_tracing_controllable:
-      return False
-
-    tf = tempfile.NamedTemporaryFile(delete=False)
-    self._trace_log = tf.name
-    tf.close()
-    del config # unused
-    del timeout # unused
-    assert not trace_event.trace_is_enabled(), 'Tracing already running.'
-    trace_event.trace_enable(self._trace_log)
-    assert trace_event.trace_is_enabled(), 'Tracing didn\'t enable properly.'
-    return True
-
-  def StopAgentTracing(self):
-    if not self._is_tracing_controllable:
-      return
-    assert trace_event.trace_is_enabled(), 'Tracing not running'
-    trace_event.trace_disable()
-    assert not trace_event.trace_is_enabled(), 'Tracing didnt disable properly.'
-
-  def SupportsExplicitClockSync(self):
-    return True
-
-  def _RecordIssuerClockSyncMarker(self, sync_id, issue_ts):
-    """ Record clock sync event.
-
-    Args:
-      sync_id: Unqiue id for sync event.
-      issue_ts: timestamp before issuing clocksync to agent.
-    """
-    if self._is_tracing_controllable:
-      trace_event.clock_sync(sync_id, issue_ts=issue_ts)
+        trace_builder.RecordTraceDataException()
 
   def _IssueClockSyncMarker(self):
-    with self._DisableGarbageCollection():
+    if not telemetry_tracing_agent.IsAgentEnabled():
+      return
+
+    with _DisableGarbageCollection():
       for agent in self._active_agents_instances:
         if agent.SupportsExplicitClockSync():
-          sync_id = self._GenerateClockSyncId()
-          with trace_event.trace(
-              'RecordClockSyncMarker',
-              agent=str(agent.__class__.__name__),
-              sync_id=sync_id):
-            agent.RecordClockSyncMarker(sync_id,
-                                        self._RecordIssuerClockSyncMarker)
-
-  def IsChromeTracingSupported(self):
-    return chrome_tracing_agent.ChromeTracingAgent.IsSupported(
-        self._platform_backend)
+          sync_id = _GenerateClockSyncId()
+          with trace_event.trace('RecordClockSyncMarker',
+                                 agent=str(agent.__class__.__name__),
+                                 sync_id=sync_id):
+            agent.RecordClockSyncMarker(
+                sync_id, telemetry_tracing_agent.RecordIssuerClockSyncMarker)
 
   @property
   def is_tracing_running(self):
     return self._current_state is not None
+
+  @property
+  def is_chrome_tracing_running(self):
+    return self._GetActiveChromeTracingAgent() is not None
+
+  @property
+  def current_state(self):
+    return self._current_state
 
   def _GetActiveChromeTracingAgent(self):
     if not self.is_tracing_running:
@@ -232,52 +217,6 @@ class TracingControllerBackend(object):
       return agent.trace_config_file
     return None
 
-  def _IsTracingControllable(self):
-    return trace_event.is_tracing_controllable()
-
   def ClearStateIfNeeded(self):
-    chrome_tracing_agent.ClearStarupTracingStateIfNeeded(self._platform_backend)
-
-  @property
-  def iteration_info(self):
-    return self._iteration_info
-
-  @iteration_info.setter
-  def iteration_info(self, ii):
-    self._iteration_info = ii
-
-  def CollectAgentTraceData(self, trace_data_builder):
-    if not self._is_tracing_controllable:
-      return
-    assert not trace_event.trace_is_enabled(), 'Stop tracing before collection.'
-    with open(self._trace_log, 'r') as fp:
-      data = ast.literal_eval(fp.read() + ']')
-    trace_data_builder.SetTraceFor(trace_data_module.TELEMETRY_PART, {
-        "traceEvents": data,
-        "metadata": {
-            # TODO(charliea): For right now, we use "TELEMETRY" as the clock
-            # domain to guarantee that Telemetry is given its own clock
-            # domain. Telemetry isn't really a clock domain, though: it's a
-            # system that USES a clock domain like LINUX_CLOCK_MONOTONIC or
-            # WIN_QPC. However, there's a chance that a Telemetry controller
-            # running on Linux (using LINUX_CLOCK_MONOTONIC) is interacting with
-            # an Android phone (also using LINUX_CLOCK_MONOTONIC, but on a
-            # different machine). The current logic collapses clock domains
-            # based solely on the clock domain string, but we really should to
-            # collapse based on some (device ID, clock domain ID) tuple. Giving
-            # Telemetry its own clock domain is a work-around for this.
-            "clock-domain": "TELEMETRY",
-            "iteration-info": (self._iteration_info.AsDict()
-                if self._iteration_info else {}),
-        }
-    })
-    try:
-      os.remove(self._trace_log)
-      self._trace_log = None
-    except OSError:
-      logging.exception('Error when deleting %s, will try again at exit.',
-                        self._trace_log)
-      def DeleteAtExit(path):
-        os.remove(path)
-      atexit_with_log.Register(DeleteAtExit, self._trace_log)
-    self._trace_log = None
+    chrome_return_as_stream_tracing_agent.ClearStarupTracingStateIfNeeded(
+        self._platform_backend)
